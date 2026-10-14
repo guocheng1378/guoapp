@@ -60,14 +60,26 @@ func awaitSourceTask(t *testing.T, engine *nativeEngine, source string) nativeSo
 
 func TestSourceUpdatesPreservePagesOtherSourcesAndMetadata(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		if !strings.Contains(request.URL.Path, "/api/videos/category/") {
-			return nil, errors.New("only catalog text is allowed")
+		if strings.HasPrefix(request.URL.Path, "/d/") {
+			id := strings.TrimPrefix(request.URL.Path, "/d/")
+			id = strings.TrimSuffix(id, "/")
+			body := fmt.Sprintf(`<html><head><title>合成剧集</title></head><body>
+				<script id="o5-video-init">var videoUrl = "https://example.test/%s/index.m3u8";</script>
+				<h1 class="o5-detail__title">合成剧集</h1>
+				</body></html>`, id)
+			return sourceFixtureResponse(request, 200, body), nil
+		}
+		if !strings.HasPrefix(request.URL.Path, "/genre/") {
+			return nil, errors.New("unexpected path: " + request.URL.Path)
 		}
 		id := "new"
-		if request.URL.Query().Get("page") == "3" {
+		if strings.Contains(request.URL.Path, "/page/3/") {
 			id = "continued"
 		}
-		return sourceFixtureResponse(request, 200, fmt.Sprintf(`{"data":[{"id":%q,"title":"合成短剧","desc":"完整资料","totalEpisode":2}]}`, id)), nil
+		body := fixtureHuangguoAICards(
+			struct{ id, title, cover string }{id, "合成短剧", "https://example.test/cover"},
+		)
+		return sourceFixtureResponse(request, 200, body), nil
 	})
 	engine.catalogs[sourceHuangguoAI] = []nativeDrama{{ID: "huangguoai:old", Source: sourceHuangguoAI, Title: "原有短剧", Description: "保留资料", Episodes: 2}}
 	engine.catalogStates[sourceHuangguoAI] = nativeCatalogState{Page: 2, HasMore: true}
@@ -247,4 +259,16 @@ func TestSourceBackoffUsesRelativeTimeAndRetainsTypedError(t *testing.T) {
 	if !errors.As(publicError(fmt.Errorf("playlist: %w", backoff)), &restored) {
 		t.Fatal("redaction discarded structured retry time")
 	}
+}
+
+// fixtureHuangguoAICards generates huangguo-ai.com compatible HTML with <article class="o5-card"> blocks.
+func fixtureHuangguoAICards(cards ...struct{ id, title, cover string }) string {
+	var b strings.Builder
+	b.WriteString("<html><body><div class='o5-grid'>")
+	for _, c := range cards {
+		fmt.Fprintf(&b, `<article class="o5-card"><a href="https://huangguo-ai.com/d/%s/" class="o5-card__poster"><img src="%s" alt="%s"/></a><div class="o5-card__body"><h3><a href="https://huangguo-ai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`,
+			c.id, c.cover, c.title, c.id, c.title)
+	}
+	b.WriteString("</div></body></html>")
+	return b.String()
 }

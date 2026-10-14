@@ -127,11 +127,11 @@ func TestNativeHEICPreparationUsesBoundedSyntheticData(t *testing.T) {
 func TestNativeCoverMetadataRejectsOtherDramaAndKeepsCurrentHost(t *testing.T) {
 	patch := Drama{ID: "huangguoai:100", Source: sourceHuangguoAI, SourceID: "100"}
 	body := `<script type="application/ld+json">{"@type":"VideoObject","url":"/detail/100/","name":"合成剧目","thumbnailUrl":"https://new-cover.example.test/synthetic.jpg"}</script>`
-	fresh, err := parseHuangguoSortDetail(body, "https://huangguoai.com/detail/100/", patch)
+	fresh, err := parseHuangguoSortDetail(body, "https://huangguo-ai.com/detail/100/", patch)
 	if err != nil || nativeNormalize(fresh).Cover != "https://new-cover.example.test/synthetic.jpg" {
 		t.Fatal("new image host rejected", err)
 	}
-	if _, err := parseHuangguoSortDetail(strings.ReplaceAll(body, "/detail/100/", "/detail/101/"), "https://huangguoai.com/detail/100/", patch); err == nil {
+	if _, err := parseHuangguoSortDetail(strings.ReplaceAll(body, "/detail/100/", "/detail/101/"), "https://huangguo-ai.com/detail/100/", patch); err == nil {
 		t.Fatal("another drama's cover accepted")
 	}
 	d := &Downloader{providerHosts: map[string]string{sourceHuangdou: "https://mirror.example.test"}}

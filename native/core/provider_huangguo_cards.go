@@ -65,7 +65,7 @@ func firstHuangguoTitle(sourceID string, values ...string) string {
 
 func huangguoCardTitle(block, sourceID string) string {
 	return firstHuangguoTitle(sourceID,
-		extractAttr(block, "data-track-title"), huangguoClassText(block, "hg-drama-card__title"),
+		extractAttr(block, "data-track-title"), huangguoClassText(block, "hg-drama-card__title"), huangguoClassText(block, "o5-card__title"),
 		extractAttr(block, "data-search-hot"), huangguoClassText(block, "hg-search-suggest__hot-title"),
 		extractAttr(block, "title"), extractAttr(block, "alt"), extractAttr(block, "aria-label"))
 }

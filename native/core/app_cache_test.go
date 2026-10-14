@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/png"
 	"net/http"
+	"strings"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func TestNativeCoverDecryptsAndPersistsAcrossRestart(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.RawQuery != "signature=%2F%2b%3D&auth_key=fixture" || r.Header.Get("Referer") != "https://huangguoai.com/" || r.Header.Get("User-Agent") == "" {
+		if r.URL.RawQuery != "signature=%2F%2b%3D&auth_key=fixture" || r.Header.Get("Referer") != "https://huangguo-ai.com/" || r.Header.Get("User-Agent") == "" {
 			t.Error("cover request changed its signed URL or lost source headers")
 		}
 		w.Write(encrypted)
@@ -149,7 +150,7 @@ func TestNativeCoverRedirectAndBoundedDiskCache(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Referer") != "https://huangguoai.com/" {
+		if r.Header.Get("Referer") != "https://huangguo-ai.com/" {
 			t.Error("redirect lost the source referer")
 		}
 		if r.URL.Path == "/redirect" {
@@ -183,21 +184,30 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.Path != "/api/videos/category/ai-duanju" {
-			t.Error("test must only request synthetic catalog metadata", r.URL.Path)
+		if !strings.HasPrefix(r.URL.Path, "/genre/") {
+			t.Error("unexpected path", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-		count := 24
+		page := 1
+		if strings.Contains(r.URL.Path, "/page/") {
+			idx := strings.LastIndex(r.URL.Path, "/page/") + 6
+			end := strings.Index(r.URL.Path[idx:], "/")
+			if end > 0 {
+				page, _ = strconv.Atoi(r.URL.Path[idx : idx+end])
+			}
+		}
+		count := 35
 		if page > 1 {
 			count = 1
 		}
-		var rows []map[string]any
-		for index := range count {
-			rows = append(rows, map[string]any{"id": strconv.Itoa(page*100 + index), "title": fmt.Sprintf("合成剧集%d", page*100+index), "cover": "https://example.test/synthetic-cover"})
+		var cards []string
+		for index := 0; index < count; index++ {
+			id := strconv.Itoa(page*100 + index)
+			title := fmt.Sprintf("合成剧集%d", page*100+index)
+			cards = append(cards, fmt.Sprintf(`<article class="o5-card"><a href="https://huangguo-ai.com/d/%s/" class="o5-card__poster"><img src="https://example.test/cover-%s.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguo-ai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`, id, id, id, title))
 		}
-		json.NewEncoder(w).Encode(map[string]any{"data": rows})
+		fmt.Fprintf(w, "<html><body><div class='o5-grid'>%s</div></body></html>", strings.Join(cards, ""))
 	}))
 	defer upstream.Close()
 	directory := t.TempDir()

@@ -18,10 +18,11 @@ type nativeCategory struct {
 }
 
 var nativeAICategories = []nativeCategory{
-	{ID: "ai-duanju", Name: "AI 短剧"},
-	{ID: "ai-manju", Name: "AI 漫剧"},
-	{ID: "ai-huanlian", Name: "AI 换脸"},
-	{ID: "ai-mogai", Name: "AI 魔改"},
+	{ID: "rebuo-duanju", Name: "热播短剧"},
+	{ID: "jingxuan-duanju", Name: "精选短剧"},
+	{ID: "bikan-duanju", Name: "必看短剧"},
+	{ID: "quanbu-duanju", Name: "全部短剧"},
+	{ID: "renqi-duanju", Name: "人气短剧"},
 }
 
 func nativeCatalogKey(source, category string) string {
@@ -204,10 +205,16 @@ func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, c
 				results[index].err = ctx.Err()
 				return
 			}
-			address := fmt.Sprintf("%s/api/videos/category/%s?sort=hot&page=%d&size=24", d.providerBaseURL(sourceHuangguoAI), url.PathEscape(entry.ID), page)
-			body, err := d.fetchProviderText(ctx, address, d.providerBaseURL(sourceHuangguoAI)+"/"+entry.ID+"/")
+			baseURL := strings.TrimRight(d.providerBaseURL(sourceHuangguoAI), "/")
+			var address string
+			if page <= 1 {
+				address = baseURL + "/genre/" + entry.ID + "/"
+			} else {
+				address = fmt.Sprintf("%s/genre/%s/page/%d/", baseURL, entry.ID, page)
+			}
+			body, err := d.fetchProviderText(ctx, address, d.providerBaseURL(sourceHuangguoAI)+"/")
 			if err == nil {
-				results[index].items = parseHuangguoAIJSONCards([]byte(body), address, entry.Name)
+				results[index].items = parseHuangguoAIDramaCards(body, address, entry.Name)
 			}
 			if err != nil {
 				results[index].err = fmt.Errorf("%s: %w", entry.Name, err)
@@ -220,7 +227,7 @@ func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, c
 	more := false
 	for _, result := range results {
 		items = append(items, result.items...)
-		more = more || len(result.items) >= 24 || result.err != nil
+		more = more || len(result.items) >= 30 || result.err != nil
 		if result.err != nil {
 			failures = append(failures, result.err)
 		}
