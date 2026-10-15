@@ -47,7 +47,7 @@ jobs:
         working-directory: native
 
   android:
-    if: false
+    if: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -100,6 +100,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   windows:
+    if: false
     runs-on: windows-2022
     timeout-minutes: 45
     strategy:
