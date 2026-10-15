@@ -37,7 +37,7 @@ def build(goos, architecture, compiler, output, extra=None):
     if extra:
         build_env.update(extra)
     print('Building ' + str(output.relative_to(root)), flush=True)
-    subprocess.run([go, 'build', '-trimpath', '-buildmode=c-shared',
+    subprocess.run([go, 'build', '-mod=mod', '-trimpath', '-buildmode=c-shared',
                     '-ldflags=' + variant.linker_flags, '-o', str(output), './bridge'],
                    cwd=root / 'native', env=build_env, check=True)
 
