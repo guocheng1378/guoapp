@@ -31,6 +31,7 @@ class LocalStore extends ChangeNotifier {
   final Map<String, Drama> _favorites = {};
   final Map<String, FollowState> _followStates = {};
   final Map<String, Drama> _seriesCandidates = {};
+  final Map<String, bool> _sourceSwitches = {};
   Future<void> _writes = Future<void>.value();
   List<LocalProfile> _profiles = [];
   String _current = 'default';
@@ -41,7 +42,20 @@ class LocalStore extends ChangeNotifier {
   int _failures = 0;
   DateTime _retryAfter = DateTime(2000);
 
+  void _loadSourceSwitches() {
+    try {
+      final raw = _string('sourceSwitches');
+      if (raw != null) {
+        final decoded = Map<String, bool>.from(jsonDecode(raw) as Map);
+        _sourceSwitches.addAll(decoded);
+      }
+    } catch (_) {
+      _sourceSwitches.clear();
+    }
+  }
+
   void _initialize() {
+    _loadSourceSwitches();
     try {
       _snapshot = LocalSnapshot(preferences);
       final raw = _snapshot!.getString('profiles');
@@ -121,9 +135,31 @@ class LocalStore extends ChangeNotifier {
 
   bool get canDownload => !locked && (profile.admin || profile.download);
   bool allowsSource(String source) =>
-      !locked && SourceSite.isAvailable(source) && profile.allows(source);
+      !locked && SourceSite.isAvailable(source) && profile.allows(source) && sourceEnabled(source);
   List<SourceSite> get sources =>
       SourceSite.values.where((site) => allowsSource(site.id)).toList();
+  List<SourceSite> get permittedSources => [
+    for (final site in SourceSite.values)
+      if (!locked && profile.allows(site.id)) site,
+  ];
+
+  bool sourceEnabled(String source) => _sourceSwitches[source] ?? true;
+
+  Future<void> setSourceEnabled(String source, bool enabled) {
+    if (!SourceSite.isAvailable(source)) {
+      return Future.error(StateError('站源无效'));
+    }
+    final epoch = _epoch;
+    return _queue(() async {
+      _requireAdmin();
+      if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
+      final switches = {..._sourceSwitches, source: enabled};
+      await _commit({'sourceSwitches': jsonEncode(switches)});
+      _sourceSwitches.clear();
+      _sourceSwitches.addAll(switches);
+      _notify();
+    });
+  }
 
   void _loadLibrary() {
     _lanDocumentCache = null;
