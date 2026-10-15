@@ -47,13 +47,39 @@ func maccmsAPIVodIDString(v any) string {
 	}
 }
 
+// flexInt 接受 JSON 里的 int 或 string（某些 maccms 源不带 t= 时返回 page/limit 为 string）。
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch n := v.(type) {
+	case float64:
+		*f = flexInt(int(n))
+	case int:
+		*f = flexInt(n)
+	case string:
+		var i int
+		if _, err := fmt.Sscanf(n, "%d", &i); err == nil {
+			*f = flexInt(i)
+		}
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			*f = flexInt(int(i))
+		}
+	}
+	return nil
+}
+
 // maccmsAPIResponse /api.php/provide/vod/?ac=list 返回结构
 type maccmsAPIResponse struct {
 	Code      int            `json:"code"`
 	Msg       string         `json:"msg"`
-	Page      int            `json:"page"`
-	PageCount int            `json:"pagecount"`
-	Total     int            `json:"total"`
+	Page      flexInt        `json:"page"`
+	PageCount flexInt        `json:"pagecount"`
+	Total     flexInt        `json:"total"`
 	List      []maccmsAPIVod `json:"list"`
 }
 
@@ -157,7 +183,7 @@ func (d *Downloader) fetchMaccmsAPICatalogPage(ctx context.Context, source strin
 			ChannelName: channel,
 		})
 	}
-	hasMore := page < resp.PageCount
+	hasMore := page < int(resp.PageCount)
 	return out, hasMore, nil
 }
 
