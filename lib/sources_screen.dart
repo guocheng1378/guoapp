@@ -73,7 +73,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final epoch = widget.store.profileEpoch;
     try {
       await Future.wait([
-        for (final source in widget.store.sources)
+        for (final source in widget.store.permittedSources)
           (() async {
             final revision = _revisions[source.id] ?? 0;
             try {
@@ -261,14 +261,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
           ),
         ),
         if (switchedOn) Text('${status?.count ?? 0} 部'),
-        if (allSourcesEnabled) ...[
-          const SizedBox(width: 8),
-          Switch(
-            key: ValueKey('switch-${source.id}'),
-            value: switchedOn,
-            onChanged: admin ? (value) => _toggle(source, value) : null,
-          ),
-        ],
+        const SizedBox(width: 8),
+        Switch(
+          key: ValueKey('switch-${source.id}'),
+          value: switchedOn,
+          onChanged: admin ? (value) => _toggle(source, value) : null,
+        ),
       ],
     );
     if (!switchedOn) {
