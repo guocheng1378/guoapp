@@ -11,14 +11,6 @@ class SourceSite {
   bool get pagedSearch =>
       id == 'huangju' || id == 'yeguo' || id == 'dsd' || duanjuPaged;
   bool get duanjuPaged => const {
-    'yaguo',
-    'guanguo',
-    'huaguo',
-    'niuguo',
-    'wangguo',
-    'faguo',
-    'piguo',
-    'wuguo',
     'yingshigongchang',
     'shandian',
     'hongniu',
@@ -44,26 +36,14 @@ class SourceSite {
   static const hongguo = SourceSite('hongguo', '红果', '短剧 · 漫剧 · AI 剧');
   static const dsd = SourceSite('dsd', '帝果', '分类视频 · 在线搜索');
   static const duanjuValues = [
-    SourceSite('yaguo', '芽果', '星芽短剧 · 登录接口'),
-    SourceSite('maoguo', '猫果', '七猫短剧 · 签名接口'),
-    SourceSite('fanguo', '饭果', '西饭短剧 · 搜索接口'),
-    SourceSite('guanguo', '观果', '围观短剧 · 分类接口'),
-    SourceSite('heguo', '河果', '河马剧场 · 网页接口'),
-    SourceSite('xingguo', '星果', '星星短剧 · 连载接口'),
-    SourceSite('huaguo', '花果', '花生短剧 · 网页目录'),
-    SourceSite('niuguo', '牛果', '牛牛短剧 · 分类接口'),
-    SourceSite('wangguo', '网果', '短剧网站 · 网页目录'),
-    SourceSite('faguo', '发果', '168 短剧 · 网页目录'),
-    SourceSite('piguo', '皮果', 'PTT 短剧 · 网页目录'),
-    SourceSite('wuguo', '伍果', '五五短剧 · 网页目录'),
-    SourceSite('yingshigongchang', '影视工厂', '2.4w 短剧 · maccms · m3u8'),
-    SourceSite('360zy', '360', '2.6w 短剧 · maccms · m3u8'),
-    SourceSite('modu', '魔都', '3.5w 短剧 · maccms · m3u8'),
-    SourceSite('dytt', '电影天堂', '2.2w 短剧 · maccms · 真分集'),
-    SourceSite('shandian', '闪电', 'maccms · m3u8'),
-    SourceSite('hongniu', '红牛', 'maccms · m3u8'),
-    SourceSite('niuniu', '牛牛', '短剧 · 动漫 · m3u8'),
-    SourceSite('wsyzy', '无水印', '短剧 · 动漫 · m3u8'),
+    SourceSite('yingshigongchang', '影视工厂', 'maccms · m3u8 · 可播放'),
+    SourceSite('360zy', '360', 'maccms · m3u8 · 可播放'),
+    SourceSite('modu', '魔都', 'maccms · m3u8 · 可播放'),
+    SourceSite('dytt', '电影天堂', 'maccms · 真分集 · 可播放'),
+    SourceSite('shandian', '闪电', 'maccms · m3u8 · 可播放'),
+    SourceSite('hongniu', '红牛', 'maccms · m3u8 · 可播放'),
+    SourceSite('niuniuzy', '牛牛', 'maccms · m3u8 · 可播放'),
+    SourceSite('wsyzy', '无水印', 'maccms · m3u8 · 可播放'),
   ];
   static const knownValues = [
     hongguo,
