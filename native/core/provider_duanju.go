@@ -27,6 +27,7 @@ const (
 	sourceDytt = "dytt"
 	sourceNiuniu = "niuniu"
 	sourceWsyzy = "wsyzy"
+	sourceSorani = "sorani"
 
 	duanjuMaxBodyBytes = 8 * 1024 * 1024
 	duanjuUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -58,6 +59,7 @@ var (
 	dyttBaseURL             = "http://caiji.dyttzyapi.com"
 	niuniuzyBaseURL         = "http://api.niuniuzy.me"
 	wsyzyBaseURL            = "https://api.wsyzy.net"
+	soraniBaseURL           = "https://www.sorani.net"
 )
 
 type duanjuSourceSpec struct {
@@ -81,6 +83,7 @@ var duanjuProviderCatalog = []duanjuSourceSpec{
 	{ID: sourceHongniu, Name: "红牛", Base: hongniuBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
 	{ID: sourceNiuniu, Name: "牛牛", Base: niuniuzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
 	{ID: sourceWsyzy, Name: "无水印", Base: wsyzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceSorani, Name: "青空", Base: soraniBaseURL, Kind: "api", Searcher: true, Paged: true},
 }
 
 var duanjuMarkupPattern = regexp.MustCompile(`<[^>]{1,80}>`)
@@ -122,6 +125,7 @@ var duanjuSourceAliases = map[string]string{
 	"dytt": "dytt", "电影天堂": sourceDytt, "dyttzyapi.com": sourceDytt, "caiji.dyttzyapi.com": sourceDytt,
 	"niuniuzy": sourceNiuniu, "niuniuzy.me": sourceNiuniu, "api.niuniuzy.me": sourceNiuniu,
 	"wsyzy": "wsyzy", "无水印": sourceWsyzy, "wsyzy.net": sourceWsyzy, "api.wsyzy.net": sourceWsyzy,
+	"sorani": "sorani", "青空": sourceSorani, "sorani.net": sourceSorani, "www.sorani.net": sourceSorani,
 }
 
 var duanjuSourcesByName = func() map[string]duanjuSourceSpec {

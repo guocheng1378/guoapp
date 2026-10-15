@@ -124,6 +124,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if chapter.Source == sourceDSD {
 		return d.resolveDSDMedia(ctx, task)
 	}
+	if chapter.Source == sourceSorani {
+		return d.resolveSoraniMedia(ctx, task)
+	}
 	if isDuanjuProviderSource(chapter.Source) {
 		return d.resolveDuanjuMedia(ctx, task)
 	}

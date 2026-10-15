@@ -30,6 +30,7 @@ type Config struct {
 	HuangjuAPIURL    string
 	YeguoURL         string
 	YeguoAPIURL      string
+	SoraniAPIURL     string
 	DSDURL           string
 	Token            string
 	AESKeyHex        string
@@ -56,6 +57,8 @@ type Downloader struct {
 	huangju               *huangjuAPIClient
 	yeguoOnce             sync.Once
 	yeguo                 *yeguoAPIClient
+	soraniOnce            sync.Once
+	sorani                *soraniAPIClient
 	dsdCatalog            dsdCatalogState
 	diagnostics           *diagnosticLog
 	apiMu                 sync.Mutex
