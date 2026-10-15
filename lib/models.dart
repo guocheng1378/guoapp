@@ -43,6 +43,7 @@ class SourceSite {
     SourceSite('niuniuzy', '牛牛', 'maccms · m3u8 · 可播放'),
     SourceSite('wsyzy', '无水印', 'maccms · m3u8 · 可播放'),
     SourceSite('sorani', '青空', '番剧 · 剧场 · 特摄 · m3u8'),
+    SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
   ];
   static const knownValues = [
     hongguo,

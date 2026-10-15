@@ -24,6 +24,8 @@ func (d *Downloader) fetchDuanjuCategories(ctx context.Context, source string) (
 		return d.fetchYaguoCategories(ctx)
 	case sourceMaoguo:
 		return d.fetchMaoguoCategories(ctx)
+	case sourceDongpiandi:
+		return fetchDongpiandiCategories(), nil
 	}
 	return nil, errors.New("该站源暂未提供分类")
 }
@@ -51,6 +53,8 @@ func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, 
 		return d.fetchSoraniCatalogPage(ctx, page, category, "")
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.fetchMaccmsCatalogPage(ctx, source, page, category)
+	case sourceDongpiandi:
+		return d.fetchDongpiandiCatalogPage(ctx, page, category, "")
 	}
 	return nil, false, errors.New("该站源暂未接入目录")
 }
@@ -78,6 +82,8 @@ func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID str
 		return d.fetchSoraniDetail(ctx, sourceID)
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.fetchMaccmsDetail(ctx, source, sourceID)
+	case sourceDongpiandi:
+		return d.fetchDongpiandiDetail(ctx, sourceID)
 	}
 	return Drama{}, nil, errors.New("该站源暂未接入详情")
 }
@@ -106,6 +112,8 @@ func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]
 		return items, err
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.searchMaccms(ctx, source, query)
+	case sourceDongpiandi:
+		return d.searchDongpiandi(ctx, query)
 	}
 	return nil, errors.New("该站源不支持在线搜索")
 }
