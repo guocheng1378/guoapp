@@ -93,11 +93,13 @@ func TestHuangdouRankingPreservesOrderAndMetrics(t *testing.T) {
 
 func TestHuangguoRankingStructuredData(t *testing.T) {
 	board, _ := findRankingBoard("huangguo-potential")
-	body := `<script type="application/ld+json">{"@graph":[{"@type":"BreadcrumbList","itemListElement":[]},{"@type":"ItemList","@id":"https://huangguoai.com/ranks/potential/#itemlist","itemListElement":[{"position":1,"name":"A & B","url":"https://huangguoai.com/detail/12/"},{"position":3,"name":"第二条","url":"https://huangguoai.com/detail/34/"}]}]}</script>`
+	// 站点已将 rankings 从 /ranks/{path}/ 迁移到 /genre/{path}-duanju/
+	body := `<script type="application/ld+json">{"@graph":[{"@type":"BreadcrumbList","itemListElement":[]},{"@type":"ItemList","@id":"https://huangguoai.com/genre/jingxuan-duanju/#itemlist","itemListElement":[{"position":1,"name":"A & B","url":"https://huangguoai.com/detail/12/"},{"position":3,"name":"第二条","url":"https://huangguoai.com/detail/34/"}]}]}</script>`
 	result, err := parseHuangguoRanking(body, board)
 	if err != nil || len(result.Items) != 2 || result.Items[1].Rank != 3 || result.Items[0].Drama.ID != "huangguoai:12" || result.HasMore {
 		t.Fatalf("could not preserve structured site ranks: %+v %v", result, err)
 	}
+	// 热榜 board path = rebuo-duanju，body @id 里没有它 → 应该拒绝
 	other, _ := findRankingBoard("huangguo-hot")
 	if _, err := parseHuangguoRanking(body, other); err == nil {
 		t.Fatal("accepted a different chart's structured data")

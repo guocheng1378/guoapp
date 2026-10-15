@@ -45,6 +45,8 @@ func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, 
 		return d.fetchXingguoCatalogPage(ctx, page, category)
 	case sourceNiuguo:
 		return d.fetchNiuguoCatalogPage(ctx, page, category)
+	case sourceYingshigongchang, sourceShandian, sourceHongniu:
+		return d.fetchMaccmsAPICatalogPage(ctx, source, page, category)
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.fetchMaccmsCatalogPage(ctx, source, page, category)
 	}
@@ -68,6 +70,8 @@ func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID str
 		return d.fetchXingguoDetail(ctx, sourceID)
 	case sourceNiuguo:
 		return d.fetchNiuguoDetail(ctx, sourceID)
+	case sourceYingshigongchang, sourceShandian, sourceHongniu:
+		return d.fetchMaccmsAPIDetail(ctx, source, sourceID)
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.fetchMaccmsDetail(ctx, source, sourceID)
 	}
@@ -91,6 +95,8 @@ func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]
 		return d.searchXingguo(ctx, query)
 	case sourceNiuguo:
 		return d.searchNiuguo(ctx, query)
+	case sourceYingshigongchang, sourceShandian, sourceHongniu:
+		return d.searchMaccmsAPI(ctx, source, query)
 	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
 		return d.searchMaccms(ctx, source, query)
 	}

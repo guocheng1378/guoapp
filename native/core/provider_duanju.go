@@ -19,6 +19,9 @@ const (
 	sourceFaguo   = "faguo"
 	sourcePiguo   = "piguo"
 	sourceWuguo   = "wuguo"
+	sourceYingshigongchang = "yingshigongchang"
+	sourceShandian = "shandian"
+	sourceHongniu = "hongniu"
 
 	duanjuMaxBodyBytes = 8 * 1024 * 1024
 	duanjuUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -101,6 +104,9 @@ var duanjuSourceAliases = map[string]string{
 	"faguo": "faguo", "168": sourceFaguo, "xzyx168": sourceFaguo, "www.xzyx168.com": sourceFaguo,
 	"piguo": "piguo", "ptt": sourcePiguo, "ptt.red": sourcePiguo,
 	"wuguo": "wuguo", "wuwu": sourceWuguo, "五五": sourceWuguo, "www.duanju55.com": sourceWuguo,
+	"yingshigongchang": "yingshigongchang", "影视工厂": sourceYingshigongchang, "cj.lziapi.com": sourceYingshigongchang,
+	"shandian": "shandian", "闪电": sourceShandian, "sdzyapi.com": sourceShandian,
+	"hongniu": "hongniu", "红牛": sourceHongniu, "hongniuzy2.com": sourceHongniu,
 }
 
 var duanjuSourcesByName = func() map[string]duanjuSourceSpec {

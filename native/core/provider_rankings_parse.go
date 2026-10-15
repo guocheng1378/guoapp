@@ -151,8 +151,28 @@ func parseHuangguoRanking(body string, board rankingBoard) (rankingPage, error) 
 		if json.Unmarshal([]byte(match[1]), &schema) != nil {
 			continue
 		}
+		// 统计 ItemList 数量，判断 body 是否"单榜"
+		itemListCount := 0
+		for _, g := range schema.Graph {
+			if g.Type == "ItemList" {
+				itemListCount++
+			}
+		}
 		for _, graph := range schema.Graph {
-			if graph.Type != "ItemList" || !strings.HasSuffix(graph.ID, "/ranks/"+board.path+"/#itemlist") {
+			if graph.Type != "ItemList" {
+				continue
+			}
+			// 路径匹配校验（站点可能改 ranking URL）：
+			// 1. 严格匹配 /ranks/{board.path}/#itemlist
+			// 2. 包含 board.path
+			// 3. board.path 为空（无绑定）
+			// 4. body 只有一个 ItemList 且 URL 里含 board.path 的关键片段
+			pathMatch := strings.HasSuffix(graph.ID, "/ranks/"+board.path+"/#itemlist") ||
+				strings.Contains(graph.ID, "/ranks/"+board.path+"/") ||
+				strings.Contains(graph.ID, "/genre/"+board.path+"/") ||
+				board.path == "" ||
+				(itemListCount == 1 && strings.Contains(graph.ID, board.path))
+			if !pathMatch {
 				continue
 			}
 			if len(graph.Items) == 0 || len(graph.Items) > 100 {
