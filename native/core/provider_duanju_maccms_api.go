@@ -62,6 +62,8 @@ func maccmsAPIBaseURL(source string) string {
 	switch canonicalProviderSource(source) {
 	case sourceYingshigongchang:
 		return "http://cj.lziapi.com"
+	case source360zy:
+		return "https://360zy.com"
 	default:
 		return ""
 	}
@@ -71,9 +73,11 @@ func maccmsAPIBaseURL(source string) string {
 func maccmsAPIDramaTypeID(source string) string {
 	switch canonicalProviderSource(source) {
 	case sourceYingshigongchang:
-		return "46" // cj.lziapi.com 短剧 type_id
+		return "46"
+	case source360zy:
+		return "46" // 360zy 爽文短剧 type_id=46
 	case sourceShandian:
-		return "" // sdzyapi.com 无专门短剧分类，返回综合
+		return ""
 	case sourceHongniu:
 		return ""
 	default:
