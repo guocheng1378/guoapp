@@ -122,8 +122,8 @@ type dongpiandiCatalogResp struct {
 	} `json:"pagination"`
 }
 
-// fetchDongpiandiCatalogPage 拉取目录分页。kind 默认 short_drama；
-// 上游返回固定 total=1000 占位，按 has_more 判断是否有下一页。
+// fetchDongpiandiCatalogPage 拉取目录分页。默认不传 kind，上游返回全类型热门；
+// 按 kind 切换短剧/电视剧/电影/动画/综艺。上游返回固定 total 占位，按 has_more 判断。
 func (d *Downloader) fetchDongpiandiCatalogPage(ctx context.Context, page int, category, query string) ([]Drama, bool, error) {
 	client := newDongpiandiClient()
 	q := url.Values{}
@@ -133,8 +133,6 @@ func (d *Downloader) fetchDongpiandiCatalogPage(ctx context.Context, page int, c
 		q.Set("kind", category)
 	} else if query != "" {
 		q.Set("q", query)
-	} else {
-		q.Set("kind", "short_drama")
 	}
 
 	body, err := client.get(ctx, "/v1/browse/catalog", q)
@@ -498,19 +496,16 @@ func dongpiandiEpisodeNumber(v any, fallback int) int {
 	return fallback
 }
 
-// searchDongpiandi 用 /v1/browse/catalog 的 kind=short_drama 做关键字过滤。
+// searchDongpiandi 用 /v1/browse/catalog 关键字搜索。
 // 上游专用的 /v1/catalog/search 返回 500，因此先用目录端点模拟搜索。
 func (d *Downloader) searchDongpiandi(ctx context.Context, query string) ([]Drama, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, errors.New("搜索关键字不能为空")
 	}
-	items, _, err := d.fetchDongpiandiCatalogPage(ctx, 1, "short_drama", query)
+	items, _, err := d.fetchDongpiandiCatalogPage(ctx, 1, "", query)
 	if err != nil {
 		return nil, err
-	}
-	if query == "" {
-		return items, nil
 	}
 	lq := strings.ToLower(query)
 	filtered := items[:0]
@@ -527,8 +522,10 @@ func (d *Downloader) searchDongpiandi(ctx context.Context, query string) ([]Dram
 
 // fetchDongpiandiCategories 返回静态一级分类。
 // 上游 /v1/browse/catalog 通过 kind 参数（short_drama/series/movie/anime/variety 等）切换。
+// 空 category 代表全部热门（不传 kind）。
 func fetchDongpiandiCategories() []nativeCategory {
 	return []nativeCategory{
+		{ID: "", Name: "全部"},
 		{ID: "short_drama", Name: "短剧"},
 		{ID: "series", Name: "电视剧"},
 		{ID: "movie", Name: "电影"},
