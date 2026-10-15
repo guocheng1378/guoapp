@@ -20,6 +20,8 @@ func (d *Downloader) fetchDuanjuCategories(ctx context.Context, source string) (
 		return categories, nil
 	}
 	switch source {
+	case sourceYingshigongchang, sourceShandian, sourceHongniu, source360zy, sourceModu, sourceDytt, sourceNiuniu, sourceWsyzy:
+		return d.fetchMaccmsAPICategories(ctx, source)
 	case sourceYaguo:
 		return d.fetchYaguoCategories(ctx)
 	case sourceMaoguo:

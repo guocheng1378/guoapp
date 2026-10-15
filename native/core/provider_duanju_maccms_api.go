@@ -2,12 +2,13 @@
 package core
 
 import (
-	"regexp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -139,15 +140,74 @@ func maccmsAPICatalogPage(base, typeID string, page int) string {
 	return fmt.Sprintf("%s/api.php/provide/vod/?ac=list&t=%s&pg=%d", base, typeID, page)
 }
 
+func (d *Downloader) fetchMaccmsAPICategories(ctx context.Context, source string) ([]nativeCategory, error) {
+	base := maccmsAPIBaseURL(source)
+	if base == "" {
+		return nil, errors.New("maccms-api 源未配置")
+	}
+	seen := map[string]string{}
+	for pg := 1; pg <= 2; pg++ {
+		apiURL := maccmsAPICatalogPage(base, "", pg)
+		raw, err := d.fetchProviderText(ctx, apiURL, base+"/")
+		if err != nil {
+			break
+		}
+		var resp maccmsAPIResponse
+		if json.Unmarshal([]byte(raw), &resp) != nil {
+			break
+		}
+		for _, v := range resp.List {
+			tid := maccmsAPIVodIDString(v.TypeID)
+			if tid != "" {
+				if _, dup := seen[tid]; !dup {
+					seen[tid] = strings.TrimSpace(v.TypeName)
+				}
+			}
+		}
+		if pg >= int(resp.PageCount) {
+			break
+		}
+	}
+	out := make([]nativeCategory, 0, len(seen)+1)
+	out = append(out, nativeCategory{ID: "", Name: "全部"})
+	typeOrder := map[string]int{}
+	for i, key := range []string{
+		"12", "13", "14", "15", "16", "21", "22", "24",
+		"25", "26", "27", "28", "29", "30",
+		"5", "6", "7", "8", "9", "10", "11", "20",
+	} {
+		typeOrder[key] = i
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ai, oki := typeOrder[keys[i]]
+		aj, okj := typeOrder[keys[j]]
+		if oki && okj {
+			return ai < aj
+		}
+		if oki {
+			return true
+		}
+		if okj {
+			return false
+		}
+		return strings.Compare(seen[keys[i]], seen[keys[j]]) < 0
+	})
+	for _, k := range keys {
+		out = append(out, nativeCategory{ID: k, Name: seen[k]})
+	}
+	return out, nil
+}
+
 func (d *Downloader) fetchMaccmsAPICatalogPage(ctx context.Context, source string, page int, category string) ([]Drama, bool, error) {
 	base := maccmsAPIBaseURL(source)
 	if base == "" {
 		return nil, false, errors.New("maccms-api 源未配置")
 	}
 	typeID := strings.TrimSpace(category)
-	if typeID == "" {
-		typeID = maccmsAPIDramaTypeID(source)
-	}
 	apiURL := maccmsAPICatalogPage(base, typeID, page)
 	raw, err := d.fetchProviderText(ctx, apiURL, base+"/")
 	if err != nil {
