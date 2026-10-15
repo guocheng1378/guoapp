@@ -49,6 +49,15 @@ var (
 	faguoBaseURL    = "https://www.xzyx168.com"
 	piguoBaseURL    = "https://ptt.red"
 	wuguoBaseURL    = "https://www.duanju55.com"
+
+	yingshigongchangBaseURL = "http://cj.lziapi.com"
+	shandianBaseURL         = "http://sdzyapi.com"
+	hongniuBaseURL          = "https://www.hongniuzy2.com"
+	source360zyBaseURL      = "https://360zy.com"
+	moduBaseURL             = "https://caiji.moduapi.cc"
+	dyttBaseURL             = "http://caiji.dyttzyapi.com"
+	niuniuzyBaseURL         = "http://api.niuniuzy.me"
+	wsyzyBaseURL            = "https://api.wsyzy.net"
 )
 
 type duanjuSourceSpec struct {
@@ -64,18 +73,14 @@ type duanjuSourceSpec struct {
 }
 
 var duanjuProviderCatalog = []duanjuSourceSpec{
-	{ID: sourceYaguo, Name: "芽果", Base: yaguoBaseURL, Kind: "api", Searcher: true, Paged: true},
-	{ID: sourceMaoguo, Name: "猫果", Base: maoguoBaseURL, Kind: "api", Searcher: true},
-	{ID: sourceFanguo, Name: "饭果", Base: fanguoBaseURL, Kind: "api", Searcher: true},
-	{ID: sourceGuanguo, Name: "观果", Base: guanguoBaseURL, Kind: "api", Agent: "okhttp/5.1.0", Searcher: true, Paged: true},
-	{ID: sourceHeguo, Name: "河果", Base: heguoBaseURL, Kind: "next", Searcher: true},
-	{ID: sourceXingguo, Name: "星果", Base: xingguoBaseURL, Kind: "api", Searcher: true},
-	{ID: sourceHuaguo, Name: "花果", Base: huaguoBaseURL, Kind: "maccms", Searcher: true, Paged: true},
-	{ID: sourceNiuguo, Name: "牛果", Base: niuguoBaseURL, Kind: "api", Searcher: true, Paged: true},
-	{ID: sourceWangguo, Name: "网果", Base: wangguoBaseURL, Kind: "maccms", Searcher: true, Paged: true},
-	{ID: sourceFaguo, Name: "发果", Base: faguoBaseURL, Kind: "maccms", Searcher: true, Paged: true},
-	{ID: sourcePiguo, Name: "皮果", Base: piguoBaseURL, Kind: "maccms", Searcher: true, Paged: true, Browser: true},
-	{ID: sourceWuguo, Name: "伍果", Base: wuguoBaseURL, Kind: "maccms", Searcher: true, Paged: true},
+	{ID: sourceYingshigongchang, Name: "影视工厂", Base: yingshigongchangBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: source360zy, Name: "360", Base: source360zyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceModu, Name: "魔都", Base: moduBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceDytt, Name: "电影天堂", Base: dyttBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceShandian, Name: "闪电", Base: shandianBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceHongniu, Name: "红牛", Base: hongniuBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceNiuniu, Name: "牛牛", Base: niuniuzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceWsyzy, Name: "无水印", Base: wsyzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
 }
 
 var duanjuMarkupPattern = regexp.MustCompile(`<[^>]{1,80}>`)

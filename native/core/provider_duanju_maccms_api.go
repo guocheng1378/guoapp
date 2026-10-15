@@ -72,6 +72,10 @@ func maccmsAPIBaseURL(source string) string {
 		return "http://api.niuniuzy.me"
 	case sourceWsyzy:
 		return "https://api.wsyzy.net"
+	case sourceShandian:
+		return "http://sdzyapi.com"
+	case sourceHongniu:
+		return "https://www.hongniuzy2.com"
 	default:
 		return ""
 	}
@@ -93,9 +97,9 @@ func maccmsAPIDramaTypeID(source string) string {
 	case sourceWsyzy:
 		return "54" // wsyzy 爽文短剧（还有 73=擦边短剧）
 	case sourceShandian:
-		return ""
+		return "74" // shandian 擦边短剧（t=54 只有1条）
 	case sourceHongniu:
-		return ""
+		return "50" // hongniu 擦边短剧（t=30 是空的）
 	default:
 		return ""
 	}
