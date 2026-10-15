@@ -23,6 +23,10 @@ const (
 	sourceShandian = "shandian"
 	sourceHongniu = "hongniu"
 	source360zy = "360zy"
+	sourceModu = "modu"
+	sourceDytt = "dytt"
+	sourceNiuniu = "niuniu"
+	sourceWsyzy = "wsyzy"
 
 	duanjuMaxBodyBytes = 8 * 1024 * 1024
 	duanjuUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -109,6 +113,10 @@ var duanjuSourceAliases = map[string]string{
 	"shandian": "shandian", "闪电": sourceShandian, "sdzyapi.com": sourceShandian,
 	"hongniu": "hongniu", "红牛": sourceHongniu, "hongniuzy2.com": sourceHongniu,
 	"360zy": "360zy", "360": source360zy, "360zy.com": source360zy,
+	"modu": "modu", "魔都": sourceModu, "moduapi.cc": sourceModu, "caiji.moduapi.cc": sourceModu,
+	"dytt": "dytt", "电影天堂": sourceDytt, "dyttzyapi.com": sourceDytt, "caiji.dyttzyapi.com": sourceDytt,
+	"niuniuzy": sourceNiuniu, "niuniuzy.me": sourceNiuniu, "api.niuniuzy.me": sourceNiuniu,
+	"wsyzy": "wsyzy", "无水印": sourceWsyzy, "wsyzy.net": sourceWsyzy, "api.wsyzy.net": sourceWsyzy,
 }
 
 var duanjuSourcesByName = func() map[string]duanjuSourceSpec {

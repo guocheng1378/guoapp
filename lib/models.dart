@@ -19,6 +19,14 @@ class SourceSite {
     'faguo',
     'piguo',
     'wuguo',
+    'yingshigongchang',
+    'shandian',
+    'hongniu',
+    '360zy',
+    'modu',
+    'dytt',
+    'niuniuzy',
+    'wsyzy',
   }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
   String get groupId => switch (id) {
@@ -48,6 +56,14 @@ class SourceSite {
     SourceSite('faguo', '发果', '168 短剧 · 网页目录'),
     SourceSite('piguo', '皮果', 'PTT 短剧 · 网页目录'),
     SourceSite('wuguo', '伍果', '五五短剧 · 网页目录'),
+    SourceSite('yingshigongchang', '影视工厂', '2.4w 短剧 · maccms · m3u8'),
+    SourceSite('360zy', '360', '2.6w 短剧 · maccms · m3u8'),
+    SourceSite('modu', '魔都', '3.5w 短剧 · maccms · m3u8'),
+    SourceSite('dytt', '电影天堂', '2.2w 短剧 · maccms · 真分集'),
+    SourceSite('shandian', '闪电', 'maccms · m3u8'),
+    SourceSite('hongniu', '红牛', 'maccms · m3u8'),
+    SourceSite('niuniu', '牛牛', '短剧 · 动漫 · m3u8'),
+    SourceSite('wsyzy', '无水印', '短剧 · 动漫 · m3u8'),
   ];
   static const knownValues = [
     hongguo,

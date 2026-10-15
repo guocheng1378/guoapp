@@ -64,6 +64,14 @@ func maccmsAPIBaseURL(source string) string {
 		return "http://cj.lziapi.com"
 	case source360zy:
 		return "https://360zy.com"
+	case sourceModu:
+		return "https://caiji.moduapi.cc"
+	case sourceDytt:
+		return "http://caiji.dyttzyapi.com"
+	case sourceNiuniu:
+		return "http://api.niuniuzy.me"
+	case sourceWsyzy:
+		return "https://api.wsyzy.net"
 	default:
 		return ""
 	}
@@ -75,7 +83,15 @@ func maccmsAPIDramaTypeID(source string) string {
 	case sourceYingshigongchang:
 		return "46"
 	case source360zy:
-		return "46" // 360zy 爽文短剧 type_id=46
+		return "46" // 360zy 爽文短剧
+	case sourceModu:
+		return "38" // modu 短剧（还有 42=AI漫剧）
+	case sourceDytt:
+		return "36" // dytt 短剧
+	case sourceNiuniu:
+		return "54" // niuniu 爽文短剧（还有 73=擦边短剧）
+	case sourceWsyzy:
+		return "54" // wsyzy 爽文短剧（还有 73=擦边短剧）
 	case sourceShandian:
 		return ""
 	case sourceHongniu:
