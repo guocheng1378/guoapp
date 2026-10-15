@@ -21,6 +21,7 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.util.Rational
 import android.view.InputDevice
+import android.view.WindowManager
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
