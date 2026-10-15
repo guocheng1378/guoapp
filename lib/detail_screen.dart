@@ -241,7 +241,7 @@ class _DetailScreenState extends State<DetailScreen> {
       return;
     }
     if (detail.episodes[index].vip &&
-        detail.drama.source != SourceSite.dsd.id) {
+        detail.drama.source != 'dsd') {
       final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
