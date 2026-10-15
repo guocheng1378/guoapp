@@ -542,16 +542,16 @@ func parseHuangguoAIDramaCards(rawHTML, pageURL, category string) []Drama {
 		}
 		title := huangguoCardTitle(block, sourceID)
 		cover := resolveProviderURL(pageURL, firstNonEmpty(extractAttr(block, "data-src"), extractAttr(block, "data-original"), extractAttr(block, "src")))
-		desc := firstNonEmpty(extractByClassText(block, "hg-drama-card__desc"), extractDescription(block))
-		score := firstNonEmpty(extractByClassText(block, "hg-drama-card__score"), firstMatchText(reScoreText, block))
-		episodeBlock := huangguoClassBlock(block, "hg-drama-card__episode")
+		desc := firstNonEmpty(firstNonEmpty(extractByClassText(block, "hg-drama-card__desc"), extractByClassText(block, "o5-card__desc")), extractDescription(block))
+		score := firstNonEmpty(extractByClassText(block, "hg-drama-card__score"), firstNonEmpty(firstMatchText(reScoreText, block), extractByClassText(block, "hg-drama-card__score"), extractByClassText(block, "o5-card__score")))
+		episodeBlock := firstNonEmpty(huangguoClassBlock(block, "hg-drama-card__episode"), huangguoClassBlock(block, "o5-card__ep"))
 		episode := firstNonEmpty(extractAttr(episodeBlock, "data-ep-base"), cleanText(episodeBlock))
-		badge := extractByClassText(block, "hg-drama-card__badge")
+		badge := firstNonEmpty(extractByClassText(block, "hg-drama-card__badge"), extractByClassText(block, "o5-card__badge"))
 		remark := strings.TrimSpace(strings.Join(nonEmptyStrings(badge, episode), " "))
 		if remark == "" {
 			remark = "在线观看"
 		}
-		views := normalizeViews(firstNonEmpty(firstMatchText(reViewsText, block), extractByClassText(block, "hg-drama-card__views"), extractByClassText(block, "hg-drama-card__play")))
+		views := normalizeViews(firstNonEmpty(firstMatchText(reViewsText, block), extractByClassText(block, "hg-drama-card__views"), extractByClassText(block, "hg-drama-card__play"), extractByClassText(block, "o5-card__views")))
 		online := normalizeDate(firstMatchText(reDateText, block))
 		tags := extractTags(block)
 		typeName := firstNonEmpty(extractAttr(block, "data-track-type-name"), category)
