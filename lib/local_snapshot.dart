@@ -33,6 +33,7 @@ class LocalSnapshot {
     'autoExport',
     'exportPosters',
     'forceLogin',
+    'sourceSwitches',
   };
   final SharedPreferences preferences;
   Map<String, Object> _values = {};
