@@ -31,9 +31,9 @@ var rankingBoards = []rankingBoard{
 	{ID: "huangdou-search", Source: sourceHuangdou, Name: "搜索榜", Description: "黄豆站点搜索榜。", upstreamKey: "search"},
 	{ID: "huangdou-favorite", Source: sourceHuangdou, Name: "收藏榜", Description: "黄豆站点收藏榜。", upstreamKey: "favorite"},
 	{ID: "huangdou-finish", Source: sourceHuangdou, Name: "完结榜", Description: "黄豆站点完结榜。", upstreamKey: "finish"},
-	{ID: "huangguo-hot", Source: sourceHuangguoAI, Name: "热播榜", Description: "黄果站点热播 TOP 20；每日更新。", path: "hot"},
-	{ID: "huangguo-recommend", Source: sourceHuangguoAI, Name: "推荐榜", Description: "黄果站点推荐 TOP 20。", path: "recommend"},
-	{ID: "huangguo-potential", Source: sourceHuangguoAI, Name: "潜力榜", Description: "黄果站点潜力 TOP 20。", path: "potential"},
+	{ID: "huangguo-hot", Source: sourceHuangguoAI, Name: "热播榜", Description: "黄果站点热播 TOP 20；每日更新。", path: "rebuo-duanju"},
+	{ID: "huangguo-recommend", Source: sourceHuangguoAI, Name: "推荐榜", Description: "黄果站点推荐 TOP 20。", path: "bikan-duanju"},
+	{ID: "huangguo-potential", Source: sourceHuangguoAI, Name: "潜力榜", Description: "黄果站点潜力 TOP 20。", path: "jingxuan-duanju"},
 	{ID: "huangju-hot", Source: sourceHuangju, Name: "热门榜", Description: "剧果目录热门顺序，按源站返回顺序展示。"},
 	{ID: "huangju-new", Source: sourceHuangju, Name: "最新榜", Description: "剧果最新目录顺序，按源站返回顺序展示。", path: huangjuNewestCategory},
 	{ID: "yeguo-recommend", Source: sourceYeguo, Name: "目录榜", Description: "野果默认目录顺序，按源站返回顺序展示。"},
@@ -175,7 +175,12 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 		if page != 1 {
 			return rankingPage{}, errors.New("该榜单只有一页")
 		}
-		pageURL := d.providerBaseURL(sourceHuangguoAI) + "/ranks/" + board.path + "/"
+		var pageURL string
+		if strings.HasSuffix(board.path, "-duanju") {
+			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/genre/" + board.path + "/"
+		} else {
+			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/ranks/" + board.path + "/"
+		}
 		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(sourceHuangguoAI)+"/")
 		if err != nil {
 			return rankingPage{}, err
