@@ -28,7 +28,7 @@ class PlayerInteractions extends ChangeNotifier {
     required this.available,
     required this.baseSpeed,
     required this.onTogglePlayback,
-    required this.onFullscreen,
+    this.onFullscreen,
     required this.onEpisode,
     this.onSeek,
   }) {
@@ -49,7 +49,7 @@ class PlayerInteractions extends ChangeNotifier {
   final bool Function() available;
   final double Function() baseSpeed;
   final VoidCallback onTogglePlayback;
-  final VoidCallback onFullscreen;
+  final VoidCallback? onFullscreen;
   final String Function(int direction) onEpisode;
   final Future<void> Function(Duration)? onSeek;
   late final StreamSubscription<bool> _playing;
@@ -272,6 +272,8 @@ class PlayerInteractions extends ChangeNotifier {
       final targetDur = Duration(milliseconds: target);
       final progress = durationMs > 0 ? target / durationMs : 0.0;
       _showHud(SwipeAction.seek, progress, position: targetDur);
+      // 实时 seek，让滑动跟手
+      unawaited((onSeek ?? player.seek)(targetDur));
     }
   }
 
@@ -385,9 +387,9 @@ class PlayerInteractions extends ChangeNotifier {
       return KeyEventResult.ignored;
     }
     if (key == LogicalKeyboardKey.f11 || key == LogicalKeyboardKey.keyF) {
-      if (event is KeyDownEvent) {
+      if (event is KeyDownEvent && onFullscreen != null) {
         cancel();
-        onFullscreen();
+        onFullscreen!();
       }
       return KeyEventResult.handled;
     }

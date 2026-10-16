@@ -212,7 +212,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       baseSpeed: () => _speed,
       onTogglePlayback: _togglePlayback,
       onSeek: _seekTo,
-      onFullscreen: _rotate,
+      onFullscreen: _fullscreenSupported ? _rotate : null,
       onEpisode: (direction) {
         final next = _index + direction;
         if (next < 0) return '已经是第一集';
@@ -1093,16 +1093,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  bool get _fullscreenSupported =>
+      _television || widget.detail.drama.source == 'hongguo';
+
   bool get _showFullscreen =>
-      _television ||
-      _fullscreen ||
-      (_mobile &&
-          !_automaticFullscreenSuppressed &&
-          _aspectRatio >= 1 &&
-          MediaQuery.orientationOf(context) == Orientation.landscape);
+      _fullscreenSupported &&
+      (_television ||
+          _fullscreen ||
+          (_mobile &&
+              !_automaticFullscreenSuppressed &&
+              _aspectRatio >= 1 &&
+              MediaQuery.orientationOf(context) == Orientation.landscape));
 
   Future<void> _rotate() async {
-    if (_rotating || _television) {
+    if (_rotating || !_fullscreenSupported) {
       return;
     }
     final fullscreen = !_showFullscreen;
@@ -1640,7 +1644,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             title: title,
             onTogglePlayback: _togglePlayback,
             swipeEnabled: _mobile,
-            onFullscreen: _rotate,
+            onFullscreen: _fullscreenSupported ? _rotate : null,
             onBack: _back,
             onFocusSurface: _playerFocus.requestFocus,
             onSeek: _seekTo,
