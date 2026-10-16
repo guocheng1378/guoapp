@@ -411,7 +411,8 @@ class _DetailScreenState extends State<DetailScreen> {
                       .skip(start)
                       .take(episodePageSize)
                       .toList();
-                  final showEpisodes = _episodesExpanded;
+                  final showEpisodes =
+                      _episodesExpanded || episodes.length <= 3;
                   return CustomScrollView(
                     controller: _detailScroll,
                     slivers: [

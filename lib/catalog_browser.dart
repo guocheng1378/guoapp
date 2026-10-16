@@ -286,6 +286,7 @@ class CatalogBrowser {
         entry.nextPage = page;
         entry.hasMore = query.isEmpty || SourceSite.byId(source).pagedSearch;
         entry.fresh = false;
+        if (force) entry.items = [];
         failures[source] = error.toString();
       }
     });

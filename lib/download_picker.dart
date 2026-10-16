@@ -106,9 +106,8 @@ class _DownloadPickerState extends State<DownloadPicker> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(
@@ -251,7 +250,6 @@ class _DownloadPickerState extends State<DownloadPicker> {
                 ),
               ),
             ],
-          ),
           ),
         ),
       ),

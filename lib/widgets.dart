@@ -211,7 +211,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       widget.drama.id,
     );
     widget.repository.catalogUpdates.addListener(_metadataChanged);
-    _file = widget.repository.cover(widget.drama);
+    _file = widget.repository.cover(widget.drama).catchError((_) => '');
   }
 
   @override
@@ -230,7 +230,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       _coverRevision = widget.repository.catalogUpdates.coverRevision(
         widget.drama.id,
       );
-      _file = widget.repository.cover(widget.drama);
+      _file = widget.repository.cover(widget.drama).catchError((_) => '');
     }
   }
 
@@ -277,7 +277,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
         _file = widget.repository.cover(
           widget.repository.catalogUpdates.current(widget.drama),
           force: true,
-        );
+        ).catchError((_) => '');
       });
     }
   }
@@ -305,7 +305,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       if (snapshot.connectionState != ConnectionState.done) {
         return widget.placeholder;
       }
-      if (snapshot.hasError || !snapshot.hasData) {
+      if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
         return _failed(null);
       }
       return Image.file(

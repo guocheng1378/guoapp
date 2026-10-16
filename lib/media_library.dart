@@ -318,10 +318,10 @@ class MediaLibrary extends ChangeNotifier {
   }
 
   void _check() {
-    if (_disposed ||
-        _cancelled ||
-        suspended ||
-        !store.canDownload ||
+    if (_disposed) throw AppFailure('本地媒体处理已停止，原分集和恢复记录保留');
+    if (_cancelled) throw AppFailure('本地媒体处理已取消');
+    if (suspended) throw AppFailure('本地媒体处理已暂停');
+    if (!store.canDownload ||
         _taskEpoch != null && _taskEpoch != store.profileEpoch ||
         _taskSources.any((source) => !store.allowsSource(source))) {
       throw AppFailure('本地媒体处理已停止，原分集和恢复记录保留');

@@ -531,6 +531,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _loading = false;
         _loadingMore = false;
+        if (!more) _items = [];
         _error = error.toString();
       });
     }

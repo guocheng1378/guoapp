@@ -68,7 +68,6 @@ void main() {
         expect(find.text('短标题'), findsOneWidget);
         await tester.tap(refresh);
         expect(repository.requests.length, requests + 1);
-        repository.pendingCatalog = null;
         if (fails) {
           pending.completeError(AppFailure('合成更新失败'));
         } else {
