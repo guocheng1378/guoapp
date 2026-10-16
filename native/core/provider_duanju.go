@@ -25,7 +25,7 @@ const (
 	source360zy = "360zy"
 	sourceModu = "modu"
 	sourceDytt = "dytt"
-	sourceNiuniu = "niuniu"
+	sourceNiuniu = "niuniuzy"
 	sourceWsyzy = "wsyzy"
 	sourceSorani = "sorani"
 	sourceDongpiandi = "dongpiandi"
