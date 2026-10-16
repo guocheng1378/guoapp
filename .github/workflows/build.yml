@@ -21,9 +21,9 @@ env:
 
 jobs:
   checks:
-    if: false
+    if: true
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
