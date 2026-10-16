@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -60,9 +59,10 @@ var huangdouAPIMirrors = []string{
 	"tideember.cc",
 }
 
-// huangdouQuickHosts — 并行快速探测池：surge-modules 端到端验证的 free hls 线路 + hddj 系列（Cloudflare 反代，大多数地区可达）
+// huangdouQuickHosts — 并行快速探测池：surge-modules 端到端验证的 free hls 线路 + 全 hddj 系列。
+// 并行 7 个 host，不共享 context，各自独立超时，第一个成功的胜出。
 func huangdouQuickHosts() []string {
-	return huangdouAPIMirrors[:3]
+	return huangdouAPIMirrors[:7]
 }
 
 type huangdouAPIClient struct {
@@ -168,65 +168,83 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID string, seq int) (providerMedia, error) {
 	sourceID = strings.TrimPrefix(strings.TrimSpace(sourceID), "rp_")
 	hosts := []string{"lzlukvca.cc", "hddj01.com", "hddj02.com", "hddj03.com", "hddj08.com", "hddj09.com", "hddj22.com"}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
 	resultCh := make(chan providerMedia, len(hosts))
-	var wg sync.WaitGroup
 	for _, h := range hosts {
-		wg.Add(1)
 		go func(h string) {
-			defer wg.Done()
 			u := fmt.Sprintf("https://%s/api/drama/hls/%s/%d/play.m3u8?line=free", h, url.PathEscape(sourceID), seq)
 			pl, err := d.fetchProviderText(ctx, u, "https://"+h+"/home")
 			if err == nil && strings.HasPrefix(strings.TrimSpace(pl), "#EXTM3U") {
-				resultCh <- providerMedia{URL: u, Referer: "https://" + h + "/home"}
+				select {
+				case resultCh <- providerMedia{URL: u, Referer: "https://" + h + "/home"}:
+				default:
+				}
 			}
 		}(h)
 	}
-	go func() { wg.Wait(); close(resultCh) }()
-	select {
-	case m, ok := <-resultCh:
-		if ok {
+	for i := 0; i < len(hosts); i++ {
+		select {
+		case m := <-resultCh:
 			return m, nil
+		case <-time.After(15 * time.Second):
+			return providerMedia{}, errors.New("free hls 线路探测超时")
 		}
-	case <-ctx.Done():
 	}
 	return providerMedia{}, errors.New("free hls 线路不可用")
 }
 
-// call 并行快速探测前 3 个 mirror（4s 超时），第一个成功的胜出。
+// call 并行快速探测前 7 个 mirror（各自独立 15s 超时），第一个成功的胜出。
+// 不使用共享 context.WithTimeout，避免一个慢请求 cancel 掉其他并行请求。
 // 只有用户手动配置 HuangdouURL 时才走串行单 host。
 func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[string]any, out *any) error {
 	if c.d.cfg.HuangdouURL != "" {
 		return c.callOnceAllKeys(ctx, path, data, out)
 	}
 	quick := huangdouQuickHosts()
-	var wg sync.WaitGroup
 	resultCh := make(chan error, len(quick))
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
 	for _, host := range quick {
-		wg.Add(1)
 		go func(h string) {
-			defer wg.Done()
 			cc := *c
 			cc.host = "https://" + h
-			if err := cc.callOnceAllKeys(ctx, path, data, out); err == nil {
-				c.d.providerMu.Lock()
-				c.d.providerHosts[sourceHuangdou] = cc.host
-				c.d.providerMu.Unlock()
-				resultCh <- nil
+			var dec any
+			err := cc.callOnceAllKeys(ctx, path, data, &dec)
+			if err == nil {
+				// 只有第一个成功的把结果写给 out，其他的仍返回 nil 但不覆盖
+				select {
+				case resultCh <- nil:
+					*out = dec
+					c.d.providerMu.Lock()
+					c.d.providerHosts[sourceHuangdou] = cc.host
+					c.d.providerMu.Unlock()
+				default:
+				}
 			} else {
-				resultCh <- err
+				select {
+				case resultCh <- err:
+				default:
+				}
 			}
 		}(host)
 	}
-	wg.Wait()
-	close(resultCh)
-	for err := range resultCh {
-		if err == nil {
-			return nil
+	// select 提前返回：第一个 nil 胜出；全部失败或 20s 兜底超时则返回最后错误
+	var lastErr error
+	failCount := 0
+	for failCount < len(quick) {
+		select {
+		case err := <-resultCh:
+			if err == nil {
+				return nil
+			}
+			lastErr = err
+			failCount++
+		case <-time.After(20 * time.Second):
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("黄豆节点探测超时（20s）")
 		}
+	}
+	if lastErr != nil {
+		return lastErr
 	}
 	return fmt.Errorf("所有黄豆节点均不可用：请检查网络或切换代理")
 }
@@ -358,7 +376,7 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 	req.Header.Set("deviceType", huangdouDeviceType)
 	req.Header.Set("requestId", rid)
 	req.Header.Set("sessionId", c.sessionID)
-	resp, err := c.d.doPreparedCatalogRequest(req, 4*time.Second, func(prepared *http.Request) {
+	resp, err := c.d.doPreparedCatalogRequest(req, 10*time.Second, func(prepared *http.Request) {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 		signRaw := "Dart|" + c.sessionID + "|" + rid + "|" + timestamp + "|" + path
 		signSum := sha256.Sum256([]byte(signRaw))
