@@ -11,6 +11,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import 'core_bridge.dart';
+import 'local_store.dart';
 import 'models.dart';
 import 'playback_loader.dart';
 import 'playback_preloader.dart';
@@ -339,7 +340,7 @@ class _DramaPlayerFullscreenState extends State<DramaPlayerFullscreen>
     if (d.delta.dy.abs() > d.delta.dx.abs() * 0.7) return;
     if (_dragStartRatio == null) {
       _dragStartRatio = _position / (_duration > 0 ? _duration : 1);
-      _dragDirection = d.delta.dx.sign;
+      _dragDirection = d.delta.dx > 0 ? 1 : -1;
     }
     if (_dragDirection != d.delta.dx.sign && (d.delta.dx.abs() < 5)) return;
     final width = MediaQuery.sizeOf(context).width;
