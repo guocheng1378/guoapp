@@ -36,11 +36,11 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           FILES=$(ls *.apk *.zip *.ipa 2>/dev/null || true)
-          gh release create "$TAG" -R heijiji0527/guoapp \
+          gh release create "$TAG" -R guocheng1378/guoapp \
             --title "真果鉴/红果鉴 $TAG 预览版（debug 签名）" \
             --notes "Android 预览 APK（arm64-v8a 主流手机 / armeabi-v7a 旧设备 / x86_64 模拟器）、Windows x64 便携压缩包、iOS 未签名 IPA。未配置正式签名，安装时可能提示未知来源。" || true
           if [ -n "$FILES" ]; then
-            gh release upload "$TAG" -R heijiji0527/guoapp $FILES --clobber
+            gh release upload "$TAG" -R guocheng1378/guoapp $FILES --clobber
           else
             echo "没有可上传的文件"
           fi

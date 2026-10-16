@@ -187,3 +187,36 @@ jobs:
           path: dist/ios/*
           if-no-files-found: error
           retention-days: 14
+
+
+
+  release:
+    needs: [android, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Collect packages
+        run: |
+          find dist -type f \( -name '*.apk' -o -name '*-windows-x64.zip' \) -exec mv {} . \;
+          ls -la *.apk *.zip
+      - name: Generate SHA256
+        run: sha256sum *.apk *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          FILES=$(ls *.apk *.zip SHA256SUMS.txt 2>/dev/null)
+          gh release create "$TAG" \
+            --title "真果鉴 $TAG" \
+            --notes-file .github/release-notes.md \
+            $FILES \
+            --latest
