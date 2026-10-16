@@ -241,10 +241,7 @@ class _DetailScreenState extends State<DetailScreen> {
         !widget.store.allowsSource(detail.drama.source)) {
       return;
     }
-    final _unlockedVip = const {'huangdou', 'huangju', 'huangguoai'};
-    if (detail.episodes[index].vip &&
-        !_unlockedVip.contains(detail.drama.source) &&
-        detail.drama.source != 'dsd') {
+    if (detail.episodes[index].vip) {
       final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(

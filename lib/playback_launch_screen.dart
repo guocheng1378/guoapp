@@ -10,8 +10,6 @@ import 'models.dart';
 import 'player_screen.dart';
 import 'widgets.dart';
 
-const _unlockedVipSources = {'huangdou', 'huangju', 'huangguoai'};
-
 Future<void> openPlaybackDirectly(
   BuildContext context, {
   required Drama drama,
@@ -39,9 +37,7 @@ Future<void> openPlaybackDirectly(
     final watched = store.watched(mergedDrama.id);
     final index = resumeEpisodeIndex(merged.episodes, watched);
     final episode = merged.episodes[index];
-    if (episode.vip &&
-        !_unlockedVipSources.contains(mergedDrama.source) &&
-        mergedDrama.source != 'dsd') {
+    if (episode.vip) {
       final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -165,9 +161,7 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       final watched = widget.store.watched(drama.id);
       final index = resumeEpisodeIndex(merged.episodes, watched);
       final episode = merged.episodes[index];
-      if (episode.vip &&
-          !_unlockedVipSources.contains(drama.source) &&
-          drama.source != 'dsd') {
+      if (episode.vip) {
         if (!mounted) return;
         final accepted = await showDialog<bool>(
           context: context,
