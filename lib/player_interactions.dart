@@ -219,7 +219,7 @@ class PlayerInteractions extends ChangeNotifier {
       _moved = true;
       _endHold();
     }
-    if (!_swipeEnabled || !_moved || _viewHeight <= 0) return;
+    if (!_swipeEnabled || !_moved || _viewHeight <= 0 || _viewWidth <= 0) return;
 
     // 首次进入时根据位移方向锁定分支
     if (_swipeAction == SwipeAction.none) {

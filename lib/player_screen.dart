@@ -1570,7 +1570,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                         }
                         if (_mobile) {
                           final height = (constraints.maxWidth / _aspectRatio)
-                              .clamp(0.0, constraints.maxHeight * .56);
+                              .clamp(0.0, constraints.maxHeight * .72);
                           return Column(
                             children: [
                               SizedBox(
