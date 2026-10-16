@@ -207,14 +207,24 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 	return lastErr
 }
 
-// callOnceAllKeys 在当前 host 上遍历所有 platform key，第一个成功的胜出。
+// callOnceAllKeys 在当前 host 上尝试所有 platform key。
+// 只有 huangdouKeyMismatchError（AES/gzip/JSON 解码失败）才继续换下一个 key；
+// HTTP 层/网络层/业务层错误直接返回（换 key 没用，call 会换下一个 mirror host）。
 func (c *huangdouAPIClient) callOnceAllKeys(ctx context.Context, path string, data map[string]any, out *any) error {
 	var lastErr error
-	for _, pk := range huangdouPlatformKeys {
-		if err := c.callOnceWithKey(ctx, path, data, pk, out); err == nil {
+	for i, pk := range huangdouPlatformKeys {
+		err := c.callOnceWithKey(ctx, path, data, pk, out)
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
+		}
+		lastErr = err
+		if _, ok := err.(*huangdouKeyMismatchError); !ok {
+			// 非密钥不匹配错误：直接返回给 call 换 host
+			return err
+		}
+		// 密钥不匹配：继续试下一个 key
+		if i == len(huangdouPlatformKeys)-1 {
+			return err
 		}
 	}
 	return lastErr
@@ -223,6 +233,26 @@ func (c *huangdouAPIClient) callOnceAllKeys(ctx context.Context, path string, da
 type huangdouAPIError struct {
 	code    string
 	message string
+}
+
+// huangdouKeyMismatchError 表示 host 响应成功但密钥不匹配（AES 解码/gzip 解压/JSON 失败）。
+// 这种错误需要换 platform key 重试，而不是换 mirror host。
+type huangdouKeyMismatchError struct{ msg string }
+
+func (e *huangdouKeyMismatchError) Error() string { return e.msg }
+
+// huangdouHTTPError 表示网络层/HTTP 层错误（403/404/连接失败/超时）。
+// 换 key 没用，必须换 mirror host。
+type huangdouHTTPError struct {
+	status int
+	msg    string
+}
+
+func (e *huangdouHTTPError) Error() string {
+	if e.status > 0 {
+		return fmt.Sprintf("huangdou HTTP %d: %s", e.status, truncate(e.msg, 200))
+	}
+	return e.msg
 }
 
 func (failure *huangdouAPIError) Error() string {
@@ -304,7 +334,7 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 	req.Header.Set("deviceType", huangdouDeviceType)
 	req.Header.Set("requestId", rid)
 	req.Header.Set("sessionId", c.sessionID)
-	resp, err := c.d.doPreparedCatalogRequest(req, 20*time.Second, func(prepared *http.Request) {
+	resp, err := c.d.doPreparedCatalogRequest(req, 12*time.Second, func(prepared *http.Request) {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 		signRaw := "Dart|" + c.sessionID + "|" + rid + "|" + timestamp + "|" + path
 		signSum := sha256.Sum256([]byte(signRaw))
@@ -312,7 +342,7 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 		prepared.Header.Set("sign", hex.EncodeToString(signSum[:])+"-"+timestamp)
 	})
 	if err != nil {
-		return err
+		return &huangdouHTTPError{msg: err.Error()}
 	}
 	defer resp.Body.Close()
 	blob, err := io.ReadAll(io.LimitReader(resp.Body, providerMaxBodyBytes+1))
@@ -323,11 +353,11 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 		return fmt.Errorf("huangdou response exceeds %d bytes", providerMaxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("huangdou HTTP %d: %s", resp.StatusCode, truncate(string(blob), 200))
+		return &huangdouHTTPError{status: resp.StatusCode, msg: string(blob)}
 	}
 	decoded, err := huangdouDecode(blob, key)
 	if err != nil {
-		return err
+		return &huangdouKeyMismatchError{msg: err.Error()}
 	}
 	if envelope, ok := decoded.(map[string]any); ok {
 		if status := mapString(envelope, "status"); status != "" && status != "y" {
