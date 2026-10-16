@@ -221,7 +221,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         return '第 ${widget.detail.episodes[next].number} 集';
       },
     );
-    _interactions.addListener(() => mounted && setState(() {}));
+    _interactions.addListener(() { if (mounted) setState(() {}); });
     _playerFocus.addListener(() {
       if (!_playerFocus.hasPrimaryFocus && !_closed) _interactions.cancel();
     });

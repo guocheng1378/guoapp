@@ -203,7 +203,7 @@ class PlayerInteractions extends ChangeNotifier {
       _initialBrightness = _brightness;
       _initialVolume = player.state.volume;
       final pos = player.state.position.inMilliseconds;
-      _originPositionMs = pos.isFinite ? pos : 0;
+      _originPositionMs = pos.isFinite ? pos.toDouble() : 0.0;
     }
     _beginHold();
   }
