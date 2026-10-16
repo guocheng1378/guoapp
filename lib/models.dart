@@ -63,6 +63,13 @@ class SourceSite {
   static const values = allSourcesEnabled ? knownValues : [hongguo];
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
+  static bool isRestricted(String id) => const {
+        'huangdou',
+        'huangju',
+        'huangguo-video',
+        'huangguoai',
+        'cloudfront',
+      }.contains(id);
   static SourceSite byId(String id) =>
       allValues.firstWhere((site) => site.id == id, orElse: () => hongguo);
 }

@@ -143,7 +143,8 @@ class LocalStore extends ChangeNotifier {
       if (!locked && profile.allows(site.id)) site,
   ];
 
-  bool sourceEnabled(String source) => _sourceSwitches[source] ?? true;
+  bool sourceEnabled(String source) =>
+      _sourceSwitches[source] ?? !SourceSite.isRestricted(source);
 
   Future<void> setSourceEnabled(String source, bool enabled) {
     if (!SourceSite.isAvailable(source)) {
@@ -773,6 +774,16 @@ class LocalStore extends ChangeNotifier {
 
   void _requireAdmin() {
     if (locked || !profile.admin) throw StateError('仅管理员可以修改此设置');
+  }
+
+  Future<bool> verifyAdminPin(String pin) async {
+    final admin = _profiles.firstWhere((p) => p.admin);
+    try {
+      await _checkPin(admin, pin);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _checkPin(LocalProfile target, String pin) async {

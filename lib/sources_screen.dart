@@ -134,6 +134,40 @@ class _SourcesScreenState extends State<SourcesScreen> {
 
   Future<void> _toggle(SourceSite source, bool enabled) async {
     setState(() => _errors.remove(source.id));
+    if (enabled && SourceSite.isRestricted(source.id)) {
+      final pinController = TextEditingController();
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('开启 ${source.name} 需要密码'),
+          content: TextField(
+            controller: pinController,
+            obscureText: true,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '管理员密码'),
+            onSubmitted: (_) => Navigator.pop(ctx, true),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      final ok = await widget.store.verifyAdminPin(pinController.text);
+      if (!ok) {
+        if (mounted) {
+          setState(() => _errors[source.id] = '密码不正确');
+        }
+        return;
+      }
+    }
     try {
       await widget.store.setSourceEnabled(source.id, enabled);
       if (enabled) unawaited(_refresh());
