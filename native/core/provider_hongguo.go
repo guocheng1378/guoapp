@@ -230,18 +230,53 @@ func (d *Downloader) resolveHongguoWebMedia(ctx context.Context, seriesID, video
 		return providerMedia{}, fmt.Errorf("红果未返回所请求的剧集，可能仅允许网页试看；请在站点确认该集的访问权限")
 	}
 	info, _ := page["video_player_info"].(map[string]any)
+	seo, _ := page["publicVideoSeo"].(map[string]any)
 	addresses := hongguoMediaAddresses(info)
+	quality := 0
 	if len(addresses) == 0 {
-		return providerMedia{}, fmt.Errorf("红果该集未提供公开播放地址，可能需要登录或 App 授权；不会将试看集冒充该集下载")
+		address := hongguoPublicMediaAddress(body, videoID)
+		if address == "" {
+			return providerMedia{}, fmt.Errorf("红果该集未提供公开播放地址，可能需要登录或 App 授权；不会将试看集冒充该集下载")
+		}
+		addresses = []string{address}
+		quality = hongguoPublicMediaQuality(address)
 	}
-	duration, _ := strconv.ParseFloat(mapString(info, "duration"), 64)
-	media := providerMedia{URL: addresses[0], Referer: d.providerBaseURL(sourceHongguo) + "/", Duration: time.Duration(duration * float64(time.Second))}
+	durationText := mapString(info, "duration")
+	if durationText == "" {
+		durationText = mapString(seo, "durationSeconds")
+	}
+	duration, _ := strconv.ParseFloat(durationText, 64)
+	media := providerMedia{URL: addresses[0], Referer: d.providerBaseURL(sourceHongguo) + "/", Quality: quality, Duration: time.Duration(duration * float64(time.Second))}
 	for _, address := range addresses {
 		variant := media
 		variant.URL, variant.Variants = address, nil
 		media.Variants = append(media.Variants, variant)
 	}
 	return media, nil
+}
+
+func hongguoPublicMediaAddress(pageBody, videoID string) string {
+	if !hongguoNumericID.MatchString(videoID) {
+		return ""
+	}
+	match := regexp.MustCompile(`/` + videoID + `/([0-9]+)p\.mp4`).FindStringSubmatch(pageBody)
+	if match == nil {
+		return ""
+	}
+	address := hongguoBaseURL + "/video/public/" + videoID + "/" + match[1] + "p.mp4"
+	if isProviderHTTPMediaURL(address) {
+		return address
+	}
+	return ""
+}
+
+func hongguoPublicMediaQuality(address string) int {
+	match := regexp.MustCompile(`/([0-9]+)p\.mp4$`).FindStringSubmatch(address)
+	if match == nil {
+		return 0
+	}
+	quality, _ := strconv.Atoi(match[1])
+	return quality
 }
 
 func hongguoDramaFromAny(v any, category string) Drama {
