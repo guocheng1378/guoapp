@@ -273,10 +273,27 @@ func (d *Downloader) fetchMaccmsAPIDetail(ctx context.Context, source, sourceID 
 	var chapters []Chapter
 	fromList := strings.Split(v.VodPlayFrom, maccmsAPISourceSep)
 	urlList := strings.Split(v.VodPlayURL, maccmsAPISourceSep)
-	for i := range fromList {
-		if i >= len(urlList) {
-			break
+
+	// 构建源索引，按是否包含媒体直链排序（直链 m3u8/mp4/flv 优先于 share-ticket/HTML 线路）
+	type srcIdx struct {
+		pos   int
+		score int
+	}
+	var srcOrder []srcIdx
+	for i := 0; i < len(fromList) && i < len(urlList); i++ {
+		firstURL := firstMediaURLInSource(urlList[i])
+		score := 0
+		if duanjuLooksLikeMedia(firstURL) {
+			score = 10
 		}
+		srcOrder = append(srcOrder, srcIdx{pos: i, score: score})
+	}
+	sort.SliceStable(srcOrder, func(a, b int) bool {
+		return srcOrder[a].score > srcOrder[b].score
+	})
+
+	for _, entry := range srcOrder {
+		i := entry.pos
 		// 用 $ 和 # 都当分隔符来切，得到 [集名1, URL1, 集名2, URL2, ...]
 		playStr := urlList[i]
 		parts := strings.FieldsFunc(playStr, func(r rune) bool {
@@ -357,4 +374,22 @@ var stripHTMLTagsRe = regexp.MustCompile(`<[^>]+>`)
 
 func stripHTMLTags(s string) string {
 	return stripHTMLTagsRe.ReplaceAllString(s, "")
+}
+
+// firstMediaURLInSource 从一个源的 play_url 串里提取第一个 URL（跳过集名取奇数位）
+func firstMediaURLInSource(playStr string) string {
+	parts := strings.FieldsFunc(playStr, func(r rune) bool {
+		return r == '$' || r == '#'
+	})
+	var idx int
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if idx%2 == 1 {
+			return strings.TrimSpace(p)
+		}
+		idx++
+	}
+	return ""
 }
