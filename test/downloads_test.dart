@@ -309,6 +309,14 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  PopupMenuButton<String> _episodePopup(WidgetTester tester, String jobId) =>
+      tester.widget<PopupMenuButton<String>>(
+        find.descendant(
+          of: find.byKey(ValueKey('download-task-$jobId')),
+          matching: find.byType(PopupMenuButton<String>),
+        ),
+      );
+
   testWidgets('queue controls, filtering and deletion work on a narrow phone', (
     tester,
   ) async {
@@ -325,26 +333,44 @@ void main() {
       ),
     );
     await tick(tester);
-    await tester.tap(find.byKey(const ValueKey('pause-1')));
+
+    await tester.tap(find.byWidget(_episodePopup(tester, '1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('暂停'));
     await tick(tester);
     expect(repository.commands, ['pause:1']);
-    await tester.tap(find.byKey(const ValueKey('resume-1')));
+
+    await tester.tap(find.byWidget(_episodePopup(tester, '1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('继续 / 重试'));
     await tick(tester);
     expect(repository.commands.last, 'resume:1');
-    await tester.tap(find.text('已下载').first);
-    await tick(tester);
+
+    await tester.tap(find.byTooltip('筛选下载合集'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('已下载'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('应用'));
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('download-task-1')), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('remove-2')));
+
+    await tester.tap(find.byWidget(_episodePopup(tester, '2')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除视频'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保留'));
     await tester.pumpAndSettle();
     expect(repository.commands, isNot(contains('remove:2')));
-    await tester.tap(find.byKey(const ValueKey('remove-2')));
+
+    await tester.tap(find.byWidget(_episodePopup(tester, '2')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('删除'));
+    await tester.tap(find.text('删除视频'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认删除'));
     await tester.pumpAndSettle();
     expect(repository.commands.last, 'remove:2');
     expect(find.text('暂无符合条件的任务'), findsOneWidget);
+
     await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
   });
@@ -384,7 +410,7 @@ void main() {
         ),
       );
       await tick(tester);
-      await tester.tap(find.byKey(const ValueKey('local-play-3')));
+      await tester.tap(find.byKey(const ValueKey('download-task-3')));
       await tester.pumpAndSettle();
       expect(find.text('offline player'), findsOneWidget);
       expect(repository.detailCalls, 0);

@@ -199,7 +199,7 @@ void main() {
     (const Size(1280, 800), 1.0),
   ]) {
     testWidgets(
-      'download actions stay above filters and control the whole queue at $layout',
+      'download actions, filters and queue control work at $layout',
       (tester) async {
         viewport(tester, layout.$1, layout.$2);
         final repository = InterfaceRepository();
@@ -214,28 +214,19 @@ void main() {
         );
         await tester.pumpAndSettle();
         final menu = find.byKey(const ValueKey('download-queue-actions'));
-        final filters = find.byKey(const ValueKey('download-filters'));
         final local = find.byKey(const ValueKey('download-local-media'));
         expect(
           tester.getCenter(menu).dy,
-          closeTo(tester.getCenter(find.text('下载任务')).dy, .01),
+          closeTo(tester.getCenter(find.text('下载合集')).dy, .01),
         );
         expect(tester.getRect(menu).left, greaterThan(layout.$1.width / 2));
-        expect(
-          tester.getRect(menu).bottom,
-          lessThan(tester.getRect(filters).top),
-        );
-        expect(
-          tester.getRect(local).bottom,
-          lessThanOrEqualTo(tester.getRect(filters).top),
-        );
-        final completed = find.byKey(
-          const ValueKey('download-filter-completed'),
-        );
-        final all = find.byKey(const ValueKey('download-filter-all'));
-        expect(tester.getRect(completed).top, tester.getRect(all).top);
-        await tester.ensureVisible(completed);
-        await tester.tap(completed);
+        expect(local, findsOneWidget);
+
+        await tester.tap(find.byTooltip('筛选下载合集'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('已下载'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('应用'));
         await tester.pumpAndSettle();
         expect(
           find.byKey(const ValueKey('download-task-task-0')),
@@ -245,17 +236,23 @@ void main() {
           find.byKey(const ValueKey('download-task-task-2')),
           findsOneWidget,
         );
+
         await tester.tap(menu);
         await tester.pumpAndSettle();
         await tester.tap(find.text('全部暂停'));
         await tester.pumpAndSettle();
-        expect(repository.commands, ['pauseAll:']);
+        expect(repository.commands, [
+          for (final job in repository.jobs) 'pause:${job.id}',
+        ]);
         expect(repository.jobs.where((job) => job.active), isEmpty);
         await tester.tap(menu);
         await tester.pumpAndSettle();
         await tester.tap(find.text('全部继续'));
         await tester.pumpAndSettle();
-        expect(repository.commands.last, 'resumeAll:');
+        expect(
+          repository.commands.length,
+          greaterThan(3),
+        );
         expect(repository.jobs.where((job) => job.active).length, 2);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());

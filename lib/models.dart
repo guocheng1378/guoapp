@@ -48,6 +48,7 @@ class SourceSite {
     SourceSite('sorani', '青空', '番剧 · 剧场 · 特摄 · m3u8'),
     SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
   ];
+  static const dsd = SourceSite('dsd', '帝果', '帝果合成短剧 · VIP 直免');
   static const knownValues = [
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
@@ -55,6 +56,7 @@ class SourceSite {
     SourceSite('huangguo-video', '黄果视频', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
+    dsd,
     ...duanjuValues,
   ];
   static const allValues = [
@@ -64,6 +66,7 @@ class SourceSite {
     SourceSite('huangguo-video', '黄果视频', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
+    dsd,
     ...duanjuValues,
   ];
   static const values = allSourcesEnabled ? knownValues : [hongguo];
@@ -75,6 +78,10 @@ class SourceSite {
         'huangguo-video',
         'huangguoai',
         'cloudfront',
+        'dsd',
+        'dongpiandi',
+        'sorani',
+        'yingshigongchang',
       }.contains(id);
   static SourceSite byId(String id) =>
       allValues.firstWhere((site) => site.id == id, orElse: () => hongguo);

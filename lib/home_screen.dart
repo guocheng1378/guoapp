@@ -892,7 +892,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
                 if (_tab == 0 &&
                     !_showRecommendations &&
-                    constraints.maxWidth >= 400)
+                    constraints.maxWidth >= 390)
                   RefreshAction(
                     key: const ValueKey('catalog-refresh'),
                     loading:
