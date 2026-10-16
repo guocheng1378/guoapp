@@ -282,7 +282,7 @@ void main() {
   testWidgets('DSD VIP episodes open playback without a confirmation dialog', (
     tester,
   ) async {
-    if (!SourceSite.isAvailable(SourceSite.hongguo.id)) return;
+    if (!SourceSite.isAvailable('dsd')) return;
     size(tester, const Size(390, 844));
     final repository = DownloadRepository();
     final store = await makeStore();
