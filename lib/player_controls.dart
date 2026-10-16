@@ -251,8 +251,18 @@ class _PlayerControlsState extends State<PlayerControls> {
                   if (!widget.enabled || widget.interactions.suppressTap) {
                     return;
                   }
-                  widget.onTogglePlayback();
-                  _show();
+                  final origin = widget.interactions.lastTapOrigin;
+                  final width = widget.interactions.viewWidth;
+                  if (origin != null && width > 0 && widget.onSeek != null) {
+                    final target = origin.dx < width * 0.5
+                        ? Duration(seconds: widget.player.state.position.inSeconds - 10)
+                        : Duration(seconds: widget.player.state.position.inSeconds + 10);
+                    unawaited(widget.onSeek!(target));
+                    _show();
+                  } else {
+                    widget.onTogglePlayback();
+                    _show();
+                  }
                 },
               ),
             ),

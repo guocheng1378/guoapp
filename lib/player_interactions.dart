@@ -60,6 +60,7 @@ class PlayerInteractions extends ChangeNotifier {
   int? _pointer;
   Offset? _origin;
   Offset? _lastPosition;
+  Offset? _lastTapOrigin;
   Duration _started = Duration.zero;
   double _swipeThreshold = 70;
   bool _swipeEnabled = false;
@@ -85,6 +86,8 @@ class PlayerInteractions extends ChangeNotifier {
   GestureHudState get hudState => _hudState;
   double get brightness => _brightness;
   bool get isBrightnessActive => _hudState.type == SwipeAction.brightness;
+  Offset? get lastTapOrigin => _lastTapOrigin;
+  double get viewWidth => _viewWidth;
 
   void setBrightnessDirect(double value) {
     if (_disposed) return;
@@ -189,7 +192,7 @@ class PlayerInteractions extends ChangeNotifier {
     }
     if (!available() || event.buttons != kPrimaryButton) return;
     _pointer = event.pointer;
-    _origin = _lastPosition = event.localPosition;
+    _origin = _lastPosition = _lastTapOrigin = event.localPosition;
     _started = event.timeStamp;
     _swipeEnabled = swipeEnabled && event.kind == PointerDeviceKind.touch;
     _swipeThreshold = math.max(30, math.min(80, height * .08));

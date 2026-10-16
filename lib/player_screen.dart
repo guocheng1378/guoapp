@@ -181,8 +181,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         widget.playerFactory?.call() ??
         Player(
           configuration: const PlayerConfiguration(
-            bufferSize: 32 * 1024 * 1024,
-            logLevel: MPVLogLevel.v,
+            bufferSize: 16 * 1024 * 1024,
+            logLevel: MPVLogLevel.error,
           ),
         );
     _video = widget.videoBuilder == null
