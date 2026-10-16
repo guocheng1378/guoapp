@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	huangdouBaseURL    = "https://tideember.cc"
+	huangdouBaseURL    = "https://seiopcc.icu"
 	huangdouVersion    = "2.0.0"
 	huangdouDeviceType = "web"
 )
@@ -36,27 +36,35 @@ var huangdouPlatformKeys = []string{
 	"c10ca2986a31fb46d4481ce8631c2725",
 }
 
-// huangdouAPIMirrors — 黄豆短剧站源镜像池。
-// 2026-10 线路发现：前端加载页（hddj30.com/hddj030 系列）通过 AES-GCM 解密 jsdelivr 上的 d.txt，
-// 动态发现后端 API 域名池。黄官方把所有 mirror 换成了 nginx+SPA 架构：
-//   - 根路径 / 和 GET /drama/* → Flutter Web 前端壳
-//   - POST /api/drama/play → 后端加密 API（唯一活着的端点）
-//   - POST /api/drama/catalog → 已删除(404)，列表改用 Flutter Web 的 /drama/navList (同域 nginx 代理)
-//   - GET /api/drama/hls?...free → 已删除(404)，付费集解锁只能靠加密 API
-// 解密自 jsdelivr.net/gh/npskle/assets@main/d.txt (AES-GCM, KEY=7127fe3cb8ef5bea708306ee7ae109f3c121aad09590f27e3bcdc07e1b255b54)
+// huangdouAPIMirrors — 黄豆短剧站源镜像池（2026-10 双线路全活）。
+// 线路 A：hdou api.js（CF Pages 版）里的 10 个 host，由 Cloudflare 代理后端。
+// 线路 B：d.txt 解密出的 7 个新 mirror（seiopcc/halobloom/mintgate 等）。
+// 所有 17 个 host 均存活：POST /api/drama/{navList,list,rank,detail,play} 加密 API + GET /api/drama/hls/{id}/{seq}/play.m3u8?line=free|vip 直出。
+// 并行探测，第一个成功胜出。
 var huangdouAPIMirrors = []string{
+	// 线路 A：hdou api.js（CF Pages）
+	"ahgehbki.cc",
+	"jpgrmkkn.cc",
+	"ufufukpq.cc",
+	"nhuhkizw.cc",
+	"hddj01.com",
+	"hddj02.com",
+	"hddj03.com",
+	"hddj08.com",
+	"hddj09.com",
+	"hddj22.com",
+	// 线路 B：d.txt 解密新 mirror
 	"seiopcc.icu",
 	"halobloom.cc",
 	"mintgate.top",
 	"vtqzwlyffd.cc",
 	"bikhonslkt.cc",
 	"mclkhiskya.cc",
-	// 备用：momodrift.top 直接调（nginx 可能代理到最快线路）
 	"momodrift.top",
 }
 
-// huangdouQuickHosts — 并行快速探测池：d.txt 解密出的当前活跃 mirror。
-// 并行 7 个 host，不共享 context，各自独立 10s 超时，第一个成功胜出。
+// huangdouQuickHosts — 并行快速探测池（17 个 host 双线路）。
+// 不共享 context，各自独立超时，第一个成功胜出。
 func huangdouQuickHosts() []string {
 	return huangdouAPIMirrors
 }
@@ -159,11 +167,12 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 	return result, nil
 }
 
-// huangdouFreeHLSPlayback — 并行试 lzlukvca.cc + hddj01.com 两个 surge 验证最稳的 free hls 线路，
-// 4s 超时返回第一个成功的。失败直接给加密 API，不再串行遍历 5 个 mirror。
+// huangdouFreeHLSPlayback — 并行试 huangdouAPIMirrors 里所有 host 的 free hls 线路，
+// 直出 GET /api/drama/hls/{id}/{seq}/play.m3u8?line=free（所有 17 个 host 上均存活）。
+// 先于加密 API 尝试，4s 内返回第一个成功的 m3u8。
 func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID string, seq int) (providerMedia, error) {
 	sourceID = strings.TrimPrefix(strings.TrimSpace(sourceID), "rp_")
-	hosts := huangdouAPIMirrors // free hls 端点已从所有 mirror 下线(2026-10)，保留兜底
+	hosts := huangdouAPIMirrors // 全部 17 个 host 上 free hls 均存活
 	resultCh := make(chan providerMedia, len(hosts))
 	for _, h := range hosts {
 		go func(h string) {
@@ -342,7 +351,8 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 	if _, err := rand.Read(iv); err != nil {
 		return err
 	}
-	plain, err := json.Marshal(map[string]any{"token": "", "deviceId": c.deviceID, "data": data})
+	ridNoDash := strings.ReplaceAll(rid, "-", "")
+	plain, err := json.Marshal(map[string]any{"token": "", "deviceId": ridNoDash, "data": data})
 	if err != nil {
 		return err
 	}
@@ -374,7 +384,8 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 	req.Header.Set("sessionId", c.sessionID)
 	resp, err := c.d.doPreparedCatalogRequest(req, 10*time.Second, func(prepared *http.Request) {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-		signRaw := "Dart|" + c.sessionID + "|" + rid + "|" + timestamp + "|" + path
+		ridNoDash := strings.ReplaceAll(rid, "-", "")
+		signRaw := "Dart|" + ridNoDash + "|" + rid + "|" + timestamp + "|" + path
 		signSum := sha256.Sum256([]byte(signRaw))
 		prepared.Header.Set("time", timestamp)
 		prepared.Header.Set("sign", hex.EncodeToString(signSum[:])+"-"+timestamp)
