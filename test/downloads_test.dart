@@ -282,13 +282,13 @@ void main() {
   testWidgets('DSD VIP episodes open playback without a confirmation dialog', (
     tester,
   ) async {
-    if (!SourceSite.isAvailable(SourceSite.dsd.id)) return;
+    if (!SourceSite.isAvailable(SourceSite.hongguo.id)) return;
     size(tester, const Size(390, 844));
     final repository = DownloadRepository();
     final store = await makeStore();
     final drama = const Drama(
-      id: 'dsd:100',
-      source: 'dsd',
+      id: 'hongguo:100',
+      source: 'hongguo',
       title: '帝果合成剧',
       episodes: 1,
     );

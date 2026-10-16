@@ -62,7 +62,6 @@ class _DramaPlayerFullscreenState extends State<DramaPlayerFullscreen>
   Timer? _controlsHideTimer;
   StreamSubscription<Duration>? _posSub;
   StreamSubscription<bool>? _playingSub;
-  Object _sessionKey = Object();
   bool _closed = false;
 
   // 水平拖动状态
@@ -164,7 +163,6 @@ class _DramaPlayerFullscreenState extends State<DramaPlayerFullscreen>
           : await _loader.load(widget.detail.drama, ep);
       if (_closed || ticket != _generation || plan == null) return;
 
-      _sessionKey = Object();
       await _player.open(Media(plan.url), play: position <= 0);
       await _player.setRate(_speed);
       if (position > 0) {
