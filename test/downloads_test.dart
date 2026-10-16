@@ -333,6 +333,8 @@ void main() {
       ),
     );
     await tick(tester);
+    await tester.tap(find.text('测试短剧'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byWidget(_episodePopup(tester, '1')));
     await tester.pumpAndSettle();
@@ -351,6 +353,8 @@ void main() {
     await tester.tap(find.text('已下载'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('应用'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试短剧'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('download-task-1')), findsNothing);
 
@@ -410,6 +414,8 @@ void main() {
         ),
       );
       await tick(tester);
+      await tester.tap(find.text('测试短剧'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('download-task-3')));
       await tester.pumpAndSettle();
       expect(find.text('offline player'), findsOneWidget);
@@ -518,6 +524,9 @@ void main() {
       await tester.pumpAndSettle();
       focusRemote(tester, find.byKey(const ValueKey('tv-nav-3')));
       await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      focusRemote(tester, find.text('测试短剧').first);
       await tester.sendKeyEvent(LogicalKeyboardKey.select);
       await tester.pumpAndSettle();
       focusRemote(tester, find.byKey(const ValueKey('download-task-1')));

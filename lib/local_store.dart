@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'app_build.dart';
 import 'local_profiles.dart';
 import 'local_snapshot.dart';
 import 'models.dart';
@@ -145,7 +144,7 @@ class LocalStore extends ChangeNotifier {
   ];
 
   bool sourceEnabled(String source) =>
-      _sourceSwitches[source] ?? (allSourcesEnabled || !SourceSite.isRestricted(source));
+      _sourceSwitches[source] ?? !SourceSite.isRestricted(source);
 
   Future<void> setSourceEnabled(String source, bool enabled) {
     if (!SourceSite.isAvailable(source)) {

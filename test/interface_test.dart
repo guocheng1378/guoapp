@@ -68,6 +68,7 @@ void main() {
         expect(find.text('短标题'), findsOneWidget);
         await tester.tap(refresh);
         expect(repository.requests.length, requests + 1);
+        repository.pendingCatalog = null;
         if (fails) {
           pending.completeError(AppFailure('合成更新失败'));
         } else {
@@ -226,6 +227,8 @@ void main() {
         await tester.tap(find.text('已下载'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('应用'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('短标题'));
         await tester.pumpAndSettle();
         expect(
           find.byKey(const ValueKey('download-task-task-0')),
