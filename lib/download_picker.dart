@@ -106,9 +106,10 @@ class _DownloadPickerState extends State<DownloadPicker> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(
                   widget.embedded ? 10 : 18,
@@ -250,6 +251,7 @@ class _DownloadPickerState extends State<DownloadPicker> {
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),

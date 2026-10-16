@@ -100,7 +100,6 @@ class MergePlan {
         .toList();
     final canonicalAac =
         audio?.audio['codec_name'] == 'aac' && ac.any((change) => change);
-    if (canonicalAac) ac = List.filled(probes.length, true);
     if (vc.any((v) => v) && !{'h264', 'hevc'}.contains(video.videoCodec)) {
       throw AppFailure('多数分集为 ${video.videoCodec}，当前不能将其他格式转换为此编码；原文件已保留。');
     }

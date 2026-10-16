@@ -16,7 +16,7 @@ class PlayerControls extends StatefulWidget {
     required this.enabled,
     required this.fullscreen,
     required this.showOnPlaybackReady,
-    required this.onFullscreen,
+    this.onFullscreen,
     required this.onBack,
     required this.onPrevious,
     required this.onNext,
@@ -46,7 +46,7 @@ class PlayerControls extends StatefulWidget {
   final bool enabled;
   final bool fullscreen;
   final bool showOnPlaybackReady;
-  final VoidCallback onFullscreen;
+  final VoidCallback? onFullscreen;
   final VoidCallback onBack;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
@@ -363,7 +363,7 @@ class _PlayerControlsState extends State<PlayerControls> {
               )
             else
               const Spacer(),
-            if (compact)
+            if (compact && widget.onFullscreen != null)
               _overlayIconButton(
                 tooltip: '旋转与全屏',
                 onPressed: widget.onFullscreen,
@@ -811,14 +811,15 @@ class _PlayerControlsState extends State<PlayerControls> {
               ? () => _panel(widget.onPictureInPicture!)
               : null,
         ),
-      _toolIcon(
-        key: const ValueKey('player-fullscreen'),
-        tooltip: fullscreen ? '退出全屏' : '旋转与全屏',
-        icon: fullscreen
-            ? Icons.fullscreen_exit_rounded
-            : Icons.fullscreen_rounded,
-        onPressed: widget.onFullscreen,
-      ),
+      if (widget.onFullscreen != null)
+        _toolIcon(
+          key: const ValueKey('player-fullscreen'),
+          tooltip: fullscreen ? '退出全屏' : '旋转与全屏',
+          icon: fullscreen
+              ? Icons.fullscreen_exit_rounded
+              : Icons.fullscreen_rounded,
+          onPressed: widget.onFullscreen,
+        ),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),

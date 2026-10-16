@@ -303,7 +303,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     if (!switchedOn) {
       final closedError = _errors[source.id] ?? '';
       return Card(
-        key: PageStorageKey('source-${source.id}'),
+        key: ValueKey('source-${source.id}'),
         margin: const EdgeInsets.only(bottom: 16),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -327,7 +327,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       );
     }
     return Card(
-      key: PageStorageKey('source-${source.id}'),
+      key: ValueKey('source-${source.id}'),
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
         padding: const EdgeInsets.all(16),
