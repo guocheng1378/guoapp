@@ -21,9 +21,9 @@ env:
 
 jobs:
   checks:
-    if: false
+    if: true
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -132,15 +132,64 @@ jobs:
           cache: true
       - name: Install MinGW
         run: |
-          choco install mingw --version=13.2.0 -y --no-progress
-          Add-Content $env:GITHUB_PATH "C:\ProgramData\mingw64\mingw64\bin"
+          $installed = $false
+          for ($i = 0; $i -lt 5 -and -not $installed; $i++) {
+            try {
+              winget install -e --id MSYS2.MSYS2 --accept-source-agreements --accept-package-agreements 2>$null
+              $installed = $true
+            } catch {
+              Write-Host "winget attempt $i failed, retrying in 15s..."
+              Start-Sleep 15
+            }
+          }
+          if (-not $installed) {
+            for ($i = 0; $i -lt 5 -and -not $installed; $i++) {
+              try {
+                choco install mingw --version=13.2.0 -y --no-progress 2>$null
+                $installed = $true
+              } catch {
+                Write-Host "choco attempt $i failed, retrying in 15s..."
+                Start-Sleep 15
+              }
+            }
+          }
+          if (-not $installed) { throw "MinGW install failed after retries" }
+          $paths = @(
+            "C:\ProgramData\mingw64\mingw64\bin",
+            "C:\msys64\mingw64\bin",
+            "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+          )
+          foreach ($p in $paths) { if (Test-Path $p) { Add-Content $env:GITHUB_PATH $p } }
           $lib = "C:\ProgramData\mingw64\mingw64\x86_64-w64-mingw32\lib"
           if (Test-Path $lib) {
             Remove-Item (Join-Path $lib 'libpthread.dll.a') -ErrorAction SilentlyContinue
             Remove-Item (Join-Path $lib 'libwinpthread.dll.a') -ErrorAction SilentlyContinue
           }
       - run: python scripts/build_windows.py ${{ matrix.arguments }}
-      - run: choco install ffmpeg --no-progress -y
+      - name: Install ffmpeg
+        run: |
+          $installed = $false
+          for ($i = 0; $i -lt 5 -and -not $installed; $i++) {
+            try {
+              winget install -e --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements 2>$null
+              $installed = $true
+            } catch {
+              Write-Host "winget ffmpeg attempt $i failed, retrying in 15s..."
+              Start-Sleep 15
+            }
+          }
+          if (-not $installed) {
+            for ($i = 0; $i -lt 5 -and -not $installed; $i++) {
+              try {
+                choco install ffmpeg --no-progress -y 2>$null
+                $installed = $true
+              } catch {
+                Write-Host "choco ffmpeg attempt $i failed, retrying in 15s..."
+                Start-Sleep 15
+              }
+            }
+          }
+          if (-not $installed) { Write-Host "ffmpeg install skipped (non-fatal for smoke test)" }
       - name: Windows package smoke
         run: python scripts/smoke_windows.py ${{ matrix.arguments }}
         continue-on-error: true

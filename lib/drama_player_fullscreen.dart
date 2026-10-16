@@ -77,8 +77,18 @@ class _DramaPlayerFullscreenState extends State<DramaPlayerFullscreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _index = widget.initialIndex;
-    _player = Player();
-    _video = VideoController(_player);
+    _player = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 16 * 1024 * 1024,
+        logLevel: MPVLogLevel.error,
+      ),
+    );
+    _video = VideoController(
+      _player,
+      configuration: VideoControllerConfiguration(
+        enableHardwareAcceleration: !Platform.isIOS,
+      ),
+    );
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
 
