@@ -18,11 +18,19 @@ type nativeCategory struct {
 }
 
 var nativeAICategories = []nativeCategory{
-	{ID: "rebuo-duanju", Name: "热播短剧"},
-	{ID: "jingxuan-duanju", Name: "精选短剧"},
-	{ID: "bikan-duanju", Name: "必看短剧"},
-	{ID: "quanbu-duanju", Name: "全部短剧"},
-	{ID: "renqi-duanju", Name: "人气短剧"},
+	{ID: "ai-duanju", Name: "AI短剧"},
+	{ID: "ai-manju", Name: "AI漫剧"},
+	{ID: "ai-huanlian", Name: "AI换脸"},
+	{ID: "ai-mogai", Name: "AI魔改"},
+	{ID: "hot-aiduanju", Name: "热门短剧"},
+}
+
+var huangguoAICategoryLegacyMap = map[string]string{
+	"rebuo-duanju":    "ai-duanju",
+	"jingxuan-duanju": "ai-manju",
+	"bikan-duanju":    "ai-huanlian",
+	"quanbu-duanju":   "ai-mogai",
+	"renqi-duanju":    "hot-aiduanju",
 }
 
 func nativeCatalogKey(source, category string) string {
@@ -31,6 +39,21 @@ func nativeCatalogKey(source, category string) string {
 		return source + "|" + category
 	}
 	return source
+}
+
+func huangguoAICategoryPath(id string) string {
+	id = strings.TrimSpace(id)
+	if mapped, legacy := huangguoAICategoryLegacyMap[id]; legacy {
+		id = mapped
+	}
+	switch id {
+	case "ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai":
+		return id
+	case "hot-aiduanju":
+		return "topics/hot-aiduanju"
+	default:
+		return id
+	}
 }
 
 func validNativeCategory(source, category string) bool {
@@ -180,8 +203,13 @@ func parseHuangguoVideoCategories(body string) []nativeCategory {
 func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, category string) ([]Drama, bool, error) {
 	categories := nativeAICategories
 	if category != "" {
+		mapped, legacy := huangguoAICategoryLegacyMap[category]
+		target := category
+		if legacy {
+			target = mapped
+		}
 		for _, entry := range categories {
-			if entry.ID == category {
+			if entry.ID == target || entry.ID == category {
 				categories = []nativeCategory{entry}
 				break
 			}
@@ -206,11 +234,12 @@ func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, c
 				return
 			}
 			baseURL := strings.TrimRight(d.providerBaseURL(sourceHuangguoAI), "/")
+			catPath := huangguoAICategoryPath(entry.ID)
 			var address string
 			if page <= 1 {
-				address = baseURL + "/genre/" + entry.ID + "/"
+				address = baseURL + "/" + catPath + "/"
 			} else {
-				address = fmt.Sprintf("%s/genre/%s/page/%d/", baseURL, entry.ID, page)
+				address = fmt.Sprintf("%s/%s/page/%d/", baseURL, catPath, page)
 			}
 			body, err := d.fetchProviderText(ctx, address, d.providerBaseURL(sourceHuangguoAI)+"/")
 			if err == nil {

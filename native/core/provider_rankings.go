@@ -175,12 +175,7 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 		if page != 1 {
 			return rankingPage{}, errors.New("该榜单只有一页")
 		}
-		var pageURL string
-		if strings.HasSuffix(board.path, "-duanju") {
-			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/genre/" + board.path + "/"
-		} else {
-			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/ranks/" + board.path + "/"
-		}
+		pageURL := d.providerBaseURL(sourceHuangguoAI) + "/" + board.path + "/"
 		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(sourceHuangguoAI)+"/")
 		if err != nil {
 			return rankingPage{}, err

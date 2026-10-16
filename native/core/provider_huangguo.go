@@ -29,14 +29,20 @@ const (
 	sourceDSD           = "dsd"
 	sourceCloudFront    = "cloudfront"
 
-	providerMaxBodyBytes = 20 * 1024 * 1024
-	providerTimeout      = 12 * time.Second
+	providerMaxBodyBytes     = 20 * 1024 * 1024
+	providerTimeout          = 6 * time.Second
+	providerFastMirrorTimout = 3 * time.Second
+	providerMaxRetries       = 2
 )
 
 var (
-	huangguoAIBaseURL     = "https://huangguoai.com"
-	huangguoAIBaseMirrors = []string{"https://huangguoai.com"}
-	huangguoVideoBaseURL  = "https://huangguo.video"
+	huangguoAIBaseURL     = "https://nzjf.bg40t53p.cc"
+	huangguoAIBaseMirrors = []string{
+		"https://nzjf.bg40t53p.cc",
+		"https://zl1vbo.bg40t53p.cc",
+		"https://gknci.bg40t53p.cc",
+	}
+	huangguoVideoBaseURL = "https://nzjf.bg40t53p.cc"
 
 	huangguoAISlugs     = []string{"rebuo-duanju", "jingxuan-duanju", "bikan-duanju", "quanbu-duanju", "renqi-duanju"}
 	huangguoAITypeNames = map[string]string{"rebuo-duanju": "热播短剧", "jingxuan-duanju": "精选短剧", "bikan-duanju": "必看短剧", "quanbu-duanju": "全部短剧", "renqi-duanju": "人气短剧"}
@@ -98,7 +104,7 @@ func isHuangguoProviderSource(source string) bool {
 func canonicalProviderSource(source string) string {
 	key := strings.ToLower(strings.TrimSpace(source))
 	switch key {
-	case "huangguo", "huangguoai", "huangguoai.com":
+	case "huangguo", "huangguoai", "huangguoai.com", "nzjf.bg40t53p.cc", "zl1vbo.bg40t53p.cc", "gknci.bg40t53p.cc":
 		return sourceHuangguoAI
 	case "huangguo-video", "huangguo.video":
 		return sourceHuangguoVideo
@@ -343,7 +349,7 @@ func (d *Downloader) fetchHuangguoVideoDetail(ctx context.Context, sourceID stri
 func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer string) (string, error) {
 	retries := d.cfg.Retries
 	if retries <= 0 {
-		retries = 3
+		retries = providerMaxRetries
 	}
 	if referer == "" {
 		referer = rawURL
@@ -370,7 +376,7 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			}
 			timeout := providerTimeout
 			if len(candidates) > 1 {
-				timeout = 5 * time.Second
+				timeout = providerFastMirrorTimout
 			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
 			if err != nil {
@@ -440,10 +446,15 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 
 func providerURLCandidates(rawURL string) []string {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() != "huangguoai.com" {
+	if err != nil {
 		return []string{rawURL}
 	}
-	out := make([]string, 0, len(huangguoAIBaseMirrors)+8)
+	host := strings.ToLower(u.Hostname())
+	isHuangguoAIHost := host == "huangguoai.com" || strings.HasSuffix(host, ".bg40t53p.cc") || host == "nzjf.bg40t53p.cc" || host == "zl1vbo.bg40t53p.cc" || host == "gknci.bg40t53p.cc"
+	if !isHuangguoAIHost {
+		return []string{rawURL}
+	}
+	out := make([]string, 0, len(huangguoAIBaseMirrors)+4)
 	seen := map[string]bool{}
 	add := func(candidate string) {
 		if candidate == "" || seen[candidate] {
@@ -452,12 +463,7 @@ func providerURLCandidates(rawURL string) []string {
 		seen[candidate] = true
 		out = append(out, candidate)
 	}
-	for i, mirror := range huangguoAIBaseMirrors {
-		if i == 1 {
-			for _, generated := range generatedHuangguoAIMirrors(rawURL, 8) {
-				add(rehostProviderURL(u, generated))
-			}
-		}
+	for _, mirror := range huangguoAIBaseMirrors {
 		add(rehostProviderURL(u, mirror))
 	}
 	if len(out) == 0 {
