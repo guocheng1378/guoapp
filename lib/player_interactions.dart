@@ -9,12 +9,17 @@ import 'package:media_kit/media_kit.dart';
 import 'app_layout.dart';
 import 'widgets.dart';
 
-enum SwipeAction { none, brightness, episode }
+enum SwipeAction { none, brightness, volume, seek, episode }
 
 class GestureHudState {
-  const GestureHudState({this.type = SwipeAction.none, this.value = 0.0});
+  const GestureHudState({
+    this.type = SwipeAction.none,
+    this.value = 0.0,
+    this.position,
+  });
   final SwipeAction type;
-  final double value; // 0.0 ~ 1.0
+  final double value;              // 0.0 ~ 1.0，亮度/音量比例
+  final Duration? position;       // seek 目标位置
 }
 
 class PlayerInteractions extends ChangeNotifier {
@@ -71,7 +76,10 @@ class PlayerInteractions extends ChangeNotifier {
   GestureHudState _hudState = const GestureHudState();
   double _brightness = 0.5;
   double _initialBrightness = 0.5;
+  double _initialVolume = 100;
+  double _originPositionMs = 0;
   double _viewHeight = 0.0;
+  double _viewWidth = 0.0;
   Timer? _hudTimer;
 
   GestureHudState get hudState => _hudState;
@@ -186,24 +194,16 @@ class PlayerInteractions extends ChangeNotifier {
     _swipeEnabled = swipeEnabled && event.kind == PointerDeviceKind.touch;
     _swipeThreshold = math.max(30, math.min(80, height * .08));
     _viewHeight = height;
+    _viewWidth = width;
     _moved = _held = false;
     _swipeAction = SwipeAction.none;
 
     if (_swipeEnabled && width > 0) {
-      // 判定触摸落点：
-      // 左侧 35% 区域 -> 呼出并拉动红果风格亮度条
-      // 其余区域 -> 刷剧切集，绝对不调节音量
-      if (event.localPosition.dx < width * 0.35) {
-        _swipeAction = SwipeAction.brightness;
-        AppDevice.getBrightness().then((val) {
-          if (_pointer == event.pointer) {
-            _initialBrightness = _brightness = val;
-            _showHud(SwipeAction.brightness, _brightness);
-          }
-        });
-      } else {
-        _swipeAction = SwipeAction.episode;
-      }
+      // 记录起始值，后续在 pointerMove 里根据方向选择分支
+      _initialBrightness = _brightness;
+      _initialVolume = player.state.volume;
+      final pos = player.state.position.inMilliseconds;
+      _originPositionMs = pos.isFinite ? pos : 0;
     }
     _beginHold();
   }
@@ -218,13 +218,57 @@ class PlayerInteractions extends ChangeNotifier {
     }
     if (!_swipeEnabled || !_moved || _viewHeight <= 0) return;
 
-    final dy = _origin!.dy - event.localPosition.dy; // 向上滑动为增加，向下滑动为减少
-    final deltaRatio = dy / (_viewHeight * 0.6);
+    // 首次进入时根据位移方向锁定分支
+    if (_swipeAction == SwipeAction.none) {
+      final absDx = diff.dx.abs();
+      final absDy = diff.dy.abs();
+      // 水平位移显著大于垂直 → seek
+      if (absDx > absDy * 1.2 && absDx > 15) {
+        _swipeAction = SwipeAction.seek;
+      } else if (absDy > absDx * 1.2 && absDy > 15) {
+        // 垂直位移：按 x 位置分亮度(左35%) / 音量(右35%) / 切集(中间)
+        final x = event.localPosition.dx;
+        if (x < _viewWidth * 0.35) {
+          _swipeAction = SwipeAction.brightness;
+          AppDevice.getBrightness().then((val) {
+            if (_pointer == event.pointer) {
+              _initialBrightness = _brightness = val;
+            }
+          });
+        } else if (x > _viewWidth * 0.65) {
+          _swipeAction = SwipeAction.volume;
+        } else {
+          _swipeAction = SwipeAction.episode;
+        }
+      }
+    }
+    if (_swipeAction == SwipeAction.none || _swipeAction == SwipeAction.episode) return;
 
     if (_swipeAction == SwipeAction.brightness) {
+      final dy = _origin!.dy - event.localPosition.dy; // 向上滑动 = 变亮
+      final deltaRatio = dy / (_viewHeight * 0.6);
       _brightness = (_initialBrightness + deltaRatio).clamp(0.01, 1.0);
       AppDevice.setBrightness(_brightness);
       _showHud(SwipeAction.brightness, _brightness);
+    } else if (_swipeAction == SwipeAction.volume) {
+      final dy = _origin!.dy - event.localPosition.dy; // 向上滑动 = 加音量
+      final deltaRatio = dy / (_viewHeight * 0.6);
+      final newVol = (_initialVolume + deltaRatio * 100).clamp(0.0, 100.0);
+      unawaited(player.setVolume(newVol));
+      if (newVol > 0) _unmutedVolume = newVol;
+      _showHud(SwipeAction.volume, newVol / 100.0);
+    } else if (_swipeAction == SwipeAction.seek) {
+      // 水平滑动：向右 = 快进，向左 = 后退
+      final dx = event.localPosition.dx - _origin!.dx;
+      // 每滑动屏幕宽度的 1/3 = 5 秒
+      final secondsDelta = (dx / (_viewWidth * 0.33)) * 5.0;
+      final durationMs = player.state.duration.inMilliseconds;
+      var target = (_originPositionMs + secondsDelta * 1000).round();
+      if (durationMs > 0) target = target.clamp(0, durationMs);
+      target = target.clamp(0, const Duration(hours: 10).inMilliseconds);
+      final targetDur = Duration(milliseconds: target);
+      final progress = durationMs > 0 ? target / durationMs : 0.0;
+      _showHud(SwipeAction.seek, progress, position: targetDur);
     }
   }
 
@@ -248,7 +292,19 @@ class PlayerInteractions extends ChangeNotifier {
         isVertical &&
         event.timeStamp - _started < const Duration(milliseconds: 1500)) {
       if (available()) hint(onEpisode(delta.dy < 0 ? 1 : -1));
-    } else if (_swipeAction == SwipeAction.brightness) {
+    } else if (_swipeAction == SwipeAction.seek) {
+      // 提交最终的 seek 位置
+      final dx = delta.dx;
+      final secondsDelta = (dx / (_viewWidth * 0.33)) * 5.0;
+      final durationMs = player.state.duration.inMilliseconds;
+      var target = (_originPositionMs + secondsDelta * 1000).round();
+      if (durationMs > 0) target = target.clamp(0, durationMs);
+      if ((target - _originPositionMs).abs() > 500) {
+        unawaited((onSeek ?? player.seek)(Duration(milliseconds: target)));
+      }
+      _scheduleDismissHud();
+    } else if (_swipeAction == SwipeAction.brightness ||
+               _swipeAction == SwipeAction.volume) {
       _scheduleDismissHud();
     }
 
@@ -267,10 +323,10 @@ class PlayerInteractions extends ChangeNotifier {
     if (_pointers.isEmpty) _cancelUntilRelease = false;
   }
 
-  void _showHud(SwipeAction action, double value) {
+  void _showHud(SwipeAction action, double value, {Duration? position}) {
     if (_disposed) return;
     _hudTimer?.cancel();
-    _hudState = GestureHudState(type: action, value: value);
+    _hudState = GestureHudState(type: action, value: value, position: position);
     notifyListeners();
   }
 

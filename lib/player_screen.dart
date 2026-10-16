@@ -221,6 +221,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         return '第 ${widget.detail.episodes[next].number} 集';
       },
     );
+    _interactions.addListener(() => mounted && setState(() {}));
     _playerFocus.addListener(() {
       if (!_playerFocus.hasPrimaryFocus && !_closed) _interactions.cancel();
     });
@@ -1793,11 +1794,102 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
+              if (_interactions.hudState.type != SwipeAction.none &&
+                  !hideOverlayForPictureInPicture)
+                _buildGestureHud(),
             ],
           );
         },
       ),
     );
+  }
+
+  Widget _buildGestureHud() {
+    final hud = _interactions.hudState;
+    switch (hud.type) {
+      case SwipeAction.brightness:
+      case SwipeAction.volume:
+        final valuePct = (hud.value * 100).round().clamp(0, 100);
+        final icon = hud.type == SwipeAction.brightness
+            ? Icons.light_mode_rounded
+            : valuePct == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded;
+        return Center(
+          child: Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .55),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 80,
+                  height: 80,
+                  child: CircularProgressIndicator(
+                    value: hud.value.clamp(0.0, 1.0),
+                    strokeWidth: 4,
+                    backgroundColor: Colors.white.withValues(alpha: .2),
+                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: Colors.white, size: 22),
+                    Text('$valuePct%',
+                        style: const TextStyle(color: Colors.white, fontSize: 13)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      case SwipeAction.seek:
+        final pos = hud.position ?? Duration.zero;
+        final total = _player.state.duration;
+        final pct = hud.value.clamp(0.0, 1.0);
+        return Positioned(
+          left: 32,
+          right: 32,
+          bottom: 96,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Text(formatPosition(pos.inMilliseconds / 1000),
+                        style: const TextStyle(color: Colors.white, fontSize: 14)),
+                    const Spacer(),
+                    Text(
+                      total > Duration.zero
+                          ? '/ ${formatPosition(total.inMilliseconds / 1000)}'
+                          : '',
+                      style: const TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: pct,
+                    minHeight: 6,
+                    backgroundColor: Colors.white.withValues(alpha: .2),
+                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      case SwipeAction.none:
+      case SwipeAction.episode:
+        return const SizedBox.shrink();
+    }
   }
 
   Widget _mobilePlaybackPanel() {
