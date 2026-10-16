@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -197,15 +198,43 @@ func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID strin
 	return providerMedia{}, errors.New("free hls 线路不可用")
 }
 
-// call 并行快速探测前 7 个 mirror（各自独立 15s 超时），第一个成功的胜出。
-// 不使用共享 context.WithTimeout，避免一个慢请求 cancel 掉其他并行请求。
+// preferredHost 返回最近一次胜出的黄豆镜像节点（含协议前缀），没有则返回空串。
+func (c *huangdouAPIClient) preferredHost() string {
+	c.d.providerMu.Lock()
+	defer c.d.providerMu.Unlock()
+	return c.d.providerHosts[sourceHuangdou]
+}
+
+// call 先复用最近胜出的镜像节点（串行单 host），该节点失败时才并发探测整个镜像池。
+// 单 host 复用把每次调用从 17 次请求降到 1 次，避免背景站源任务被限流器串行化后累积超时。
+// 单个 host 被限流（403/429/退避）只跳过该节点，不影响其他节点；
+// 只有全部节点都受限时才返回池级错误，并带上最短的重试时间。
 // 只有用户手动配置 HuangdouURL 时才走串行单 host。
 func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[string]any, out *any) error {
 	if c.d.cfg.HuangdouURL != "" {
 		return c.callOnceAllKeys(ctx, path, data, out)
 	}
+	if preferred := c.preferredHost(); preferred != "" {
+		cc := *c
+		cc.host = preferred
+		var decoded any
+		err := cc.callOnceAllKeys(ctx, path, data, &decoded)
+		if err == nil {
+			*out = decoded
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+	}
+	return c.callPool(ctx, path, data, out)
+}
+
+// callPool 并发探测全部 mirror host（各自独立超时），第一个成功的胜出并记为首选节点。
+func (c *huangdouAPIClient) callPool(ctx context.Context, path string, data map[string]any, out *any) error {
 	quick := huangdouQuickHosts()
 	resultCh := make(chan error, len(quick))
+	var winner sync.Once
 	for _, host := range quick {
 		go func(h string) {
 			cc := *c
@@ -213,45 +242,92 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 			var dec any
 			err := cc.callOnceAllKeys(ctx, path, data, &dec)
 			if err == nil {
-				// 只有第一个成功的把结果写给 out，其他的仍返回 nil 但不覆盖
-				select {
-				case resultCh <- nil:
+				winner.Do(func() {
 					*out = dec
 					c.d.providerMu.Lock()
 					c.d.providerHosts[sourceHuangdou] = cc.host
 					c.d.providerMu.Unlock()
-				default:
-				}
-			} else {
-				select {
-				case resultCh <- err:
-				default:
-				}
+				})
 			}
+			resultCh <- err
 		}(host)
 	}
-	// select 提前返回：第一个 nil 胜出；全部失败或 20s 兜底超时则返回最后错误
-	var lastErr error
-	failCount := 0
-	for failCount < len(quick) {
+	var (
+		lastErr  error
+		failures int
+		blocked  int
+		retryAt  time.Time
+	)
+	for failures < len(quick) {
 		select {
 		case err := <-resultCh:
 			if err == nil {
 				return nil
 			}
 			lastErr = err
-			failCount++
+			failures++
+			if until, limited := huangdouRateLimitedUntil(err); limited {
+				blocked++
+				if !until.IsZero() && (retryAt.IsZero() || until.Before(retryAt)) {
+					retryAt = until
+				}
+			}
 		case <-time.After(20 * time.Second):
+			if blocked > 0 {
+				return &huangdouPoolLimitError{hosts: len(quick), retryAt: retryAt}
+			}
 			if lastErr != nil {
 				return lastErr
 			}
 			return fmt.Errorf("黄豆节点探测超时（20s）")
 		}
 	}
+	// 全部节点都受限：说明整池被站点限流，而不是单个镜像节点的问题
+	if blocked == len(quick) {
+		return &huangdouPoolLimitError{hosts: len(quick), retryAt: retryAt}
+	}
+	if blocked > 0 && lastErr != nil {
+		return fmt.Errorf("黄豆 %d/%d 个镜像节点被限流，其余节点不可用：%w", blocked, len(quick), lastErr)
+	}
 	if lastErr != nil {
 		return lastErr
 	}
 	return fmt.Errorf("所有黄豆节点均不可用：请检查网络或切换代理")
+}
+
+// huangdouPoolLimitError 表示整个镜像池都被站点限流。
+// Unwrap 返回带最短等待时间的退避对象，站源任务据此设置整体重试时间。
+type huangdouPoolLimitError struct {
+	hosts   int
+	retryAt time.Time
+}
+
+func (failure *huangdouPoolLimitError) Error() string {
+	if failure.retryAt.IsZero() {
+		return fmt.Sprintf("黄豆 %d 个镜像节点都被限流，请稍后重试或切换网络 / 代理", failure.hosts)
+	}
+	seconds := max(1, int(time.Until(failure.retryAt).Seconds()+0.999))
+	return fmt.Sprintf("黄豆 %d 个镜像节点都被限流，约 %d 秒后可重试；已保留已加载内容，也可切换网络 / 代理", failure.hosts, seconds)
+}
+
+func (failure *huangdouPoolLimitError) Unwrap() error {
+	if failure.retryAt.IsZero() {
+		return nil
+	}
+	return &requestBackoff{host: "黄豆镜像池", until: failure.retryAt, status: http.StatusForbidden}
+}
+
+// huangdouRateLimitedUntil 判断一次节点失败是否属于站点限流，并返回该节点的退避到期时间。
+func huangdouRateLimitedUntil(err error) (time.Time, bool) {
+	var backoff *requestBackoff
+	if errors.As(err, &backoff) {
+		return backoff.until, true
+	}
+	var httpErr *huangdouHTTPError
+	if errors.As(err, &httpErr) && (httpErr.status == http.StatusForbidden || httpErr.status == http.StatusTooManyRequests) {
+		return time.Time{}, true
+	}
+	return time.Time{}, false
 }
 
 // callOnceAllKeys 在当前 host 上尝试所有 platform key。
@@ -391,6 +467,14 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 		prepared.Header.Set("sign", hex.EncodeToString(signSum[:])+"-"+timestamp)
 	})
 	if err != nil {
+		// 退避与上下文错误必须保留类型：前者决定池级重试时间，后者决定站源任务的超时 / 取消处理。
+		var backoff *requestBackoff
+		if errors.As(err, &backoff) {
+			return backoff
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return err
+		}
 		return &huangdouHTTPError{msg: err.Error()}
 	}
 	defer resp.Body.Close()
@@ -402,6 +486,14 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 		return fmt.Errorf("huangdou response exceeds %d bytes", providerMaxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			// 站点限流：返回限流器记录的单 host 退避对象，让上层拿到真实的可重试时间。
+			if c.d.limiter != nil {
+				if backoff := c.d.limiter.hostBackoff(strings.ToLower(req.URL.Hostname())); backoff != nil {
+					return backoff
+				}
+			}
+		}
 		return &huangdouHTTPError{status: resp.StatusCode, msg: string(blob)}
 	}
 	decoded, err := huangdouDecode(blob, key)
