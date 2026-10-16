@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/sha256"
 
 	"encoding/json"
 	"errors"
@@ -34,8 +33,8 @@ const (
 )
 
 var (
-	huangguoAIBaseURL     = "https://huangguoai.com"
-	huangguoAIBaseMirrors = []string{"https://huangguoai.com"}
+	huangguoAIBaseURL     = "https://huangguo-ai.com"
+	huangguoAIBaseMirrors = []string{"https://huangguo-ai.com"}
 	huangguoVideoBaseURL  = "https://huangguo.video"
 
 	huangguoAISlugs     = []string{"rebuo-duanju", "jingxuan-duanju", "bikan-duanju", "quanbu-duanju", "renqi-duanju"}
@@ -98,7 +97,7 @@ func isHuangguoProviderSource(source string) bool {
 func canonicalProviderSource(source string) string {
 	key := strings.ToLower(strings.TrimSpace(source))
 	switch key {
-	case "huangguo", "huangguoai", "huangguoai.com":
+	case "huangguo", "huangguoai", "huangguo-ai.com":
 		return sourceHuangguoAI
 	case "huangguo-video", "huangguo.video":
 		return sourceHuangguoVideo
@@ -439,26 +438,22 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 }
 
 func providerURLCandidates(rawURL string) []string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() != "huangguoai.com" {
+	if providerSourceForURL(rawURL) != sourceHuangguoAI {
 		return []string{rawURL}
 	}
-	out := make([]string, 0, len(huangguoAIBaseMirrors)+8)
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return []string{rawURL}
+	}
+	out := make([]string, 0, len(huangguoAIBaseMirrors))
 	seen := map[string]bool{}
-	add := func(candidate string) {
+	for _, mirror := range huangguoAIBaseMirrors {
+		candidate := rehostProviderURL(u, mirror)
 		if candidate == "" || seen[candidate] {
-			return
+			continue
 		}
 		seen[candidate] = true
 		out = append(out, candidate)
-	}
-	for i, mirror := range huangguoAIBaseMirrors {
-		if i == 1 {
-			for _, generated := range generatedHuangguoAIMirrors(rawURL, 8) {
-				add(rehostProviderURL(u, generated))
-			}
-		}
-		add(rehostProviderURL(u, mirror))
 	}
 	if len(out) == 0 {
 		return []string{rawURL}
@@ -475,31 +470,6 @@ func rehostProviderURL(u *url.URL, mirror string) string {
 	copyURL.Scheme = mu.Scheme
 	copyURL.Host = mu.Host
 	return copyURL.String()
-}
-
-func generatedHuangguoAIMirrors(seed string, n int) []string {
-	if n <= 0 {
-		return nil
-	}
-	out := make([]string, 0, n)
-	seen := map[string]bool{}
-	for i := 0; len(out) < n && i < n*4; i++ {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", seed, i)))
-		hexText := fmt.Sprintf("%x", sum[:])
-		sub := strings.TrimLeft(hexText[:6], "0123456789")
-		if len(sub) < 4 {
-			sub = hexText[6:12]
-		}
-		if len(sub) > 6 {
-			sub = sub[:6]
-		}
-		if len(sub) < 3 || seen[sub] {
-			continue
-		}
-		seen[sub] = true
-		out = append(out, "https://"+sub+".ediayikma.cc")
-	}
-	return out
 }
 
 func providerRefererForURL(candidate, fallback string) string {

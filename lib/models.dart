@@ -52,7 +52,6 @@ class SourceSite {
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '剧果', '热门 · 最新 · 分类短剧'),
-    SourceSite('huangguo-video', '黄果视频', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
     ...duanjuValues,
