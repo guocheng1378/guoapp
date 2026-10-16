@@ -22,11 +22,42 @@ import (
 )
 
 const (
-	huangdouBaseURL     = "https://tideember.cc"
-	huangdouVersion     = "2.0.0"
-	huangdouDeviceType  = "web"
-	huangdouPlatformKey = "7961beb44246e3012ce228d6b5ced05a"
+	huangdouBaseURL    = "https://tideember.cc"
+	huangdouVersion    = "2.0.0"
+	huangdouDeviceType = "web"
 )
+
+// huangdouPlatformKeys — 黄豆短剧加密平台 key 列表（xiadasy/qx-scripts 2026-09 V6）。
+// 不同镜像节点可能用不同 key；请求/响应必须用同一个 key 加解密。
+// 首 key 为主用，其余 key 在第一个 key 解密失败时降级尝试。
+var huangdouPlatformKeys = []string{
+	"7961beb44246e3012ce228d6b5ced05a",
+	"6be13f303785864aac6a6cc2cb3c9dc6",
+	"c10ca2986a31fb46d4481ce8631c2725",
+}
+
+// huangdouAPIMirrors — 黄豆短剧站源镜像池（合并 hainanpc/hdou + ckldy/surge-modules 逆向线路）。
+// 前 5 个（*.top / lzlukvca.cc）为 surge-modules 2026-08 端到端验证的 free hls 可用线路：
+// /api/drama/hls/{id}/{ep}/play.m3u8?line=free 对所有集（含付费集）返回正片，无鉴权。
+// 之后节点来自 hainanpc/hdou 2026-08 API 客户端代码。
+var huangdouAPIMirrors = []string{
+	"psfxhhox.top",
+	"lzlukvca.cc",
+	"sxqirtho.top",
+	"qicuknlj.top",
+	"hvthtcpa.top",
+	"tideember.cc",
+	"ahgehbki.cc",
+	"jpgrmkkn.cc",
+	"ufufukpq.cc",
+	"nhuhkizw.cc",
+	"hddj01.com",
+	"hddj02.com",
+	"hddj03.com",
+	"hddj08.com",
+	"hddj09.com",
+	"hddj22.com",
+}
 
 type huangdouAPIClient struct {
 	d         *Downloader
@@ -84,6 +115,11 @@ func (d *Downloader) fetchHuangdouChapters(ctx context.Context, sourceID string)
 }
 
 func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangdouAPIClient, sourceID string, seq int) (providerMedia, error) {
+	// 先试 free hls（surge-modules 端到端验证不鉴权线路，付费集也能播）。
+	if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
+		return freeMedia, nil
+	}
+
 	var decoded any
 	if err := client.call(ctx, "/drama/play", map[string]any{"id": sourceID, "seq": strconv.Itoa(seq)}, &decoded); err != nil {
 		return providerMedia{}, err
@@ -91,14 +127,17 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 	data := huangdouDataMap(decoded)
 	media := firstNonEmpty(mapString(data, "m3u8"), mapString(data, "url"), mapString(data, "play_url"), mapString(data, "playUrl"))
 	if huangdouPreviewOnly(data, media, client.host) {
+		// preview 时再试一次 free hls 兜底
+		if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
+			return freeMedia, nil
+		}
 		return providerMedia{}, &huangdouAPIError{code: "preview", message: "黄豆仅提供试看，未取得该集正片；不会把试看内容当作完整分集"}
 	}
 	if media == "" {
-		media = fmt.Sprintf("%s/api/drama/hls/%s/%d/play.m3u8?line=free", client.host, url.PathEscape(sourceID), seq)
-		playlist, err := d.fetchProviderText(ctx, media, client.host+"/home")
-		if err != nil || !strings.HasPrefix(strings.TrimSpace(playlist), "#EXTM3U") {
-			return providerMedia{}, errors.New("黄豆未提供有效的播放地址，备用播放列表也不可用")
+		if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
+			return freeMedia, nil
 		}
+		return providerMedia{}, errors.New("黄豆未提供有效的播放地址，备用播放列表也不可用")
 	}
 	media = resolveProviderURL(client.host+"/", media)
 	if !isProviderHTTPMediaURL(media) {
@@ -118,33 +157,64 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 	return result, nil
 }
 
+// huangdouFreeHLSPlayback — 遍历 mirror 池前 5 个 free hls 验证线路，
+// 第一个返回合法 #EXTM3U 的节点胜出。
+func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID string, seq int) (providerMedia, error) {
+	sourceID = strings.TrimPrefix(strings.TrimSpace(sourceID), "rp_")
+	hosts := huangdouAPIMirrors
+	// 只试 surge-modules 端到端验证的前 5 个 free hls 线路
+	if len(hosts) > 5 {
+		hosts = hosts[:5]
+	}
+	for _, h := range hosts {
+		url := fmt.Sprintf("https://%s/api/drama/hls/%s/%d/play.m3u8?line=free", h, url.PathEscape(sourceID), seq)
+		playlist, err := d.fetchProviderText(ctx, url, "https://"+h+"/home")
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(playlist), "#EXTM3U") {
+			return providerMedia{URL: url, Referer: "https://" + h + "/home"}, nil
+		}
+	}
+	return providerMedia{}, errors.New("所有 free hls 线路均不可用")
+}
+
+// call 遍历 mirror 池 + 所有 platform key，自动轮换。
+// 只有 isHuangdouAccessError（付费/权限限制）才 hard stop；
+// 其他错误（HTTP 403、解密失败、网络错误）继续试下一个 mirror + key。
 func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[string]any, out *any) error {
-	retries := c.d.cfg.Retries
-	if retries < 1 {
-		retries = 1
+	if c.d.cfg.HuangdouURL != "" {
+		// 用户手动配置了 HuangdouURL，只在该 host 上试所有 platform key
+		return c.callOnceAllKeys(ctx, path, data, out)
 	}
 	var lastErr error
-	for attempt := 0; attempt < retries; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if attempt > 0 {
-			select {
-			case <-time.After(time.Duration(attempt) * time.Second):
-			case <-ctx.Done():
-				return ctx.Err()
+	for _, host := range huangdouAPIMirrors {
+		c.host = "https://" + host
+		if err := c.callOnceAllKeys(ctx, path, data, out); err == nil {
+			c.d.providerMu.Lock()
+			c.d.providerHosts[sourceHuangdou] = c.host
+			c.d.providerMu.Unlock()
+			return nil
+		} else {
+			lastErr = err
+			var apiErr *huangdouAPIError
+			if errors.As(err, &apiErr) && isHuangdouAccessError(apiErr) {
+				// 付费/权限错误，这个 host 上不用继续了，但可以试其他 host
+				continue
 			}
 		}
-		lastErr = c.callOnce(ctx, path, data, out)
-		if lastErr == nil {
+	}
+	return lastErr
+}
+
+// callOnceAllKeys 在当前 host 上遍历所有 platform key，第一个成功的胜出。
+func (c *huangdouAPIClient) callOnceAllKeys(ctx context.Context, path string, data map[string]any, out *any) error {
+	var lastErr error
+	for _, pk := range huangdouPlatformKeys {
+		if err := c.callOnceWithKey(ctx, path, data, pk, out); err == nil {
 			return nil
-		}
-		var apiErr *huangdouAPIError
-		if errors.As(lastErr, &apiErr) {
-			return lastErr
-		}
-		if c.host == huangdouBaseURL && c.d.cfg.HuangdouURL == "" {
-			c.host = "https://xqjurgek.top"
+		} else {
+			lastErr = err
 		}
 	}
 	return lastErr
@@ -192,10 +262,11 @@ func huangdouPreviewOnly(data map[string]any, media, host string) bool {
 	return path == "preview.mp4" || path == "preview.m3u8" || strings.HasSuffix(path, "/preview.mp4") || strings.HasSuffix(path, "/preview.m3u8")
 }
 
-func (c *huangdouAPIClient) callOnce(ctx context.Context, path string, data map[string]any, out *any) error {
+// callOnceWithKey 用指定 platformKey 完成单次加密 API 调用。
+func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, data map[string]any, platformKey string, out *any) error {
 	path = "/" + strings.TrimLeft(path, "/")
 	rid := uuidLike()
-	key, err := huangdouKey(rid)
+	key, err := huangdouKeyWith(rid, platformKey)
 	if err != nil {
 		return err
 	}
@@ -263,22 +334,20 @@ func (c *huangdouAPIClient) callOnce(ctx context.Context, path string, data map[
 			return &huangdouAPIError{code: mapString(envelope, "errorCode", "error_code", "code"), message: "黄豆接口拒绝请求: " + firstNonEmpty(mapString(envelope, "msg", "message", "error"), status)}
 		}
 	}
-	c.d.providerMu.Lock()
-	c.d.providerHosts[sourceHuangdou] = c.host
-	c.d.providerMu.Unlock()
 	if out != nil {
 		*out = decoded
 	}
 	return nil
 }
 
-func huangdouKey(rid string) ([]byte, error) {
+// huangdouKeyWith 用指定 platformKey 派生 AES key（HMAC-SHA256(requestId, platformKey)）。
+func huangdouKeyWith(rid, platformKey string) ([]byte, error) {
 	clean := strings.ReplaceAll(rid, "-", "")
 	b, err := hex.DecodeString(clean)
 	if err != nil {
 		return nil, err
 	}
-	mac := hmac.New(sha256.New, []byte(huangdouPlatformKey))
+	mac := hmac.New(sha256.New, []byte(platformKey))
 	_, _ = mac.Write(b)
 	return mac.Sum(nil), nil
 }
