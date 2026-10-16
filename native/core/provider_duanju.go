@@ -80,10 +80,10 @@ var duanjuProviderCatalog = []duanjuSourceSpec{
 	{ID: source360zy, Name: "360", Base: source360zyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
 	{ID: sourceModu, Name: "魔都", Base: moduBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
 	{ID: sourceDytt, Name: "电影天堂", Base: dyttBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
-	{ID: sourceShandian, Name: "闪电", Base: shandianBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceShandian, Name: "闪电", Base: shandianBaseURL, Kind: "maccms_api", Searcher: false, Paged: true},
 	{ID: sourceHongniu, Name: "红牛", Base: hongniuBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
-	{ID: sourceNiuniu, Name: "牛牛", Base: niuniuzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
-	{ID: sourceWsyzy, Name: "无水印", Base: wsyzyBaseURL, Kind: "maccms_api", Searcher: true, Paged: true},
+	{ID: sourceNiuniu, Name: "牛牛", Base: niuniuzyBaseURL, Kind: "maccms_api", Searcher: false, Paged: true},
+	{ID: sourceWsyzy, Name: "无水印", Base: wsyzyBaseURL, Kind: "maccms_api", Searcher: false, Paged: true},
 	{ID: sourceSorani, Name: "青空", Base: soraniBaseURL, Kind: "api", Searcher: true, Paged: true},
 	{ID: sourceDongpiandi, Name: "真果·鉴", Base: dongpiandiBaseURL, Kind: "api", Searcher: true, Paged: true},
 }

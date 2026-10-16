@@ -11,13 +11,10 @@ class SourceSite {
   bool get pagedSearch => id == 'huangju' || duanjuPaged;
   bool get duanjuPaged => const {
     'yingshigongchang',
-    'shandian',
     'hongniu',
     '360zy',
     'modu',
     'dytt',
-    'niuniuzy',
-    'wsyzy',
   }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
   String get groupId => switch (id) {
