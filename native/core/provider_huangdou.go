@@ -198,7 +198,15 @@ func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID strin
 	return providerMedia{}, errors.New("free hls 线路不可用")
 }
 
-// call 并行探测全部 mirror host（各自独立超时），第一个成功的胜出。
+// preferredHost 返回最近一次胜出的黄豆镜像节点（含协议前缀），没有则返回空串。
+func (c *huangdouAPIClient) preferredHost() string {
+	c.d.providerMu.Lock()
+	defer c.d.providerMu.Unlock()
+	return c.d.providerHosts[sourceHuangdou]
+}
+
+// call 先复用最近胜出的镜像节点（串行单 host），该节点失败时才并发探测整个镜像池。
+// 单 host 复用把每次调用从 17 次请求降到 1 次，避免背景站源任务被限流器串行化后累积超时。
 // 单个 host 被限流（403/429/退避）只跳过该节点，不影响其他节点；
 // 只有全部节点都受限时才返回池级错误，并带上最短的重试时间。
 // 只有用户手动配置 HuangdouURL 时才走串行单 host。
@@ -206,6 +214,24 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 	if c.d.cfg.HuangdouURL != "" {
 		return c.callOnceAllKeys(ctx, path, data, out)
 	}
+	if preferred := c.preferredHost(); preferred != "" {
+		cc := *c
+		cc.host = preferred
+		var decoded any
+		err := cc.callOnceAllKeys(ctx, path, data, &decoded)
+		if err == nil {
+			*out = decoded
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+	}
+	return c.callPool(ctx, path, data, out)
+}
+
+// callPool 并发探测全部 mirror host（各自独立超时），第一个成功的胜出并记为首选节点。
+func (c *huangdouAPIClient) callPool(ctx context.Context, path string, data map[string]any, out *any) error {
 	quick := huangdouQuickHosts()
 	resultCh := make(chan error, len(quick))
 	var winner sync.Once
@@ -460,6 +486,14 @@ func (c *huangdouAPIClient) callOnceWithKey(ctx context.Context, path string, da
 		return fmt.Errorf("huangdou response exceeds %d bytes", providerMaxBodyBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			// 站点限流：返回限流器记录的单 host 退避对象，让上层拿到真实的可重试时间。
+			if c.d.limiter != nil {
+				if backoff := c.d.limiter.hostBackoff(strings.ToLower(req.URL.Hostname())); backoff != nil {
+					return backoff
+				}
+			}
+		}
 		return &huangdouHTTPError{status: resp.StatusCode, msg: string(blob)}
 	}
 	decoded, err := huangdouDecode(blob, key)

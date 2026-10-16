@@ -218,6 +218,19 @@ func (limiter *requestLimiter) observeBlock(request *http.Request, response *htt
 	limiter.mu.Unlock()
 }
 
+// hostBackoff 返回单 host 当前生效的退避（前台与背景各一份），没有则返回 nil。
+func (limiter *requestLimiter) hostBackoff(host string) *requestBackoff {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if backoff := limiter.backoffs[host]; backoff != nil && time.Now().Before(backoff.until) {
+		return backoff
+	}
+	if backoff := limiter.backgroundBackoffs[host]; backoff != nil && time.Now().Before(backoff.until) {
+		return backoff
+	}
+	return nil
+}
+
 type limitedResponseBody struct {
 	io.ReadCloser
 	release func()
