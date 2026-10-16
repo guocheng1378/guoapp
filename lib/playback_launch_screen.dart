@@ -3,11 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'drama_player_fullscreen.dart';
 import 'follow_state.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
 import 'widgets.dart';
+
+const _unlockedVipSources = {'huangdou', 'huangju', 'huangguoai'};
 
 Future<void> openPlaybackDirectly(
   BuildContext context, {
@@ -36,7 +39,9 @@ Future<void> openPlaybackDirectly(
     final watched = store.watched(mergedDrama.id);
     final index = resumeEpisodeIndex(merged.episodes, watched);
     final episode = merged.episodes[index];
-    if (episode.vip && mergedDrama.source != 'dsd') {
+    if (episode.vip &&
+        !_unlockedVipSources.contains(mergedDrama.source) &&
+        mergedDrama.source != 'dsd') {
       final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -61,15 +66,24 @@ Future<void> openPlaybackDirectly(
         ? watched!.position
         : 0.0;
     if (!context.mounted || profileEpoch != store.profileEpoch) return;
+    final immersive = mergedDrama.isShortPlay;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
-          detail: merged,
-          initialIndex: index,
-          initialPosition: position,
-          repository: repository,
-          store: store,
-        ),
+        builder: (_) => immersive
+            ? DramaPlayerFullscreen(
+                detail: merged,
+                initialIndex: index,
+                initialPosition: position,
+                repository: repository,
+                store: store,
+              )
+            : PlayerScreen(
+                detail: merged,
+                initialIndex: index,
+                initialPosition: position,
+                repository: repository,
+                store: store,
+              ),
       ),
     );
   } catch (error) {
@@ -151,7 +165,9 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       final watched = widget.store.watched(drama.id);
       final index = resumeEpisodeIndex(merged.episodes, watched);
       final episode = merged.episodes[index];
-      if (episode.vip && drama.source != 'dsd') {
+      if (episode.vip &&
+          !_unlockedVipSources.contains(drama.source) &&
+          drama.source != 'dsd') {
         if (!mounted) return;
         final accepted = await showDialog<bool>(
           context: context,
@@ -187,15 +203,24 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
           _profileEpoch != widget.store.profileEpoch) {
         return;
       }
+      final immersive = drama.isShortPlay;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
-          builder: (_) => PlayerScreen(
-            detail: merged,
-            initialIndex: index,
-            initialPosition: position,
-            repository: widget.repository,
-            store: widget.store,
-          ),
+          builder: (_) => immersive
+              ? DramaPlayerFullscreen(
+                  detail: merged,
+                  initialIndex: index,
+                  initialPosition: position,
+                  repository: widget.repository,
+                  store: widget.store,
+                )
+              : PlayerScreen(
+                  detail: merged,
+                  initialIndex: index,
+                  initialPosition: position,
+                  repository: widget.repository,
+                  store: widget.store,
+                ),
         ),
       );
     } catch (error) {
