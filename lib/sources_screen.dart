@@ -160,11 +160,9 @@ class _SourcesScreenState extends State<SourcesScreen> {
         ),
       );
       if (confirmed != true || !mounted) return;
-      final ok = await widget.store.verifyAdminPin(pinController.text);
-      if (!ok) {
-        if (mounted) {
-          setState(() => _errors[source.id] = '密码不正确');
-        }
+      final error = await widget.store.verifyAdminPin(pinController.text);
+      if (error != null) {
+        if (mounted) setState(() => _errors[source.id] = error);
         return;
       }
     }

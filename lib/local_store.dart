@@ -776,13 +776,18 @@ class LocalStore extends ChangeNotifier {
     if (locked || !profile.admin) throw StateError('仅管理员可以修改此设置');
   }
 
-  Future<bool> verifyAdminPin(String pin) async {
+  Future<String?> verifyAdminPin(String pin) async {
     final admin = _profiles.firstWhere((p) => p.admin);
+    if (!admin.protected) {
+      return '尚未设置管理员密码，请先在"用户管理"中设置';
+    }
     try {
       await _checkPin(admin, pin);
-      return true;
+      return null;
+    } on StateError catch (e) {
+      return e.message;
     } catch (_) {
-      return false;
+      return '密码不正确';
     }
   }
 
