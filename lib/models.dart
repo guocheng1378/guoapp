@@ -9,6 +9,12 @@ class SourceSite {
   final String description;
   bool get onlineSearch => id == 'hongguo' || pagedSearch;
   bool get pagedSearch => id == 'huangju' || duanjuPaged;
+  bool get isShortPlaySource => const {
+    'hongguo',
+    'huangdou',
+    'huangju',
+    'huangguoai',
+  }.contains(id);
   bool get duanjuPaged => const {
     'yingshigongchang',
     'hongniu',
@@ -145,6 +151,32 @@ class Drama {
     'ongoing' => '连载中',
     _ => '状态未知',
   };
+
+  /// 判定是否为短剧（竖屏沉浸式上下滑切换播放器）。
+  /// 三层判定：source 硬编码 > catalog category > 集数阈值。
+  bool get isShortPlay {
+    if (SourceSite.isKnown(source)) {
+      if (SourceSite.byId(source).isShortPlaySource) return true;
+      // 长剧/影视/动漫源直接排除
+      if (const {
+        'huangguo-video',
+        'cloudfront',
+        'sorani',
+        'yingshigongchang',
+        '360zy',
+        'modu',
+        'dytt',
+        'shandian',
+        'hongniu',
+        'niuniuzy',
+        'wsyzy',
+      }.contains(source)) {
+        return false;
+      }
+    }
+    // fallback：集数在 [3, 100] 范围内视为短剧
+    return episodes >= 3 && episodes <= 100;
+  }
 
   factory Drama.fromJson(Map<String, dynamic> json) => Drama(
     id: json['id'] as String? ?? '',

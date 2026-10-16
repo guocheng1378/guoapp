@@ -12,6 +12,7 @@ import 'downloads_screen.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
+import 'drama_player_fullscreen.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
@@ -274,15 +275,24 @@ class _DetailScreenState extends State<DetailScreen> {
     if (!mounted || _profileEpoch != widget.store.profileEpoch) {
       return;
     }
+    final immersive = detail.drama.isShortPlay;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PlayerScreen(
-          detail: detail,
-          initialIndex: index,
-          initialPosition: position,
-          repository: widget.repository,
-          store: widget.store,
-        ),
+        builder: (_) => immersive
+            ? DramaPlayerFullscreen(
+                detail: detail,
+                initialIndex: index,
+                initialPosition: position,
+                repository: widget.repository,
+                store: widget.store,
+              )
+            : PlayerScreen(
+                detail: detail,
+                initialIndex: index,
+                initialPosition: position,
+                repository: widget.repository,
+                store: widget.store,
+              ),
       ),
     );
     if (mounted) {
