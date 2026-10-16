@@ -167,7 +167,7 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 // 4s 超时返回第一个成功的。失败直接给加密 API，不再串行遍历 5 个 mirror。
 func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID string, seq int) (providerMedia, error) {
 	sourceID = strings.TrimPrefix(strings.TrimSpace(sourceID), "rp_")
-	hosts := []string{"lzlukvca.cc", "hddj01.com"}
+	hosts := []string{"lzlukvca.cc", "hddj01.com", "hddj02.com", "hddj03.com", "hddj08.com", "hddj09.com", "hddj22.com"}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	resultCh := make(chan providerMedia, len(hosts))
