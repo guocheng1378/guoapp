@@ -2,7 +2,7 @@
 
 Flutter 多端独立影视应用。站源请求、解析、在线播放、下载与合并均在设备端完成，不依赖旧短剧库或自建服务。
 
-**当前版本：0.2.68+74**
+**当前版本：0.2.87+94**
 
 ## 主要特性
 
@@ -20,6 +20,34 @@ Flutter 多端独立影视应用。站源请求、解析、在线播放、下载
 | maccms-api × 8 | 影视工厂、360、魔都、电影天堂、闪电、红牛、牛牛、无水印 | maccms-api v10 JSON | 解除强制短剧 type_id，支持完整影视 |
 | 青空 | sorani.net | API | — |
 | 旧十二果 | 芽果、猫果、饭果、观果、河果、星果、花果、牛果、网果、发果、皮果、伍果 | 网页 / 自研 API | 历史短剧站源，部分受 Cloudflare 限制 |
+
+## 站源分类与播放器
+
+站源按内容分为两类，分类是站源注册表的一等属性（`native/provider/specs.go`），同时驱动 UI 分组与播放器选择：
+
+| 分类 | 站源 | 播放器 | 播放方式 |
+| --- | --- | --- | --- |
+| 短剧源 | 红果、黄豆、剧果、黄果 AI、野果、帝果、芽果、猫果、饭果、观果、河果、星果、花生、牛牛、短剧网站、168 影院、PTT、五五 | 竖屏沉浸式信息流 | 上下滑切集，越过首 / 末集继续滑可切上一部 / 下一部；自动连播、下一集预加载、选集、倍速、TV 遥控（上下切集、左右 ±10 秒、确认暂停） |
+| 视频源 | 黄果视频、黄果旧版、maccms-api × 8、青空、真果·鉴 | 横版播放器 | 多线路切换（线路 i/N）与清晰度选择（自动 / 具体画质），沿用选集、倍速、推送、画中画 |
+
+## 站源插件化（进行中）
+
+- `native/provider`：站源契约层（叶子包，不依赖 core）。提供 `Spec`（含 `Category` / `Family`、`RequiresAllSources`）、`Provider` 与能力接口（`Cataloguer` / `Detailer` / `Searcher` / `MediaResolver`）、`Host` 服务抽象、注册表（`Register` / `Get` / `All` / `Canonical` / `ForHost` / `Available`），以及站源共享类型与助手。
+- `native/core`：保留网络、存储、下载、局域网与 FFI；`Drama` / `Chapter` / `Task` / `nativeCategory` 改为指向 `provider` 的类型别名，助手函数为薄转发。
+- duanju 家族 22 个站源已通过 `adapter_sources.go` 的适配器注册进注册表，目录 / 详情 / 搜索分发改为「注册表查找 + 能力断言」；后续逐站迁入 `native/sources/<id>` 独立包。
+- 源 ID、别名、缓存键、局域网协议、备份格式、FFI 符号与构建脚本均未改变。
+- 能力接口的方法显式接收 `provider.Host`（避免全局单例，多 Downloader 场景正确），`Downloader` 经 `host_sources.go` 实现 `Host`（JSON / Text / Bytes / BaseURL / MediaPlaylist）。
+
+已迁入独立包：
+
+| 包 | 站源 | 依赖的 Host 能力 |
+| --- | --- | --- |
+| `sources/maccmsapi` | maccms-api × 8（影视工厂、360、魔都、电影天堂、闪电、红牛、牛牛、无水印） | `Text` / `BaseURL` |
+| `sources/yaguo` | 芽果 | `JSON` / `BaseURL`（含令牌缓存） |
+| `sources/maoguo` | 猫果 | `JSON` / `BaseURL`（含 MD5 签名与字符映射） |
+| `sources/guanguo` | 观果 | `JSON` / `BaseURL`（含 clientInfo 与多清晰度优选） |
+
+待迁入：青空、真果·鉴（需要 `Host` 扩展带限流与自定义重定向策略的 JSON 请求能力）、短剧 API 家族十二站、重签名站源。
 
 ## 编译方式
 
