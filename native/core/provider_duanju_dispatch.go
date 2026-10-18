@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"duanjuapp/native/provider"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,112 +13,38 @@ func (d *Downloader) fetchDuanjuCategories(ctx context.Context, source string) (
 	if !isDuanjuProviderSource(source) {
 		return nil, errors.New("该站源不支持分类读取")
 	}
-	if static, found := duanjuStaticCategories[source]; found {
-		categories := make([]nativeCategory, 0, len(static))
-		for _, entry := range static {
-			categories = append(categories, nativeCategory{ID: entry.ID, Name: entry.Name})
-		}
-		return categories, nil
+	cataloguer, ok := duanjuSourceFor(d, source).(provider.Cataloguer)
+	if !ok {
+		return nil, errors.New("该站源暂未提供分类")
 	}
-	switch source {
-	case sourceYingshigongchang, sourceShandian, sourceHongniu, source360zy, sourceModu, sourceDytt, sourceNiuniu, sourceWsyzy:
-		return d.fetchMaccmsAPICategories(ctx, source)
-	case sourceYaguo:
-		return d.fetchYaguoCategories(ctx)
-	case sourceMaoguo:
-		return d.fetchMaoguoCategories(ctx)
-	case sourceDongpiandi:
-		return fetchDongpiandiCategories(), nil
-	}
-	return nil, errors.New("该站源暂未提供分类")
+	return cataloguer.Categories(ctx, d.host())
 }
 
 func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, page int, category string) ([]Drama, bool, error) {
 	source = canonicalProviderSource(source)
-	switch source {
-	case sourceYaguo:
-		return d.fetchYaguoCatalogPage(ctx, page, category)
-	case sourceMaoguo:
-		return d.fetchMaoguoCatalogPage(ctx, page, category)
-	case sourceFanguo:
-		return d.fetchFanguoCatalogPage(ctx, page, category)
-	case sourceGuanguo:
-		return d.fetchGuanguoCatalogPage(ctx, page, category)
-	case sourceHeguo:
-		return d.fetchHeguoCatalogPage(ctx, page, category)
-	case sourceXingguo:
-		return d.fetchXingguoCatalogPage(ctx, page, category)
-	case sourceNiuguo:
-		return d.fetchNiuguoCatalogPage(ctx, page, category)
-	case sourceYingshigongchang, sourceShandian, sourceHongniu, source360zy, sourceModu, sourceDytt, sourceNiuniu, sourceWsyzy:
-		return d.fetchMaccmsAPICatalogPage(ctx, source, page, category)
-	case sourceSorani:
-		return d.fetchSoraniCatalogPage(ctx, page, category, "")
-	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
-		return d.fetchMaccmsCatalogPage(ctx, source, page, category)
-	case sourceDongpiandi:
-		return d.fetchDongpiandiCatalogPage(ctx, page, category, "")
+	cataloguer, ok := duanjuSourceFor(d, source).(provider.Cataloguer)
+	if !ok {
+		return nil, false, errors.New("该站源暂未接入目录")
 	}
-	return nil, false, errors.New("该站源暂未接入目录")
+	return cataloguer.CatalogPage(ctx, d.host(), page, category, "")
 }
 
 func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID string) (Drama, []Chapter, error) {
 	source = canonicalProviderSource(source)
-	switch source {
-	case sourceYaguo:
-		return d.fetchYaguoDetail(ctx, sourceID)
-	case sourceMaoguo:
-		return d.fetchMaoguoDetail(ctx, sourceID)
-	case sourceFanguo:
-		return d.fetchFanguoDetail(ctx, sourceID)
-	case sourceGuanguo:
-		return d.fetchGuanguoDetail(ctx, sourceID)
-	case sourceHeguo:
-		return d.fetchHeguoDetail(ctx, sourceID)
-	case sourceXingguo:
-		return d.fetchXingguoDetail(ctx, sourceID)
-	case sourceNiuguo:
-		return d.fetchNiuguoDetail(ctx, sourceID)
-	case sourceYingshigongchang, sourceShandian, sourceHongniu, source360zy, sourceModu, sourceDytt, sourceNiuniu, sourceWsyzy:
-		return d.fetchMaccmsAPIDetail(ctx, source, sourceID)
-	case sourceSorani:
-		return d.fetchSoraniDetail(ctx, sourceID)
-	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
-		return d.fetchMaccmsDetail(ctx, source, sourceID)
-	case sourceDongpiandi:
-		return d.fetchDongpiandiDetail(ctx, sourceID)
+	detailer, ok := duanjuSourceFor(d, source).(provider.Detailer)
+	if !ok {
+		return Drama{}, nil, errors.New("该站源暂未接入详情")
 	}
-	return Drama{}, nil, errors.New("该站源暂未接入详情")
+	return detailer.Detail(ctx, d.host(), sourceID)
 }
 
 func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]Drama, error) {
 	source = canonicalProviderSource(source)
-	switch source {
-	case sourceYaguo:
-		return d.searchYaguo(ctx, query)
-	case sourceMaoguo:
-		return d.searchMaoguo(ctx, query)
-	case sourceFanguo:
-		return d.searchFanguo(ctx, query)
-	case sourceGuanguo:
-		return d.searchGuanguo(ctx, query)
-	case sourceHeguo:
-		return d.searchHeguo(ctx, query)
-	case sourceXingguo:
-		return d.searchXingguo(ctx, query)
-	case sourceNiuguo:
-		return d.searchNiuguo(ctx, query)
-	case sourceYingshigongchang, sourceShandian, sourceHongniu, source360zy, sourceModu, sourceDytt, sourceNiuniu, sourceWsyzy:
-		return d.searchMaccmsAPI(ctx, source, query)
-	case sourceSorani:
-		items, _, err := d.fetchSoraniCatalogPage(ctx, 1, "", query)
-		return items, err
-	case sourceHuaguo, sourceFaguo, sourceWuguo, sourceWangguo, sourcePiguo:
-		return d.searchMaccms(ctx, source, query)
-	case sourceDongpiandi:
-		return d.searchDongpiandi(ctx, query)
+	searcher, ok := duanjuSourceFor(d, source).(provider.Searcher)
+	if !ok {
+		return nil, errors.New("该站源不支持在线搜索")
 	}
-	return nil, errors.New("该站源不支持在线搜索")
+	return searcher.Search(ctx, d.host(), query)
 }
 
 func duanjuSupportsSearch(source string) bool {
@@ -130,15 +57,34 @@ func duanjuSupportsPaging(source string) bool {
 	return found && spec.Paged
 }
 
+// providerMediaFromResolved 把独立包返回的 provider.Media 映射回 core 内部结构。
+func providerMediaFromResolved(media provider.Media) providerMedia {
+	converted := providerMedia{
+		URL:      media.URL,
+		Referer:  media.Referer,
+		Duration: media.Duration,
+		Playlist: media.Playlist,
+		HLSKey:   media.HLSKey,
+		CENCKey:  media.CENCKey,
+		Quality:  media.Quality,
+	}
+	for _, variant := range media.Variants {
+		converted.Variants = append(converted.Variants, providerMediaFromResolved(variant))
+	}
+	return converted
+}
+
 func (d *Downloader) resolveDuanjuMedia(ctx context.Context, task Task) (providerMedia, error) {
 	source := canonicalProviderSource(task.Chapter.Source)
-	name := duanjuSourceName(source)
-	switch source {
-	case sourceHeguo:
-		return d.resolveHeguoMedia(ctx, task)
-	case sourceNiuguo:
-		return d.resolveNiuguoMedia(ctx, task)
+	// 独立包站源自带播放解析（provider.MediaResolver），优先走注册表。
+	if resolver, ok := duanjuSourceFor(d, source).(provider.MediaResolver); ok {
+		media, err := resolver.ResolveMedia(ctx, d.host(), task)
+		if err != nil {
+			return providerMedia{}, err
+		}
+		return providerMediaFromResolved(media), nil
 	}
+	name := duanjuSourceName(source)
 	base := d.duanjuBaseURL(source)
 	if base == "" {
 		return providerMedia{}, errors.New("站源地址不可用")
@@ -176,8 +122,7 @@ func (d *Downloader) resolveDuanjuMedia(ctx context.Context, task Task) (provide
 }
 
 func duanjuLooksLikeMedia(address string) bool {
-	lower := strings.ToLower(address)
-	return strings.Contains(lower, ".m3u8") || strings.Contains(lower, ".mp4") || strings.Contains(lower, ".flv")
+	return provider.LooksLikeMedia(address)
 }
 
 func (d *Downloader) resolveDuanjuWebPage(ctx context.Context, source, pageURL, referer string) (providerMedia, error) {
@@ -185,7 +130,7 @@ func (d *Downloader) resolveDuanjuWebPage(ctx context.Context, source, pageURL, 
 	if err != nil {
 		return providerMedia{}, err
 	}
-	address := maccmsNormalizePlaybackURL(maccmsPlayerURL(body))
+	address := provider.NormalizePlaybackURL(provider.PlayerURL(body))
 	if address == "" {
 		return providerMedia{}, fmt.Errorf("%s未返回有效播放地址，请刷新章节后重试", duanjuSourceName(source))
 	}

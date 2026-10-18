@@ -35,7 +35,6 @@ func providerParityDownloader(t *testing.T, transport func(*http.Request, url.Va
 	d.cfg.HuangjuAPIURL = "https://api.huangju.test"
 	d.cfg.HuangjuURL = "https://huangju.test"
 	d.cfg.YeguoURL = "https://yeguo.test"
-	d.cfg.DSDURL = "https://dsd.test"
 	return d
 }
 
@@ -56,19 +55,14 @@ func TestProviderSourceParsesTextFixturesAndRejectsMismatchedIdentity(t *testing
 	if err != nil || yeguo.ID != "yeguo:123" || yeguo.ReleaseStatus != "finished" || yeguo.Views != "3.4万次播放" || yeguo.OnlineDate != "2026-09-23" || yeguo.VIP == nil || !*yeguo.VIP {
 		t.Fatalf("yeguo text row parsed incorrectly: %+v %v", yeguo, err)
 	}
-	page := "https://www.dsd.com.se/index.php/vod/type/id/9/page/1.html"
-	action, values, valid := dsdRouteParameters(page, "/index.php/vod/play/id/456/sid/1/nid/2.html?extra=1")
-	if !valid || action != "play" || values["id"] != "456" || values["sid"] != "1" || values["nid"] != "2" || values["extra"] != "1" {
-		t.Fatal("dsd route parser lost valid fields", action, values, valid)
-	}
-	if _, _, valid = dsdRouteParameters(page, "https://other.example/index.php/vod/play/id/456/sid/1/nid/2.html"); valid {
-		t.Fatal("dsd accepted a cross-origin route")
-	}
 }
 
 func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
-	if got := (&Downloader{cfg: defaultConfig()}).providerBaseURL(sourceYeguo); got != "https://analyze.buxefaex.cc" {
+	if got := (&Downloader{cfg: defaultConfig()}).providerBaseURL(sourceYeguo); got != "https://www.yeguodj.com" {
 		t.Fatalf("unexpected default yeguo endpoint: %s", got)
+	}
+	if !isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") {
+		t.Fatal("yeguo active-site whitelist lost the current line families")
 	}
 	for _, address := range []string{
 		"https://analyze.buxefaex.cc/",
@@ -76,7 +70,9 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 		"https://some-backup.fzchosdi.cc/drama/video/1/",
 		"https://delta.ygrwdsgt.cc/",
 		"https://yeguodj.com/",
+		"https://www.yeguodj.com/",
 		"https://ygdj7.com/",
+		"https://line.ocdjlxow.cc/drama/video/1/",
 	} {
 		if got := providerSourceForURL(address); got != sourceYeguo {
 			t.Fatalf("yeguo domain was not recognized: %s -> %s", address, got)
@@ -86,7 +82,9 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 		"analyze.buxefaex.cc",
 		"delta.ygrwdsgt.cc",
 		"yeguodj.com",
+		"www.yeguodj.com",
 		"ygdj7.com",
+		"ocdjlxow.cc",
 	} {
 		if got := canonicalProviderSource(alias); got != sourceYeguo {
 			t.Fatalf("yeguo source alias was not canonicalized: %s -> %s", alias, got)
@@ -99,9 +97,11 @@ func TestYeguoTransitPageDiscoversCurrentLineDomains(t *testing.T) {
 words = 'abandon,ability,analyze,chair'.split(',');
 lineAry = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.buxefaex.cc' });
 backupLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.fzchosdi.cc'; });
+mirrorLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.ocdjlxow.cc'; });
 </script>`))
 	sites := yeguoTransitSites(`<script>document.write(Base64.decode("` + encoded + `"));</script>`)
-	want := []string{"https://analyze.buxefaex.cc", "https://ability.buxefaex.cc", "https://abandon.buxefaex.cc", "https://analyze.fzchosdi.cc"}
+	want := []string{"https://analyze.buxefaex.cc", "https://ability.buxefaex.cc", "https://abandon.buxefaex.cc",
+		"https://analyze.fzchosdi.cc", "https://analyze.ocdjlxow.cc"}
 	for _, site := range want {
 		found := false
 		for _, candidate := range sites {
@@ -227,24 +227,6 @@ func TestProviderCatalogRankingsUseProviderCatalogPages(t *testing.T) {
 			t.Fatalf("yeguo catalog ranking failed: %+v %v", page, err)
 		}
 	})
-	t.Run("dsd", func(t *testing.T) {
-		d := providerParityDownloader(t, func(request *http.Request, form url.Values) (*http.Response, error) {
-			switch request.URL.Path {
-			case "/":
-				return sourceFixtureResponse(request, http.StatusOK, `<a href="/index.php/vod/type/id/9.html">帝果分类</a>`), nil
-			case "/index.php/vod/type/id/9/page/1.html":
-				return sourceFixtureResponse(request, http.StatusOK, `<main class="lists"><a class="video-item" href="/index.php/vod/play/id/456/sid/1/nid/1.html"><span class="video-title">帝果榜一</span></a></main>`), nil
-			default:
-				t.Fatalf("unexpected dsd ranking request: %s", request.URL.String())
-			}
-			return nil, nil
-		})
-		board, _ := findRankingBoard("dsd-catalog")
-		page, err := d.fetchCatalogRankingPage(context.Background(), board, 1)
-		if err != nil || len(page.Items) != 1 || page.HasMore || page.Items[0].Drama.ID != "dsd:456" || page.Items[0].Drama.Cover != nil {
-			t.Fatalf("dsd catalog ranking failed: %+v %v", page, err)
-		}
-	})
 }
 
 func TestHuangjuPlaybackUsesSignedCookiesForPlaylist(t *testing.T) {
@@ -303,21 +285,5 @@ func TestProviderMediaCredentialsLimitOriginAndUseBackupAddresses(t *testing.T) 
 	other.Header.Set("Cookie", "old=value")
 	if err := credentials.apply(other); err != nil || other.Header.Get("Cookie") != "" {
 		t.Fatal("credentials leaked to another origin", err, other.Header)
-	}
-}
-
-func TestProviderDSDMediaSigningPropagatesFetchErrors(t *testing.T) {
-	d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
-		if !strings.Contains(request.URL.Path, "/addons/vplayer/") {
-			t.Fatalf("unexpected request: %s", request.URL.String())
-		}
-		return rankingHTTPResponse(request, http.StatusBadGateway, "unavailable"), nil
-	})
-	_, found, err := d.signDSDMedia(context.Background(), "https://media.example.test/video/index.m3u8", "https://www.dsd.com.se/index.php/vod/play/id/1/sid/1/nid/1.html", "https://www.dsd.com.se")
-	if err == nil || found {
-		t.Fatal("dsd signing failure was swallowed", found, err)
-	}
-	if path := dsdVplayerMediaPath("https://media.example.test/video/index.m3u8?token=a%2Fb"); path != "/video/index.m3u8?token=a%2Fb" {
-		t.Fatal("dsd media path changed", path)
 	}
 }

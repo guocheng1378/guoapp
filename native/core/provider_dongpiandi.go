@@ -112,12 +112,12 @@ type dongpiandiCatalogCard struct {
 }
 
 type dongpiandiCatalogResp struct {
-	Object     string               `json:"object"`
+	Object     string                  `json:"object"`
 	Cards      []dongpiandiCatalogCard `json:"cards"`
 	Pagination struct {
-		Total   int `json:"total"`
-		Page    int `json:"page"`
-		Limit   int `json:"limit"`
+		Total   int  `json:"total"`
+		Page    int  `json:"page"`
+		Limit   int  `json:"limit"`
 		HasMore bool `json:"has_more"`
 	} `json:"pagination"`
 }
@@ -186,28 +186,30 @@ func dongpiandiDramaFromCard(card dongpiandiCatalogCard) Drama {
 	if card.PlaybackCount > 0 {
 		epCount = card.PlaybackCount
 	}
+	heat := dongpiandiHeat(card.HeatValue)
 	if len(tags) == 0 {
 		add("短剧")
 	}
 
 	return Drama{
-		ID:          providerDramaID(sourceDongpiandi, card.ID),
-		Source:      sourceDongpiandi,
-		SourceID:    card.ID,
-		Title:       truncate(card.Title, 256),
-		Name:        truncate(card.Title, 256),
-		Cover:       card.PosterURL,
-		CoverURL:    card.PosterURL,
-		Image:       card.PosterURL,
-		Pic:         card.PosterURL,
-		Poster:      card.PosterURL,
-		Tags:        tags,
-		Score:       score,
-		Remark:      card.Remark,
+		ID:           providerDramaID(sourceDongpiandi, card.ID),
+		Source:       sourceDongpiandi,
+		SourceID:     card.ID,
+		Title:        truncate(card.Title, 256),
+		Name:         truncate(card.Title, 256),
+		Cover:        card.PosterURL,
+		CoverURL:     card.PosterURL,
+		Image:        card.PosterURL,
+		Pic:          card.PosterURL,
+		Poster:       card.PosterURL,
+		Tags:         tags,
+		Score:        score,
+		Heat:         heat,
+		Remark:       card.Remark,
 		EpisodeCount: epCount,
 		TotalEpisode: epCount,
-		ChannelName: "真果·鉴",
-		Category:    dongpiandiKindLabel(card.ContentKind),
+		ChannelName:  "真果·鉴",
+		Category:     dongpiandiKindLabel(card.ContentKind),
 	}
 }
 
@@ -229,6 +231,40 @@ func dongpiandiScore(v any) string {
 	return ""
 }
 
+// dongpiandiHeat 把 heat_value（数字或字符串）格式化为"X万热度/X亿热度"。
+func dongpiandiHeat(v any) string {
+	var n float64
+	switch x := v.(type) {
+	case float64:
+		n = x
+	case int:
+		n = float64(x)
+	case json.Number:
+		if parsed, err := x.Float64(); err == nil {
+			n = parsed
+		}
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		if err != nil {
+			return ""
+		}
+		n = parsed
+	default:
+		return ""
+	}
+	if n <= 0 {
+		return ""
+	}
+	switch {
+	case n >= 1e8:
+		return strconv.FormatFloat(n/1e8, 'f', 1, 64) + "亿热度"
+	case n >= 1e4:
+		return strconv.FormatFloat(n/1e4, 'f', 1, 64) + "万热度"
+	default:
+		return strconv.FormatInt(int64(n), 10) + "热度"
+	}
+}
+
 func dongpiandiKindLabel(kind string) string {
 	switch kind {
 	case "short_drama":
@@ -248,26 +284,26 @@ func dongpiandiKindLabel(kind string) string {
 
 // dongpiandiDetail 对应 /v1/catalog/{id} 的完整响应。
 type dongpiandiDetail struct {
-	ID                    string                  `json:"id"`
-	Title                 string                  `json:"title"`
-	ContentKind           string                  `json:"content_kind"`
-	Year                  int                     `json:"year"`
-	Area                  string                  `json:"area"`
-	Language              string                  `json:"language"`
-	Genres                []string                `json:"genres"`
-	Actors                []string                `json:"actors"`
-	Directors             []string                `json:"directors"`
-	PosterURL             string                  `json:"poster_url"`
-	Description           string                  `json:"description"`
-	Remark                string                  `json:"remarks"`
-	EpisodeCount          int                     `json:"episode_count"`
-	AvailableEpisodeCount int                     `json:"available_episode_count"`
-	CurrentEpisodeCount   int                     `json:"current_episode_count"`
-	TotalEpisodeCount     int                     `json:"total_episode_count"`
-	IsCompleted           bool                    `json:"is_completed"`
-	UpdateStatus          string                  `json:"update_status"`
-	EpisodeProgressText   string                  `json:"episode_progress_text"`
-	Episodes              []dongpiandiEpisode     `json:"episodes"`
+	ID                    string              `json:"id"`
+	Title                 string              `json:"title"`
+	ContentKind           string              `json:"content_kind"`
+	Year                  int                 `json:"year"`
+	Area                  string              `json:"area"`
+	Language              string              `json:"language"`
+	Genres                []string            `json:"genres"`
+	Actors                []string            `json:"actors"`
+	Directors             []string            `json:"directors"`
+	PosterURL             string              `json:"poster_url"`
+	Description           string              `json:"description"`
+	Remark                string              `json:"remarks"`
+	EpisodeCount          int                 `json:"episode_count"`
+	AvailableEpisodeCount int                 `json:"available_episode_count"`
+	CurrentEpisodeCount   int                 `json:"current_episode_count"`
+	TotalEpisodeCount     int                 `json:"total_episode_count"`
+	IsCompleted           bool                `json:"is_completed"`
+	UpdateStatus          string              `json:"update_status"`
+	EpisodeProgressText   string              `json:"episode_progress_text"`
+	Episodes              []dongpiandiEpisode `json:"episodes"`
 	EpisodePagination     struct {
 		Offset     int  `json:"offset"`
 		Limit      int  `json:"limit"`
@@ -277,22 +313,22 @@ type dongpiandiDetail struct {
 }
 
 type dongpiandiEpisode struct {
-	ID              string `json:"id"`
-	Key             string `json:"key"`
-	Title           string `json:"title"`
-	Number          any    `json:"number"`
-	Token           string `json:"token"`
-	PlaybackCount   int    `json:"playback_count"`
-	PlaybackURL     string `json:"playback_url"`
-	EpisodeTrack    any    `json:"episode_track"`
+	ID            string `json:"id"`
+	Key           string `json:"key"`
+	Title         string `json:"title"`
+	Number        any    `json:"number"`
+	Token         string `json:"token"`
+	PlaybackCount int    `json:"playback_count"`
+	PlaybackURL   string `json:"playback_url"`
+	EpisodeTrack  any    `json:"episode_track"`
 }
 
 // dongpiandiResolveResp 对应 /v1/playback/resolve/{token}。
 // short_drama 返回 resolved=true、resolve_mode=direct 的 m3u8 URL。
 type dongpiandiResolveResp struct {
-	Object        string              `json:"object"`
-	Token         string              `json:"token"`
-	LineOptions   []dongpiandiLine    `json:"line_options"`
+	Object         string             `json:"object"`
+	Token          string             `json:"token"`
+	LineOptions    []dongpiandiLine   `json:"line_options"`
 	CurrentEpisode dongpiandiResolved `json:"current_episode"`
 }
 
@@ -378,24 +414,24 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 	}
 
 	drama := Drama{
-		ID:            providerDramaID(sourceDongpiandi, detail.ID),
-		Source:        sourceDongpiandi,
-		SourceID:      detail.ID,
-		Title:         truncate(detail.Title, 256),
-		Name:          truncate(detail.Title, 256),
-		Desc:          truncate(detail.Description, 12000),
-		Intro:         truncate(detail.Description, 12000),
-		Cover:         detail.PosterURL,
-		CoverURL:      detail.PosterURL,
-		Image:         detail.PosterURL,
-		Pic:           detail.PosterURL,
-		Poster:        detail.PosterURL,
-		Remark:        detail.EpisodeProgressText,
-		Tags:          tags,
-		ChannelName:   "真果·鉴",
-		Category:      dongpiandiKindLabel(detail.ContentKind),
-		EpisodeCount:  total,
-		TotalEpisode:  total,
+		ID:           providerDramaID(sourceDongpiandi, detail.ID),
+		Source:       sourceDongpiandi,
+		SourceID:     detail.ID,
+		Title:        truncate(detail.Title, 256),
+		Name:         truncate(detail.Title, 256),
+		Desc:         truncate(detail.Description, 12000),
+		Intro:        truncate(detail.Description, 12000),
+		Cover:        detail.PosterURL,
+		CoverURL:     detail.PosterURL,
+		Image:        detail.PosterURL,
+		Pic:          detail.PosterURL,
+		Poster:       detail.PosterURL,
+		Remark:       detail.EpisodeProgressText,
+		Tags:         tags,
+		ChannelName:  "真果·鉴",
+		Category:     dongpiandiKindLabel(detail.ContentKind),
+		EpisodeCount: total,
+		TotalEpisode: total,
 	}
 
 	// 对每集同步调用 playback resolve，拿到真实 m3u8。

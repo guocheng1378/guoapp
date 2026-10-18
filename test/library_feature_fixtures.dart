@@ -36,8 +36,19 @@ class LibraryFeatureRepository extends FixtureRepository {
   );
 
   LibraryFeatureRepository() {
+    // 新首页轮播会吃掉目录前 maxItems 部剧；垫 5 部把 first/second
+    // 顶进网格 tile（drama-actions 按钮只在网格 tile 上）。
+    final pads = [
+      for (var i = 1; i <= 5; i++)
+        Drama(
+          id: 'hongguo:pad$i',
+          source: 'hongguo',
+          title: '合成垫剧$i',
+          episodes: 2,
+        ),
+    ];
     cachedPages['hongguo'] = CatalogPage(
-      [first, second],
+      [...pads, first, second],
       fresh: true,
       page: 3,
       hasMore: true,

@@ -2,6 +2,10 @@ package core
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +77,54 @@ func TestYeguoAPIClientUsesRouteMethods(t *testing.T) {
 	}
 	if !sawCategories || !sawCatalog || !sawSearch || !sawPlay {
 		t.Fatalf("missing yeguo routes: categories=%t catalog=%t search=%t play=%t", sawCategories, sawCatalog, sawSearch, sawPlay)
+	}
+}
+
+func TestYeguoAPIBaseFallsBackToPathinfoEntry(t *testing.T) {
+	// 新版站点（Nuxt CSR）的 __NUXT_DATA__ 不再提供 apiBaseURL，回退同域 pathinfo 入口。
+	base, err := yeguoAPIBase(nil, "", "https://www.yeguodj.com/")
+	if err != nil || base != "https://www.yeguodj.com/api.php" {
+		t.Fatalf("pathinfo fallback failed: %q %v", base, err)
+	}
+	if base, err := yeguoAPIBase(nil, "https://api.custom.test/", "https://www.yeguodj.com/"); err != nil || base != "https://api.custom.test" {
+		t.Fatalf("configured api base lost: %q %v", base, err)
+	}
+	if _, err := yeguoAPIBase(nil, "", "   "); err == nil {
+		t.Fatal("missing api entry must fail validation")
+	}
+}
+
+func TestYeguoCallAcceptsEncryptedErrcodeEnvelope(t *testing.T) {
+	key, iv := []byte("0123456789abcdef"), []byte("fedcba9876543210")
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded := pkcs7Pad([]byte(`{"data":{"ok":"1"}}`), aes.BlockSize)
+	ciphertext := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/theater/exploreList" {
+			t.Errorf("unexpected route: %s", request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(response, `{"errcode":0,"timestamp":%q,"data":%q}`,
+			"1760000000", base64.StdEncoding.EncodeToString(ciphertext))
+	}))
+	defer server.Close()
+
+	client := &yeguoAPIClient{
+		downloader: &Downloader{client: server.Client()},
+		site:       yeguoBaseURL,
+		access: &yeguoAccess{base: server.URL, key: key, iv: iv, signKey: []byte("fixture-sign"),
+			identifier: "fixture-trace", loadedAt: time.Now()},
+	}
+	data, err := client.call(context.Background(), "/api/theater/exploreList", url.Values{"page": {"1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapString(data, "ok") != "1" {
+		t.Fatalf("decrypted errcode envelope lost the payload: %+v", data)
 	}
 }
 

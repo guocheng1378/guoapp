@@ -4,10 +4,12 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'glass.dart';
 import 'local_profiles.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'app_build.dart';
+import 'app_layout.dart';
 import 'remote_widgets.dart';
 
 class ProfilesScreen extends StatefulWidget {
@@ -59,21 +61,23 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
         if (!mounted) return;
         final accepted = await showDialog<bool>(
           context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('从备份恢复用户与记录？'),
-            content: const Text(
-              '将使用这份备份替换损坏的用户配置、追剧、观看记录和偏好。建议先导出原始配置；已下载视频保留。',
+          builder: (context) => GlassDialogShell(
+            child: AlertDialog(
+              title: const Text('从备份恢复用户与记录？'),
+              content: const Text(
+                '将使用这份备份替换损坏的用户配置、追剧、观看记录和偏好。建议先导出原始配置；已下载视频保留。',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('继续恢复'),
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('继续恢复'),
-              ),
-            ],
           ),
         );
         if (accepted != true || !mounted) return;
@@ -152,7 +156,10 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
     builder: (_, _) => Scaffold(
-      appBar: AppBar(title: Text(widget.locked ? '解锁$appName' : '用户管理')),
+      appBar: AppBar(
+          title: Text(widget.locked ? '解锁$appName' : '用户管理'),
+          flexibleSpace: const TopFog(),
+        ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
@@ -285,26 +292,94 @@ class _PasswordDialogState extends State<_PasswordDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text('登录 ${widget.name}'),
-    content: TextField(
-      controller: _pin,
-      autofocus: true,
-      obscureText: true,
-      decoration: const InputDecoration(labelText: '密码'),
-      onSubmitted: (value) => Navigator.pop(context, value),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('取消'),
+  Widget build(BuildContext context) {
+    // TV/桌面保留玻璃壳 AlertDialog：遥控焦点导航可靠；
+    // 手机端改轻量小卡：锁定场景背景本就是空白解锁页，
+    // 280 宽大玻璃壳+黑遮罩反而显得空旷突兀。
+    if (AppLayout.isTelevision(context)) {
+      return GlassDialogShell(
+        child: AlertDialog(
+          title: Text('登录 ${widget.name}'),
+          content: TextField(
+            controller: _pin,
+            autofocus: true,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: '密码'),
+            onSubmitted: (value) => Navigator.pop(context, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, _pin.text),
+              child: const Text('登录'),
+            ),
+          ],
+        ),
+      );
+    }
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
+    return GlassSurface(
+      radius: 20,
+      topHighlight: true,
+      // 输入面是连续文字+输入框，底色实一档保可读（同关于浮卡口径）。
+      tint: GlassTint.card,
+      child: Material(
+        type: MaterialType.transparency,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 240),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '登录 ${widget.name}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '输入密码解锁该用户',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _pin,
+                  autofocus: true,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '密码'),
+                  onSubmitted: (value) => Navigator.pop(context, value),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 4),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context, _pin.text),
+                      child: const Text('登录'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      FilledButton(
-        onPressed: () => Navigator.pop(context, _pin.text),
-        child: const Text('登录'),
-      ),
-    ],
-  );
+    );
+  }
 }
 
 class ProfileEditor extends StatefulWidget {
@@ -361,19 +436,21 @@ class _ProfileEditorState extends State<ProfileEditor> {
   Future<void> _delete() async {
     final yes = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除此用户？'),
-        content: const Text('会同时删除该用户的追剧和观看记录。下载文件会保留。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除'),
-          ),
-        ],
+      builder: (context) => GlassDialogShell(
+        child: AlertDialog(
+          title: const Text('删除此用户？'),
+          content: const Text('会同时删除该用户的追剧和观看记录。下载文件会保留。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
       ),
     );
     if (yes != true || !mounted) return;
@@ -387,7 +464,10 @@ class _ProfileEditorState extends State<ProfileEditor> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.profile == null ? '添加用户' : '编辑用户')),
+    appBar: AppBar(
+          title: Text(widget.profile == null ? '添加用户' : '编辑用户'),
+          flexibleSpace: const TopFog(),
+        ),
     body: Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
@@ -425,22 +505,34 @@ class _ProfileEditorState extends State<ProfileEditor> {
             const SizedBox(height: 20),
             if (widget.profile?.admin != true) ...[
               Text('允许访问的站源', style: Theme.of(context).textTheme.titleMedium),
-              for (final source in SourceSite.values)
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: Text(source.name),
-                  value: _sources.contains(source.id),
-                  onChanged: (value) {
-                    setState(() {
-                      if (value == true) {
-                        _sources.add(source.id);
-                      } else {
-                        _sources.remove(source.id);
-                      }
-                    });
-                  },
-                ),
+              for (final category in SourceCategory.values) ...[
+                if (SourceSite.values.any((site) => site.category == category))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      category == SourceCategory.shortDrama ? '短剧源' : '视频源',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                for (final source in SourceSite.values.where(
+                  (site) => site.category == category,
+                ))
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(source.name),
+                    value: _sources.contains(source.id),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          _sources.add(source.id);
+                        } else {
+                          _sources.remove(source.id);
+                        }
+                      });
+                    },
+                  ),
+              ],
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('允许下载和本地媒体'),

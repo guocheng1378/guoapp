@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/tls"
+	"duanjuapp/native/provider"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,9 +34,8 @@ type huangguoBrowserTransport struct {
 }
 
 func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader) *huangguoBrowserTransport {
-	configured, _ := url.Parse(downloader.providerBaseURL(sourceHuangguoVideo))
 	transport := &huangguoBrowserTransport{
-		base: base, router: downloader.proxyRouter, hosts: browserTransportHosts(configured.Host),
+		base: base, router: downloader.proxyRouter, hosts: browserTransportHosts(),
 		insecure: downloader.cfg.InsecureTLS, record: downloader.recordDiagnostic,
 		clients: make(map[string]browserHTTPClient),
 	}
@@ -43,12 +43,10 @@ func newHuangguoBrowserTransport(base http.RoundTripper, downloader *Downloader)
 	return transport
 }
 
-func browserTransportHosts(huangguoVideoHost string) map[string]bool {
-	hosts := map[string]bool{"huangguo.video": true}
-	if huangguoVideoHost != "" {
-		hosts[strings.ToLower(huangguoVideoHost)] = true
-	}
-	for _, spec := range duanjuProviderCatalog {
+func browserTransportHosts() map[string]bool {
+	hosts := map[string]bool{}
+	for _, entry := range provider.All() {
+		spec := entry.Spec()
 		if !spec.Browser {
 			continue
 		}
@@ -206,7 +204,7 @@ func (transport *huangguoBrowserTransport) RoundTrip(request *http.Request) (*ht
 		if result.StatusCode >= 400 || strings.EqualFold(result.Header.Get("Cf-Mitigated"), "challenge") {
 			level = "warning"
 		}
-		transport.record(diagnosticEvent{Event: "network.browser_request", Level: level, Source: sourceHuangguoVideo,
+		transport.record(diagnosticEvent{Event: "network.browser_request", Level: level,
 			Host: request.URL.Hostname(), HTTPStatus: result.StatusCode, Client: huangguoBrowserProfile,
 			Protocol: result.Proto, CFRay: truncate(result.Header.Get("Cf-Ray"), 128),
 			ResponseType: truncate(result.Header.Get("Content-Type"), 128), Message: "黄果浏览器指纹请求完成"})

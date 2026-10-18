@@ -1,6 +1,7 @@
 package core
 
 import (
+	"duanjuapp/native/provider"
 	"net/url"
 
 	"strings"
@@ -46,8 +47,5 @@ func coverPathFromAny(v any) string {
 }
 
 func sourceFromDramaID(id string) string {
-	if source, _, ok := splitProviderDramaID(id); ok {
-		return source
-	}
-	return ""
+	return provider.SourceFromDramaID(id)
 }

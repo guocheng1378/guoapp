@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"duanjuapp/native/provider"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -27,8 +28,6 @@ func (d *Downloader) providerBaseURL(source string) string {
 	switch source {
 	case sourceHuangguoAI:
 		configured, fallback = d.cfg.HuangguoAIURL, huangguoAIBaseURL
-	case sourceHuangguoVideo:
-		configured, fallback = d.cfg.HuangguoVideoURL, huangguoVideoBaseURL
 	case sourceHuangdou:
 		configured, fallback = d.cfg.HuangdouURL, huangdouBaseURL
 	case sourceHongguo:
@@ -37,8 +36,6 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.HuangjuURL, huangjuBaseURL
 	case sourceYeguo:
 		configured, fallback = d.cfg.YeguoURL, yeguoBaseURL
-	case sourceDSD:
-		configured, fallback = d.cfg.DSDURL, dsdBaseURL
 	default:
 		if spec, found := duanjuSourceSpecFor(source); found {
 			return d.duanjuBaseURL(spec.ID)
@@ -53,28 +50,7 @@ func providerSourceForURL(raw string) string {
 	if err != nil {
 		return ""
 	}
-	host := strings.ToLower(parsed.Hostname())
-	switch {
-	case host == "huangguoai.com" || strings.HasSuffix(host, ".ediayikma.cc") || strings.HasSuffix(host, ".agdkczeyx.cc"):
-		return sourceHuangguoAI
-	case host == "huangguo.video":
-		return sourceHuangguoVideo
-	case host == "tideember.cc" || host == "xqjurgek.top":
-		return sourceHuangdou
-	case host == "hongguoduanju.com" || host == "www.hongguoduanju.com":
-		return sourceHongguo
-	case host == "huangju.net" || host == "www.huangju.net" || host == "api.huangju.net":
-		return sourceHuangju
-	case host == "ygdj7.com" || host == "www.ygdj7.com" ||
-		host == "analyze.buxefaex.cc" || strings.HasSuffix(host, ".buxefaex.cc") ||
-		strings.HasSuffix(host, ".fzchosdi.cc") ||
-		host == "delta.ygrwdsgt.cc" || host == "yeguodj.com" || host == "www.yeguodj.com":
-		return sourceYeguo
-	case host == "dsd.com.se" || host == "www.dsd.com.se":
-		return sourceDSD
-	default:
-		return duanjuSourceForHost(host)
-	}
+	return provider.ForHost(parsed.Hostname())
 }
 
 func (d *Downloader) providerURLCandidates(raw string) []string {
@@ -121,9 +97,6 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if chapter.Source == sourceYeguo {
 		return d.resolveYeguoMedia(ctx, task)
 	}
-	if chapter.Source == sourceDSD {
-		return d.resolveDSDMedia(ctx, task)
-	}
 	if chapter.Source == sourceSorani {
 		return d.resolveSoraniMedia(ctx, task)
 	}
@@ -133,7 +106,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)
 	}
-	if chapter.PageURL == "" && (chapter.Source == sourceHuangguoAI || chapter.Source == sourceHuangguoVideo) {
+	if chapter.PageURL == "" && chapter.Source == sourceHuangguoAI {
 		if source, sourceID, valid := splitProviderDramaID(task.DramaID); valid {
 			_, chapters, err := d.GetHuangguoChapters(ctx, source, sourceID)
 			if err != nil {
@@ -168,7 +141,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 			media.Referer = client.host + "/home"
 		}
 	}
-	if chapter.PageURL != "" && (chapter.Source == sourceHuangguoAI || chapter.Source == sourceHuangguoVideo) {
+	if chapter.PageURL != "" && chapter.Source == sourceHuangguoAI {
 		responses := &playbackResponseURLs{}
 		pageContext := context.WithValue(ctx, playbackResponseURLsKey{}, responses)
 		body, err := d.fetchProviderText(pageContext, chapter.PageURL, media.Referer)

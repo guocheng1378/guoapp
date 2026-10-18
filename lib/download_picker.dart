@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'models.dart';
 import 'download_preferences.dart';
 import 'episode_browser.dart';
+import 'glass.dart';
 import 'remote_widgets.dart';
 
 class DownloadSelection {
@@ -264,6 +265,7 @@ class _DownloadPickerState extends State<DownloadPicker> {
     }
     return Scaffold(
       appBar: AppBar(
+          flexibleSpace: const TopFog(),
         title: const Text('下载选集'),
         automaticallyImplyLeading: true,
       ),

@@ -93,8 +93,8 @@ func TestHuangdouRankingPreservesOrderAndMetrics(t *testing.T) {
 
 func TestHuangguoRankingStructuredData(t *testing.T) {
 	board, _ := findRankingBoard("huangguo-potential")
-	// 站点已将 rankings 从 /ranks/{path}/ 迁移到 /genre/{path}-duanju/
-	body := `<script type="application/ld+json">{"@graph":[{"@type":"BreadcrumbList","itemListElement":[]},{"@type":"ItemList","@id":"https://huangguoai.com/genre/jingxuan-duanju/#itemlist","itemListElement":[{"position":1,"name":"A & B","url":"https://huangguoai.com/detail/12/"},{"position":3,"name":"第二条","url":"https://huangguoai.com/detail/34/"}]}]}</script>`
+	// 站点已将 rankings 迁移到分类页 /ai-manju/ 的结构化数据
+	body := `<script type="application/ld+json">{"@graph":[{"@type":"BreadcrumbList","itemListElement":[]},{"@type":"ItemList","@id":"https://huangguoai.com/ai-manju/#itemlist","itemListElement":[{"position":1,"name":"A & B","url":"https://huangguoai.com/video/12/"},{"position":3,"name":"第二条","url":"https://huangguoai.com/video/34/"}]}]}</script>`
 	result, err := parseHuangguoRanking(body, board)
 	if err != nil || len(result.Items) != 2 || result.Items[1].Rank != 3 || result.Items[0].Drama.ID != "huangguoai:12" || result.HasMore {
 		t.Fatalf("could not preserve structured site ranks: %+v %v", result, err)
@@ -104,7 +104,7 @@ func TestHuangguoRankingStructuredData(t *testing.T) {
 	if _, err := parseHuangguoRanking(body, other); err == nil {
 		t.Fatal("accepted a different chart's structured data")
 	}
-	if _, err := parseHuangguoRanking(strings.ReplaceAll(body, "/detail/34/", "/detail/12/"), board); err == nil {
+	if _, err := parseHuangguoRanking(strings.ReplaceAll(body, "/video/34/", "/video/12/"), board); err == nil {
 		t.Fatal("accepted duplicate IDs")
 	}
 }
@@ -136,7 +136,10 @@ func TestRankingCacheAndStaleRecovery(t *testing.T) {
 		if fail.Load() {
 			return rankingHTTPResponse(request, 503, "temporarily unavailable"), nil
 		}
-		page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+		page := 1
+		if raw := request.URL.Query().Get("page"); raw != "" {
+			page, _ = strconv.Atoi(raw)
+		}
 		return rankingHTTPResponse(request, 200, rankingFixture(board, page, rankingRows(page))), nil
 	})
 	ctx := context.Background()

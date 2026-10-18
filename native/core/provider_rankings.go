@@ -31,13 +31,19 @@ var rankingBoards = []rankingBoard{
 	{ID: "huangdou-search", Source: sourceHuangdou, Name: "搜索榜", Description: "黄豆站点搜索榜。", upstreamKey: "search"},
 	{ID: "huangdou-favorite", Source: sourceHuangdou, Name: "收藏榜", Description: "黄豆站点收藏榜。", upstreamKey: "favorite"},
 	{ID: "huangdou-finish", Source: sourceHuangdou, Name: "完结榜", Description: "黄豆站点完结榜。", upstreamKey: "finish"},
-	{ID: "huangguo-hot", Source: sourceHuangguoAI, Name: "热播榜", Description: "黄果站点热播 TOP 20；每日更新。", path: "rebuo-duanju"},
-	{ID: "huangguo-recommend", Source: sourceHuangguoAI, Name: "推荐榜", Description: "黄果站点推荐 TOP 20。", path: "bikan-duanju"},
-	{ID: "huangguo-potential", Source: sourceHuangguoAI, Name: "潜力榜", Description: "黄果站点潜力 TOP 20。", path: "jingxuan-duanju"},
+	{ID: "huangguo-hot", Source: sourceHuangguoAI, Name: "热播榜", Description: "黄果站点热播 TOP 20；每日更新。", path: "ranks/hot"},
+	{ID: "huangguo-recommend", Source: sourceHuangguoAI, Name: "推荐榜", Description: "黄果 AI 成人短剧最新上新。", path: "ai-duanju"},
+	{ID: "huangguo-potential", Source: sourceHuangguoAI, Name: "潜力榜", Description: "黄果 AI 成人漫剧最新上新。", path: "ai-manju"},
 	{ID: "huangju-hot", Source: sourceHuangju, Name: "热门榜", Description: "剧果目录热门顺序，按源站返回顺序展示。"},
 	{ID: "huangju-new", Source: sourceHuangju, Name: "最新榜", Description: "剧果最新目录顺序，按源站返回顺序展示。", path: huangjuNewestCategory},
 	{ID: "yeguo-recommend", Source: sourceYeguo, Name: "目录榜", Description: "野果默认目录顺序，按源站返回顺序展示。"},
-	{ID: "dsd-catalog", Source: sourceDSD, Name: "目录榜", Description: "帝果分类目录聚合顺序，按源站返回顺序展示。"},
+	{ID: "dongpiandi-hot", Source: sourceDongpiandi, Name: "热度榜", Description: "真果·鉴全类型热门短剧与影视，热度来自站点真实热度值。"},
+	{ID: "dongpiandi-short-drama", Source: sourceDongpiandi, Name: "短剧榜", Description: "真果·鉴短剧热门，按源站返回顺序展示。", path: "short_drama"},
+	{ID: "dongpiandi-series", Source: sourceDongpiandi, Name: "电视剧榜", Description: "真果·鉴电视剧热门，按源站返回顺序展示。", path: "series"},
+	{ID: "dongpiandi-movie", Source: sourceDongpiandi, Name: "电影榜", Description: "真果·鉴电影热门，按源站返回顺序展示。", path: "movie"},
+	{ID: "dongpiandi-anime", Source: sourceDongpiandi, Name: "动画榜", Description: "真果·鉴动画热门，按源站返回顺序展示。", path: "anime"},
+	{ID: "dongpiandi-variety", Source: sourceDongpiandi, Name: "综艺榜", Description: "真果·鉴综艺热门，按源站返回顺序展示。", path: "variety"},
+	{ID: "yingshigongchang-new", Source: sourceYingshigongchang, Name: "最近更新榜", Description: "影视工厂最新收录与更新，按源站返回顺序展示。"},
 }
 
 type rankingItem struct {
@@ -85,7 +91,7 @@ func cloneRankingPage(page rankingPage) rankingPage {
 }
 
 func singlePageRankingBoard(board rankingBoard) bool {
-	return board.Source == sourceHuangguoAI || board.Source == sourceDSD
+	return board.Source == sourceHuangguoAI
 }
 
 func rankingDramaWithoutImages(drama Drama) Drama {
@@ -175,18 +181,13 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 		if page != 1 {
 			return rankingPage{}, errors.New("该榜单只有一页")
 		}
-		var pageURL string
-		if strings.HasSuffix(board.path, "-duanju") {
-			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/genre/" + board.path + "/"
-		} else {
-			pageURL = d.providerBaseURL(sourceHuangguoAI) + "/ranks/" + board.path + "/"
-		}
+		pageURL := d.providerBaseURL(sourceHuangguoAI) + "/" + strings.Trim(board.path, "/") + "/"
 		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(sourceHuangguoAI)+"/")
 		if err != nil {
 			return rankingPage{}, err
 		}
 		return parseHuangguoRanking(body, board)
-	case sourceHuangju, sourceYeguo, sourceDSD:
+	case sourceHuangju, sourceYeguo, sourceYingshigongchang, sourceDongpiandi:
 		return d.fetchCatalogRankingPage(ctx, board, page)
 	default:
 		return rankingPage{}, fmt.Errorf("不支持的榜单站源 %s", board.Source)
@@ -218,18 +219,22 @@ func (d *Downloader) fetchCatalogRankingPage(ctx context.Context, board rankingB
 		items, more, err = d.fetchHuangjuCatalogPage(ctx, page, category, "")
 	case sourceYeguo:
 		items, more, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
-	case sourceDSD:
-		items, more, err = d.fetchDSDCatalogPage(ctx, page, category, "")
+	case sourceYingshigongchang:
+		items, more, err = d.fetchDuanjuCatalogPage(ctx, sourceYingshigongchang, page, "")
+	case sourceDongpiandi:
+		items, more, err = d.fetchDongpiandiCatalogPage(ctx, page, category, "")
 	}
 	if err != nil {
 		return rankingPage{}, err
 	}
-	if board.Source == sourceDSD {
-		more = false
-	}
 	result := rankingPage{Items: make([]rankingItem, 0, len(items)), HasMore: more}
 	for index, drama := range items {
-		result.Items = append(result.Items, rankingItem{Rank: (page-1)*20 + index + 1, Drama: rankingDramaWithoutImages(drama)})
+		drama = rankingDramaWithoutImages(drama)
+		metric := ""
+		if board.Source == sourceDongpiandi && drama.Heat != "" {
+			metric = drama.Heat
+		}
+		result.Items = append(result.Items, rankingItem{Rank: (page-1)*20 + index + 1, Drama: drama, Metric: metric})
 	}
 	return result, nil
 }

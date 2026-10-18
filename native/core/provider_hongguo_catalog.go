@@ -95,7 +95,7 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 		active := false
 		for index, genre := range genres {
 			scan := &scans[index]
-			if scan.done || !scan.head && scan.pages >= pageLimit {
+			if scan.done || !scan.head && scan.pages >= 1 {
 				continue
 			}
 			if err := ctx.Err(); err != nil {

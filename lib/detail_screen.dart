@@ -9,10 +9,10 @@ import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'download_picker.dart';
 import 'downloads_screen.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
-import 'drama_player_fullscreen.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
@@ -244,20 +244,22 @@ class _DetailScreenState extends State<DetailScreen> {
     if (detail.episodes[index].vip) {
       final accepted = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('这是一集 VIP 内容'),
-          content: const Text('站源可能只提供试看或限制播放。'),
-          actions: [
-            TextButton(
-              autofocus: AppLayout.isTelevision(context),
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('尝试播放'),
-            ),
-          ],
+        builder: (context) => GlassDialogShell(
+          child: AlertDialog(
+            title: const Text('这是一集 VIP 内容'),
+            content: const Text('站源可能只提供试看或限制播放。'),
+            actions: [
+              TextButton(
+                autofocus: AppLayout.isTelevision(context),
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('尝试播放'),
+              ),
+            ],
+          ),
         ),
       );
       if (accepted != true || !mounted) {
@@ -274,24 +276,15 @@ class _DetailScreenState extends State<DetailScreen> {
     if (!mounted || _profileEpoch != widget.store.profileEpoch) {
       return;
     }
-    final immersive = detail.drama.isShortPlay;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => immersive
-            ? DramaPlayerFullscreen(
-                detail: detail,
-                initialIndex: index,
-                initialPosition: position,
-                repository: widget.repository,
-                store: widget.store,
-              )
-            : PlayerScreen(
-                detail: detail,
-                initialIndex: index,
-                initialPosition: position,
-                repository: widget.repository,
-                store: widget.store,
-              ),
+        builder: (_) => PlayerScreen(
+          detail: detail,
+          initialIndex: index,
+          initialPosition: position,
+          repository: widget.repository,
+          store: widget.store,
+        ),
       ),
     );
     if (mounted) {
@@ -334,6 +327,49 @@ class _DetailScreenState extends State<DetailScreen> {
     final allowed =
         widget.store.profileEpoch == _profileEpoch &&
         widget.store.allowsSource(drama.source);
+    final wide = MediaQuery.sizeOf(context).width >= 960;
+    final actionBar = Row(
+      children: [
+        if (widget.repository.supportsDownloads &&
+            widget.store.canDownload) ...[
+          IconButton.filledTonal(
+            tooltip: '下载选集',
+            onPressed: allowed && !_loading && episodes.isNotEmpty
+                ? _download
+                : null,
+            style: IconButton.styleFrom(
+              minimumSize: const Size(52, 52),
+            ),
+            icon: const Icon(Icons.download_rounded),
+          ),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          child: FilledButton.icon(
+            key: const ValueKey('start-play'),
+            autofocus: television,
+            focusNode: television ? _playFocus : null,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 52),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+            ),
+            onPressed: !allowed || _loading || episodes.isEmpty
+                ? null
+                : () => _play(resumeIndex, resume: true),
+            icon: const Icon(Icons.play_arrow_rounded, size: 26),
+            label: Text(
+              watched != null && episodes.isNotEmpty
+                  ? '继续播放 · 第 ${episodes[resumeIndex].number} 集'
+                  : '立即播放',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ],
+    );
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): () =>
@@ -342,7 +378,9 @@ class _DetailScreenState extends State<DetailScreen> {
             Navigator.of(context).maybePop(),
       },
       child: Scaffold(
+        extendBody: !television && !wide,
         appBar: AppBar(
+          flexibleSpace: const TopFog(),
           toolbarHeight: television ? 64 : null,
           title: Text(drama.title, overflow: TextOverflow.ellipsis),
           actions: [
@@ -367,7 +405,11 @@ class _DetailScreenState extends State<DetailScreen> {
                       message: '请返回剧库后重新选择。',
                     );
                   }
-                  if (television || constraints.maxWidth >= 960) {
+                  // 宽窗双栏仅限电视或真宽屏（含高度门槛）：
+                  // 手机横屏高度 <600，旋转不会误入电视式布局。
+                  if (television ||
+                      (constraints.maxWidth >= 960 &&
+                          constraints.maxHeight >= 600)) {
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -479,6 +521,9 @@ class _DetailScreenState extends State<DetailScreen> {
                             ),
                           ),
                         ],
+                        const SliverToBoxAdapter(
+                          child: SizedBox(height: 96),
+                        ),
                       ],
                     ],
                   );
@@ -487,63 +532,49 @@ class _DetailScreenState extends State<DetailScreen> {
             ),
           ),
         ),
-        bottomNavigationBar: Material(
-          color: Theme.of(context).colorScheme.surface,
-          child: SafeArea(
-            top: false,
-            child: Center(
-              heightFactor: 1,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1000),
+        bottomNavigationBar: television || wide
+            ? Material(
+                color: Theme.of(context).colorScheme.surface,
+                child: SafeArea(
+                  top: false,
+                  child: Center(
+                    heightFactor: 1,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1000),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                        child: actionBar,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            : SafeArea(
+                top: false,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                  child: Row(
-                    children: [
-                      if (widget.repository.supportsDownloads &&
-                          widget.store.canDownload) ...[
-                        IconButton.filledTonal(
-                          tooltip: '下载选集',
-                          onPressed: allowed && !_loading && episodes.isNotEmpty
-                              ? _download
-                              : null,
-                          style: IconButton.styleFrom(
-                            minimumSize: const Size(52, 52),
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: GlassSurface(
+                    variant: GlassVariant.surface,
+                    // 全胶囊形：大块玻璃条改成悬浮胶囊（radius 999 自适应全圆）。
+                    radius: 999,
+                    topHighlight: true,
+                    // 统一滑动栏瓷面档：微透白瓷+白描边。
+                    child: Center(
+                      heightFactor: 1,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1000),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
                           ),
-                          icon: const Icon(Icons.download_rounded),
-                        ),
-                        const SizedBox(width: 12),
-                      ],
-                      Expanded(
-                        child: FilledButton.icon(
-                          key: const ValueKey('start-play'),
-                          autofocus: television,
-                          focusNode: television ? _playFocus : null,
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size(0, 52),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                          ),
-                          onPressed: !allowed || _loading || episodes.isEmpty
-                              ? null
-                              : () => _play(resumeIndex, resume: true),
-                          icon: const Icon(Icons.play_arrow_rounded, size: 26),
-                          label: Text(
-                            watched != null && episodes.isNotEmpty
-                                ? '继续播放 · 第 ${episodes[resumeIndex].number} 集'
-                                : '立即播放',
-                            textAlign: TextAlign.center,
-                          ),
+                          child: actionBar,
                         ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
       ),
     );
   }

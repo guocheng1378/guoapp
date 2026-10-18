@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'glass.dart';
+
 abstract final class AppTheme {
   static final light = _theme(Brightness.light);
   static final dark = _theme(Brightness.dark);
@@ -75,8 +77,10 @@ abstract final class AppTheme {
       brightness: brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: background,
+      // 顶栏透明沉浸化：与页面背景连成一体；核心滚动页用 SliverAppBar +
+      // GlassSurface 让内容真正从顶栏后方穿过（透色玻璃）。
       appBarTheme: AppBarTheme(
-        backgroundColor: background,
+        backgroundColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         scrolledUnderElevation: 0,
         elevation: 0,
@@ -101,6 +105,46 @@ abstract final class AppTheme {
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
+        ),
+      ),
+      // 全 App 胶囊统一「滑动栏瓷面」语言：与 GlassChip / _StoreChip
+      // 同一配方（GlassChipTokens），覆盖所有 Material Chip 系。
+      chipTheme: ChipThemeData(
+        backgroundColor: GlassChipTokens.tint(dark),
+        selectedColor: GlassChipTokens.selected(dark),
+        disabledColor: scheme.surfaceContainer,
+        side: BorderSide(color: GlassChipTokens.edge(dark)),
+        shape: const StadiumBorder(),
+        labelStyle: TextStyle(
+          color: scheme.onSurface,
+          fontWeight: FontWeight.w500,
+        ),
+        secondaryLabelStyle: TextStyle(
+          color: GlassChipTokens.onSelected(dark),
+          fontWeight: FontWeight.w700,
+        ),
+        showCheckmark: false,
+        elevation: 0,
+        pressElevation: 0,
+        surfaceTintColor: Colors.transparent,
+      ),
+      // 弹窗背景透明化：玻璃质感由 GlassDialogShell（lib/glass.dart）接管，
+      // 未包外壳的弹窗在深浅主题下仍由 barrier 提供对比度。
+      dialogTheme: const DialogThemeData(backgroundColor: Colors.transparent),
+      // 弹出菜单（含 DropdownButton）透色化：半透明玻璃同源色 +
+      // 去 M3 染色，主界面菜单另由 showGlassMenu 提供真模糊。
+      popupMenuTheme: PopupMenuThemeData(
+        color: dark
+            ? const Color(0xFF16171B).withValues(alpha: 0.88)
+            : const Color(0xFFFAF8F6).withValues(alpha: 0.86),
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shadowColor: Colors.black.withValues(alpha: dark ? 0.40 : 0.18),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: dark ? 0.14 : 0.45),
+          ),
         ),
       ),
     );

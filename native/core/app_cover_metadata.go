@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"duanjuapp/native/provider"
 	"errors"
 	"net/http"
 	"net/url"
@@ -46,9 +47,6 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 	case sourceYeguo:
 		fresh, _, err := d.fetchYeguoDetail(ctx, id)
 		return nativeNormalize(fresh).Cover, err
-	case sourceDSD:
-		fresh, _, err := d.fetchDSDDetail(ctx, id)
-		return nativeNormalize(fresh).Cover, err
 	default:
 		if isDuanjuProviderSource(source) {
 			fresh, _, err := d.fetchDuanjuDetail(ctx, source, id)
@@ -74,20 +72,10 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 			}
 		}
 		return "", errors.New("详情暂未返回海报地址")
-	case sourceHuangguoAI, sourceHuangguoVideo:
+	case sourceHuangguoAI:
 		route := "/detail/" + url.PathEscape(id) + "/"
 		if source == sourceHuangguoAI && !rankingSourceID.MatchString(id) {
 			return "", errors.New("无效的黄果剧集 ID")
-		}
-		if source == sourceHuangguoVideo {
-			parts := strings.Split(id, "/")
-			if len(parts) == 1 {
-				parts = []string{"series", id}
-			}
-			if len(parts) != 2 || (parts[0] != "series" && parts[0] != "video") || !rankingSourceID.MatchString(parts[1]) {
-				return "", errors.New("无效的黄果剧集 ID")
-			}
-			route = "/" + parts[0] + "/" + url.PathEscape(parts[1])
 		}
 		pageURL := d.providerBaseURL(source) + route
 		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(source)+"/")
@@ -101,35 +89,7 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 }
 
 func providerCoverAddress(value any, pageURL string) string {
-	switch item := value.(type) {
-	case []any:
-		for _, value := range item {
-			if address := providerCoverAddress(value, pageURL); address != "" {
-				return address
-			}
-		}
-	case map[string]any:
-		for _, key := range []string{"url", "contentUrl", "thumbnailUrl"} {
-			if address := providerCoverAddress(item[key], pageURL); address != "" {
-				return address
-			}
-		}
-	case string:
-		if strings.TrimSpace(item) == "" {
-			return ""
-		}
-		address, err := url.Parse(strings.TrimSpace(item))
-		if err != nil {
-			return ""
-		}
-		if base, err := url.Parse(pageURL); err == nil && base.IsAbs() {
-			address = base.ResolveReference(address)
-		}
-		if validNativeCoverURL(address) {
-			return address.String()
-		}
-	}
-	return ""
+	return provider.CoverAddress(value, pageURL)
 }
 
 func hongguoCoverAddress(values ...string) string {

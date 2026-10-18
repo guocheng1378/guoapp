@@ -3,6 +3,8 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import 'glass.dart';
+
 class SearchInput extends StatefulWidget {
   const SearchInput({
     super.key,
@@ -68,6 +70,7 @@ class _SearchInputState extends State<SearchInput> {
     final generation = _generation;
     final pending = Completer<Iterable<String>>();
     _pending = pending;
+    _suggestFailed = false;
     _timer = Timer(const Duration(milliseconds: 300), () async {
       try {
         final result = (await widget.suggestions!(
@@ -76,9 +79,13 @@ class _SearchInputState extends State<SearchInput> {
         if (generation == _generation && mounted) {
           if (_cache.length >= 32) _cache.remove(_cache.keys.first);
           _cache[query] = result;
+          _suggestFailed = false;
           if (!pending.isCompleted) pending.complete(result);
         }
-      } catch (_) {}
+      } catch (_) {
+        // 不再静默吞掉：建议区展示「加载失败」一行。
+        _suggestFailed = true;
+      }
       if (!pending.isCompleted) pending.complete(const []);
     });
     return pending.future;
@@ -123,25 +130,31 @@ class _SearchInputState extends State<SearchInput> {
     );
   }
 
+  bool _suggestFailed = false;
+
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) => RawAutocomplete<String>(
-      textEditingController: widget.controller,
-      focusNode: _focus,
-      optionsBuilder: _options,
-      onSelected: (value) {
-        _selected = true;
-        _submit(value);
-      },
-      fieldViewBuilder: (context, controller, focus, submitted) => TextField(
+  Widget build(BuildContext context) => RawAutocomplete<String>(
+    textEditingController: widget.controller,
+    focusNode: _focus,
+    optionsBuilder: _options,
+    onSelected: (value) {
+      _selected = true;
+      _submit(value);
+    },
+    fieldViewBuilder: (context, controller, focus, submitted) =>
+        GlassSurface(
+      variant: GlassVariant.surface,
+      radius: 28,
+      elevated: false,
+      // 统一滑动栏瓷面档：微透白瓷+白描边。
+      child: TextField(
         controller: controller,
         focusNode: focus,
         autofocus: widget.autofocus,
         textInputAction: TextInputAction.search,
-        onChanged: (value) {
-          widget.onChanged?.call(value);
-          setState(() {});
-        },
+        // 不再每次按键 setState 重建整个 RawAutocomplete：只有清空
+        // 按钮的显隐依赖输入内容，交给局部的 ValueListenableBuilder。
+        onChanged: (value) => widget.onChanged?.call(value),
         onSubmitted: (value) {
           _selected = false;
           submitted();
@@ -149,43 +162,78 @@ class _SearchInputState extends State<SearchInput> {
         },
         decoration: InputDecoration(
           hintText: widget.hint,
+          filled: false,
           prefixIcon: const Icon(Icons.search_rounded),
-          suffixIcon: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (controller.text.isNotEmpty)
+          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (value.text.isNotEmpty)
+                  IconButton(
+                    tooltip: '清空搜索',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () {
+                      _cancel();
+                      controller.clear();
+                      widget.onChanged?.call('');
+                    },
+                  ),
                 IconButton(
-                  tooltip: '清空搜索',
-                  icon: const Icon(Icons.close_rounded),
-                  onPressed: () {
-                    _cancel();
-                    controller.clear();
-                    widget.onChanged?.call('');
-                    setState(() {});
-                  },
+                  tooltip: '搜索',
+                  icon: const Icon(Icons.arrow_forward_rounded),
+                  onPressed: () => _submit(controller.text),
                 ),
-              IconButton(
-                tooltip: '搜索',
-                icon: const Icon(Icons.arrow_forward_rounded),
-                onPressed: () => _submit(controller.text),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-      optionsViewBuilder: (context, selected, options) {
-        final values = options.toList();
-        final available =
-            MediaQuery.sizeOf(context).height -
-            MediaQuery.viewInsetsOf(context).bottom;
+    ),
+    optionsViewBuilder: (context, selected, options) {
+      final values = options.toList();
+      final available =
+          MediaQuery.sizeOf(context).height -
+          MediaQuery.viewInsetsOf(context).bottom;
+      // 建议请求失败时给一行可见反馈，不再静默吞异常。
+      if (values.isEmpty && _suggestFailed) {
         return Align(
           alignment: Alignment.topLeft,
+          child: GlassSurface(
+            variant: GlassVariant.surface,
+            radius: GlassTokens.radiusChip,
+            elevated: false,
+            child: Material(
+              type: MaterialType.transparency,
+              child: SizedBox(
+                width: MediaQuery.sizeOf(context).width,
+                height: 48,
+                child: ListTile(
+                  leading: const Icon(Icons.cloud_off_rounded, size: 18),
+                  title: Text(
+                    '搜索建议加载失败',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      return Align(
+        alignment: Alignment.topLeft,
+        child: GlassSurface(
+          variant: GlassVariant.surface,
+          radius: GlassTokens.radiusChip,
+          elevated: false,
+          // 统一滑动栏瓷面档：微透白瓷+白描边。
           child: Material(
-            elevation: 8,
-            borderRadius: BorderRadius.circular(14),
-            clipBehavior: Clip.antiAlias,
+            type: MaterialType.transparency,
             child: SizedBox(
-              width: constraints.maxWidth,
+              width: MediaQuery.sizeOf(context).width,
               height: min(
                 min(300.0, max(96.0, available * .45)),
                 values.length * 48.0,
@@ -196,7 +244,8 @@ class _SearchInputState extends State<SearchInput> {
                 itemCount: values.length,
                 itemBuilder: (context, index) => ListTile(
                   key: ValueKey('search-suggestion-$index'),
-                  selected: AutocompleteHighlightedOption.of(context) == index,
+                  selected:
+                      AutocompleteHighlightedOption.of(context) == index,
                   leading: const Icon(Icons.search, size: 18),
                   title: _highlight(values[index]),
                   onTap: () => selected(values[index]),
@@ -204,8 +253,8 @@ class _SearchInputState extends State<SearchInput> {
               ),
             ),
           ),
-        );
-      },
-    ),
+        ),
+      );
+    },
   );
 }

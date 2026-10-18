@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
 import 'download_preferences.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'resource_settings.dart';
 import 'remote_widgets.dart';
@@ -16,7 +17,10 @@ class DownloadPreferencesScreen extends StatelessWidget {
     builder: (context, _) {
       final preferences = store.downloadPreferences;
       return Scaffold(
-        appBar: AppBar(title: const Text('下载偏好')),
+        appBar: AppBar(
+          title: const Text('下载偏好'),
+          flexibleSpace: const TopFog(),
+        ),
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 680),

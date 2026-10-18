@@ -25,14 +25,21 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final repository = FixtureRepository();
       final local = await store();
+      // 站源菜单按三分类组织：只开红果与黄豆，让两类都进入菜单且菜单简短。
+      await local.setSourceSwitches({
+        for (final site in SourceSite.values)
+          site.id: site.id == 'hongguo' || site.id == 'huangdou',
+      });
       await tester.pumpWidget(DuanjuApp(repository: repository, store: local));
       await tester.pumpAndSettle();
       expect(find.byTooltip('VIP：隐藏'), findsNothing);
-      expect(find.text('测试短剧'), findsOneWidget);
+      // 轮播大卡与网格 tile 各渲染一份剧名。
+      expect(find.text('测试短剧'), findsWidgets);
       if (allSourcesEnabled) {
-        await tester.tap(find.byKey(const ValueKey('source-switch')));
+        // 点按菜单只列当前类源；跨类切源走长按三分类菜单。
+        await tester.longPress(find.byKey(const ValueKey('source-switch')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('黄豆'));
+        await tester.tap(find.text('黄果类'));
         await tester.pumpAndSettle();
         expect(find.text('会员测试剧'), findsNothing);
         expect(find.byTooltip('VIP：隐藏'), findsOneWidget);
@@ -46,7 +53,7 @@ void main() {
         expect(find.text('黄豆'), findsNothing);
       }
       expect(find.text('会员测试剧'), findsNothing);
-      await tester.tap(find.text('测试短剧'));
+      await tester.tap(find.text('测试短剧').first);
       await tester.pumpAndSettle();
       expect(repository.detailCalls, 1);
       expect(find.byKey(const ValueKey('episode-2')), findsOneWidget);
@@ -89,7 +96,7 @@ void main() {
     repository.fail = false;
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
-    expect(find.text('测试短剧'), findsOneWidget);
+    expect(find.text('测试短剧'), findsWidgets);
   });
 
   testWidgets('fresh disk catalog skips the network and resumes pagination', (
@@ -116,7 +123,7 @@ void main() {
       DuanjuApp(repository: repository, store: await store()),
     );
     await tester.pumpAndSettle();
-    expect(find.text('测试短剧'), findsOneWidget);
+    expect(find.text('测试短剧'), findsWidgets);
     expect(repository.requests, isEmpty);
     final scrollable = find.byType(CustomScrollView);
     for (var i = 0; i < 4 && repository.pages.isEmpty; i++) {
@@ -126,7 +133,13 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(repository.pages, [4]);
-    await tester.tap(find.byKey(const ValueKey('catalog-refresh')));
+    // 回到顶部（深处下拉是普通滚动，不触发刷新指示器）。
+    // 首条剧现仅存在于顶部轮播卡（网格已去重），故直接大位移上拖回顶。
+    await tester.drag(scrollable, const Offset(0, 8000));
+    await tester.pumpAndSettle();
+    // 刷新入口为内容区下拉刷新（菜单条目已移除）。
+    await tester.drag(scrollable, const Offset(0, 300));
+    await tester.pump();
     await tester.pumpAndSettle();
     expect(repository.pages, [4, 1]);
     expect(repository.forced, [false, true]);
@@ -142,7 +155,7 @@ void main() {
       DuanjuApp(repository: repository, store: await store()),
     );
     await tester.pumpAndSettle();
-    expect(find.text('测试短剧'), findsOneWidget);
+    expect(find.text('测试短剧'), findsWidgets);
     expect(find.text('合成网络错误'), findsNothing);
     expect(find.text('暂时无法加载'), findsNothing);
     expect(repository.requests, ['hongguo']);
@@ -166,4 +179,61 @@ void main() {
     expect(restored.watched(FixtureRepository.free.id)?.episode, 2);
     expect(restored.isFavorite(FixtureRepository.free.id), isTrue);
   });
+
+  testWidgets('long-press source island opens the three-category picker', (
+    tester,
+  ) async {
+    final repository = FixtureRepository();
+    final local = await store();
+    // 全开源让三类都非空（默认变体受限源集只有短剧类，无类可选不弹菜单）。
+    await local.setSourceSwitches({
+      for (final site in SourceSite.values) site.id: true,
+    });
+    await tester.pumpWidget(DuanjuApp(repository: repository, store: local));
+    await tester.pumpAndSettle();
+    expect(find.text('短剧类'), findsNothing);
+    await tester.longPress(find.byKey(const ValueKey('source-switch')));
+    await tester.pumpAndSettle();
+    if (allSourcesEnabled) {
+      // 长按弹出三分类选择菜单。
+      expect(find.text('短剧类'), findsOneWidget);
+      expect(find.text('视频类'), findsOneWidget);
+      expect(find.text('黄果类'), findsOneWidget);
+      // 选黄果类 -> 切到该类第一个源（黄豆），VIP 过滤入口出现。
+      await tester.tap(find.text('黄果类'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('VIP：隐藏'), findsOneWidget);
+    } else {
+      // 默认变体单类：长按不弹类选择菜单。
+      expect(find.text('短剧类'), findsNothing);
+      expect(find.text('黄果类'), findsNothing);
+    }
+  });
+
+  testWidgets('tap source island lists only the current category sources', (
+    tester,
+  ) async {
+    final repository = FixtureRepository();
+    final local = await store();
+    // 全开源：当前源红果属短剧类，点按菜单只列该类源。
+    await local.setSourceSwitches({
+      for (final site in SourceSite.values) site.id: true,
+    });
+    await tester.pumpWidget(DuanjuApp(repository: repository, store: local));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('source-switch')));
+    await tester.pumpAndSettle();
+    if (allSourcesEnabled) {
+      // 菜单只含当前类：header「短剧类」出现，其他类名与黄果类源不出现。
+      expect(find.text('短剧类'), findsOneWidget);
+      expect(find.text('视频类'), findsNothing);
+      expect(find.text('黄果类'), findsNothing);
+      expect(find.text('黄豆'), findsNothing);
+    } else {
+      // 默认变体单源：不弹站源菜单。
+      expect(find.text('短剧类'), findsNothing);
+    }
+    expect(tester.takeException(), isNull);
+  });
 }
+

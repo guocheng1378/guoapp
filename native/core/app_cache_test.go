@@ -10,11 +10,11 @@ import (
 	"image"
 	"image/png"
 	"net/http"
-	"strings"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,7 +43,7 @@ func TestNativeCoverDecryptsAndPersistsAcrossRestart(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.RawQuery != "signature=%2F%2b%3D&auth_key=fixture" || r.Header.Get("Referer") != "https://huangguo-ai.com/" || r.Header.Get("User-Agent") == "" {
+		if r.URL.RawQuery != "signature=%2F%2b%3D&auth_key=fixture" || r.Header.Get("Referer") != "https://huangguoai.com/" || r.Header.Get("User-Agent") == "" {
 			t.Error("cover request changed its signed URL or lost source headers")
 		}
 		w.Write(encrypted)
@@ -150,7 +150,7 @@ func TestNativeCoverRedirectAndBoundedDiskCache(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Referer") != "https://huangguo-ai.com/" {
+		if r.Header.Get("Referer") != "https://huangguoai.com/" {
 			t.Error("redirect lost the source referer")
 		}
 		if r.URL.Path == "/redirect" {
@@ -184,17 +184,15 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if !strings.HasPrefix(r.URL.Path, "/genre/") {
+		if !strings.HasPrefix(r.URL.Path, "/ai-") && !strings.HasPrefix(r.URL.Path, "/chigua/") {
 			t.Error("unexpected path", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		page := 1
-		if strings.Contains(r.URL.Path, "/page/") {
-			idx := strings.LastIndex(r.URL.Path, "/page/") + 6
-			end := strings.Index(r.URL.Path[idx:], "/")
-			if end > 0 {
-				page, _ = strconv.Atoi(r.URL.Path[idx : idx+end])
+		if trimmed := strings.Trim(r.URL.Path, "/"); strings.Contains(trimmed, "/") {
+			if n, err := strconv.Atoi(trimmed[strings.LastIndex(trimmed, "/")+1:]); err == nil && n > 1 {
+				page = n
 			}
 		}
 		count := 35
@@ -205,7 +203,7 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 		for index := 0; index < count; index++ {
 			id := strconv.Itoa(page*100 + index)
 			title := fmt.Sprintf("合成剧集%d", page*100+index)
-			cards = append(cards, fmt.Sprintf(`<article class="o5-card"><a href="https://huangguo-ai.com/d/%s/" class="o5-card__poster"><img src="https://example.test/cover-%s.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguo-ai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`, id, id, id, title))
+			cards = append(cards, fmt.Sprintf(`<article class="o5-card"><a href="https://huangguoai.com/d/%s/" class="o5-card__poster"><img src="https://example.test/cover-%s.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguoai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`, id, id, id, title))
 		}
 		fmt.Fprintf(w, "<html><body><div class='o5-grid'>%s</div></body></html>", strings.Join(cards, ""))
 	}))
@@ -222,10 +220,10 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	}
 	engine := open()
 	first, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1})
-	if err != nil || len(first.Items) != 24 || !first.Fresh || !first.HasMore {
+	if err != nil || len(first.Items) != 35 || !first.Fresh || !first.HasMore {
 		t.Fatal("first catalog request failed", err, first)
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 1 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 5 {
 		t.Fatal("fresh catalog caused another request", err, calls.Load())
 	}
 	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 2}); err != nil {
@@ -233,13 +231,13 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	}
 	engine = open()
 	cached := engine.nativeCached(sourceHuangguoAI)
-	if len(cached.Items) != 25 || cached.Page != 2 || cached.HasMore || !cached.Fresh {
+	if len(cached.Items) != 36 || cached.Page != 2 || cached.HasMore || !cached.Fresh {
 		t.Fatal("cached pagination state did not survive a restart", cached)
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 2 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 10 {
 		t.Fatal("restart bypassed fresh disk cache", err, calls.Load())
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1, Force: true}); err != nil || calls.Load() != 3 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1, Force: true}); err != nil || calls.Load() != 15 {
 		t.Fatal("manual refresh reused old data", err, calls.Load())
 	}
 	state := engine.catalogStates[sourceHuangguoAI]
@@ -248,7 +246,7 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	if engine.nativeCached(sourceHuangguoAI).Fresh {
 		t.Fatal("expired catalog is marked fresh")
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 4 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 20 {
 		t.Fatal("expired catalog was not updated", err, calls.Load())
 	}
 }

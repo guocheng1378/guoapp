@@ -161,6 +161,15 @@ func TestHongguoDetailAndPlayableQuality(t *testing.T) {
 	if _, err := parseHongguoAppDetail(result, "700001"); err == nil {
 		t.Fatal("incomplete details accepted")
 	}
+	// 匿名接口可能只返回前几集试看：episode_cnt 缺失时不得默认放行截断列表。
+	delete(detail, "episode_cnt")
+	if _, err := parseHongguoAppDetail(result, "700001"); err == nil {
+		t.Fatal("missing episode count accepted as complete")
+	}
+	detail["episode_cnt"] = "abc"
+	if _, err := parseHongguoAppDetail(result, "700001"); err == nil {
+		t.Fatal("unparsable episode count accepted as complete")
+	}
 	media, err := selectHongguoAppMedia(map[string]any{"video_list": []any{
 		map[string]any{"main_url": "https://media.example.test/new.mp4", "video_meta": map[string]any{"codec_type": "bytevc2", "definition": "2160p"}},
 		map[string]any{"main_url": "https://media.example.test/low.mp4", "video_meta": map[string]any{"codec_type": "h264", "definition": "720p"}},

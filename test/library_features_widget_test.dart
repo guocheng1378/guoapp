@@ -7,7 +7,6 @@ import 'package:duanju_app/home_screen.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/saved_library.dart';
-import 'package:duanju_app/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -263,12 +262,25 @@ void main() {
       );
       await tester.pumpAndSettle();
       final before = repository.requests.length;
-      await tester.tap(find.byKey(const ValueKey('catalog-refresh')));
+      // 刷新入口为内容区下拉刷新（菜单条目已移除）。widget test 的手势
+      // 链路触发不了 RefreshIndicator，改用公开 API show() 驱动同一链路。
+      tester
+          .state<RefreshIndicatorState>(find.byType(RefreshIndicator).first)
+          .show();
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('catalog-refresh')));
+      // startSourceJob 异步链需要额外一帧才落账。
+      await tester.pump(const Duration(milliseconds: 400));
       expect(repository.starts, ['hongguo:update']);
       repository.cachedPages['hongguo'] = CatalogPage(
         [
+          // 垫 5 部：轮播吃掉前 5，新剧落在网格 tile 才可断言可见。
+          for (var i = 1; i <= 5; i++)
+            Drama(
+              id: 'hongguo:pad$i',
+              source: 'hongguo',
+              title: '合成垫剧$i',
+              episodes: 2,
+            ),
           const Drama(
             id: 'hongguo:one',
             source: 'hongguo',
@@ -289,14 +301,6 @@ void main() {
       expect(repository.requests.length, before);
       expect(find.text('新发现的合成剧'), findsOneWidget);
       expect(store.following(first.id)!.newEpisodes, 3);
-      expect(
-        tester
-            .widget<RefreshAction>(
-              find.byKey(const ValueKey('catalog-refresh')),
-            )
-            .loading,
-        isFalse,
-      );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -314,9 +318,12 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('select-catalog-dramas')));
-      await tester.pump();
-      await tester.tap(find.byKey(ValueKey(first.id)));
+      // 顶栏已无多选按钮：从剧卡右上角"更多"胶囊菜单进入多选（选中 first）。
+      await tester.tap(find.byKey(ValueKey('drama-actions-${first.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('多选下载'));
+      await tester.pumpAndSettle();
+      // 菜单进入多选时 first 已被选中，这里再点 second 凑满 2 部。
       await tester.tap(find.byKey(ValueKey(second.id)));
       await tester.pump();
       expect(find.text('已选 2 部'), findsOneWidget);
@@ -352,7 +359,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       expect(find.text('正在进入播放'), findsNothing);
       expect(find.text('立即播放'), findsNothing);
-      expect(find.text('合成一号'), findsOneWidget);
+      // 轮播大卡与网格 tile 各渲染一份剧名。
+      expect(find.text('合成一号'), findsWidgets);
       expect(repository.detailRequests, [first.id]);
       repository.pendingDetail!.complete(
         LibraryFeatureRepository.makeDetail(first, 2),

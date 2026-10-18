@@ -26,6 +26,7 @@ import 'playback_preferences.dart';
 import 'player_controls.dart';
 import 'player_interactions.dart';
 import 'player_menu.dart';
+import 'screen_brightness.dart';
 import 'television_controls.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
@@ -78,6 +79,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
   late final PlayerInteractions _interactions;
+  double _savedBrightness = 1;
+  double _savedVolume = 100;
+  Timer? _mediaMemoryTimer;
+  static const advanceCountdownSeconds = 3;
+  int _advanceSeconds = 0;
+  Timer? _advanceTimer;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
   final _videoPaneKey = GlobalKey();
   final _menuRevision = ValueNotifier<int>(0);
@@ -112,6 +119,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _acceptErrors = false;
   bool _foreground = true;
   bool _playIntent = true;
+
+  /// 因进后台而暂停播放，回前台要自动续上（用户自己按暂停的不算）
+  bool _resumeAfterBackground = false;
   bool _showControlsOnPlaybackReady = true;
   bool _pendingError = false;
   bool _pictureInPictureSupported = false;
@@ -147,6 +157,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     autoAdvance: _autoAdvance,
     danmaku: _danmakuEnabled,
     preload: _preloadEnabled,
+    brightness: _interactions.brightness,
+    volume: _interactions.volume,
     enhancement: _enhancement.preferences,
   );
   String get _qualityLabel => _plan?.local == true
@@ -169,13 +181,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     final preferences = widget.store.playbackPreferences;
     _speed = preferences.speed;
     _requestedQuality = preferences.quality;
-    _autoAdvance = true;
+    _autoAdvance = preferences.autoAdvance;
     _danmakuEnabled = preferences.danmaku;
-    _preloadEnabled = true;
+    _preloadEnabled = preferences.preload;
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
+    // 暂停时进度不再变化，弹幕载入/失败后的状态徽标也要立刻刷新
+    _danmaku.addListener(_danmakuStatusChanged);
     widget.store.addListener(_accessChanged);
     _player =
         widget.playerFactory?.call() ??
@@ -220,8 +234,17 @@ class _PlayerScreenState extends State<PlayerScreen>
         unawaited(_play(next));
         return '第 ${widget.detail.episodes[next].number} 集';
       },
+      initialBrightness: preferences.brightness,
+      initialVolume: preferences.volume,
+      // 连播倒计时中用户一碰屏幕就取消，避免和手势打架
+      onGestureStart: _cancelAdvanceCountdown,
     );
-    _interactions.addListener(() { if (mounted) setState(() {}); });
+    // 亮度以系统当前亮度为起点：跟系统走才不突兀（之前是画面叠黑纱）
+    ScreenBrightness.current().then((value) {
+      if (!mounted || _closed || value == null) return;
+      unawaited(_interactions.adoptSystemBrightness(value));
+    });
+    _interactions.addListener(_onInteractionChanged);
     _playerFocus.addListener(() {
       if (!_playerFocus.hasPrimaryFocus && !_closed) _interactions.cancel();
     });
@@ -242,14 +265,22 @@ class _PlayerScreenState extends State<PlayerScreen>
             _acceptErrors &&
             _error == null) {
           final duration = _player.state.duration;
+          // 短剧（几十秒）播完时解码器常停在末尾几秒前，固定 2 秒容差会把
+          // 「正常播完」误判成「播放故障」而走进恢复流程；按片长比例放宽。
+          final tolerance = Duration(
+            milliseconds: (duration.inMilliseconds * .05).round().clamp(
+              2000,
+              10000,
+            ),
+          );
           if (duration <= Duration.zero ||
-              _player.state.position < duration - const Duration(seconds: 2)) {
+              _player.state.position < duration - tolerance) {
             _queueRecovery();
           } else if (_autoAdvance &&
               _foreground &&
               !_panelOpen &&
               _index + 1 < widget.detail.episodes.length) {
-            _play(_index + 1, showControlsOnReady: false);
+            _startAdvanceCountdown();
           } else {
             _playIntent = false;
             _interactions.cancel();
@@ -448,14 +479,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     _syncPreload();
     _health.reset();
     if (!visible) _interactions.cancel();
-    if (pauseWhenHidden &&
-        !visible &&
-        (_lifecycleState == AppLifecycleState.paused ||
-            _lifecycleState == AppLifecycleState.inactive ||
-            _lifecycleState == AppLifecycleState.hidden)) {
-      _playIntent = false;
-      unawaited(_player.pause());
-      unawaited(_saveProgress(flush: true));
+    // 只有真正进后台才暂停：下拉通知栏、来电横幅只是 inactive（短暂），
+    // 那会儿暂停会让用户看到"下拉一下视频就停了"而且收回来也不会续播。
+    final backgrounded = _lifecycleState == AppLifecycleState.paused ||
+        _lifecycleState == AppLifecycleState.hidden;
+    if (pauseWhenHidden && !visible && _mobile && backgrounded) {
+      if (_player.state.playing) {
+        _resumeAfterBackground = true;
+        _playIntent = false;
+        unawaited(_player.pause());
+        unawaited(_saveProgress(flush: true));
+      }
+    } else if (visible && _resumeAfterBackground && _error == null && !_loading) {
+      // 回到前台：把被后台打断的播放接着放回去
+      _resumeAfterBackground = false;
+      _playIntent = true;
+      unawaited(_player.play());
     }
     if (visible && _pendingError) {
       _queueRecovery();
@@ -682,6 +721,76 @@ class _PlayerScreenState extends State<PlayerScreen>
       widget.detail.episodes[_index + 1],
       quality: _requestedQuality,
     );
+  }
+
+  /// 弹幕状态变化后刷新控制栏徽标（暂停时进度不动，也要立刻可见）
+  void _danmakuStatusChanged() {
+    if (!mounted || _closed) return;
+    setState(() {});
+  }
+
+  /// 一集播完：3 秒倒计时后自动接下一集，点提示或任何操作都能取消
+  void _startAdvanceCountdown() {
+    _advanceTimer?.cancel();
+    if (!mounted || _closed) return;
+    setState(() => _advanceSeconds = advanceCountdownSeconds);
+    _advanceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_closed || !mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_advanceSeconds <= 1) {
+        timer.cancel();
+        _advanceTimer = null;
+        setState(() => _advanceSeconds = 0);
+        unawaited(_play(_index + 1, showControlsOnReady: false));
+      } else {
+        setState(() => _advanceSeconds -= 1);
+      }
+    });
+  }
+
+  void _cancelAdvanceCountdown() {
+    if (_advanceTimer == null && _advanceSeconds == 0) return;
+    _advanceTimer?.cancel();
+    _advanceTimer = null;
+    if (mounted && !_closed) setState(() => _advanceSeconds = 0);
+  }
+
+  /// 手势变化：刷新 UI（遮罩亮度/HUD），并在滑动调完亮度/音量后落盘记忆
+  void _onInteractionChanged() {
+    if (mounted) setState(() {});
+    final brightness = _interactions.brightness;
+    final volume = _interactions.volume;
+    if (_savedBrightness == brightness && _savedVolume == volume) return;
+    _savedBrightness = brightness;
+    _savedVolume = volume;
+    _mediaMemoryTimer?.cancel();
+    _mediaMemoryTimer = Timer(const Duration(milliseconds: 600), () {
+      if (_closed) return;
+      unawaited(_persistMediaMemory());
+    });
+  }
+
+  /// 把亮度/音量写入播放偏好（照抄 _setPreferences 的用户切换校验）
+  Future<void> _persistMediaMemory() async {
+    if (_closed || widget.store.profileEpoch != _profileEpoch) return;
+    try {
+      await widget.store.setPlaybackPreferences(
+        PlaybackPreferences(
+          speed: _speed,
+          quality: _requestedQuality,
+          autoAdvance: _autoAdvance,
+          danmaku: _danmakuEnabled,
+          preload: _preloadEnabled,
+          brightness: _savedBrightness,
+          volume: _savedVolume,
+          enhancement: _enhancement.preferences,
+        ),
+      );
+    } catch (_) {
+      // 记忆失败不影响播放，下一次手势变化会再试
+    }
   }
 
   void _syncDanmaku({bool discontinuity = false}) {
@@ -1033,6 +1142,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         _attachLanPlayback();
         _health.reset();
         await _interactions.applySpeed();
+        // 换源后播放器音量会回到默认值，按记忆恢复用户手感
+        unawaited(_player.setVolume(_interactions.volume));
         if (mounted && !_closed && ticket == _generation) {
           setState(() {
             _loading = false;
@@ -1093,8 +1204,27 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  bool get _fullscreenSupported =>
-      _television || widget.detail.drama.source == 'hongguo';
+  Future<void> _switchRoute() async {
+    final plan = _plan;
+    if (plan == null || !plan.hasAlternative) return;
+    final position = _currentPosition;
+    await _play(
+      _index,
+      position: position,
+      recoveryAction: PlaybackRecoveryAction.alternative,
+      playWhenReady: true,
+    );
+  }
+
+  String? get _routeLabel {
+    final plan = _plan;
+    if (plan == null || plan.routeCount < 2) return null;
+    return '线路 ${plan.routeIndex + 1}/${plan.routeCount}';
+  }
+
+  /// 全屏/旋转能力：电视端、手机（全部站源）与桌面端都支持；
+  /// 手机旋转自动全屏、桌面端走 windowManager.setFullScreen。
+  bool get _fullscreenSupported => _television || _mobile || Platform.isWindows;
 
   bool get _showFullscreen =>
       _fullscreenSupported &&
@@ -1199,8 +1329,14 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _toggleDanmaku() async {
     if (widget.detail.drama.source != 'hongguo') return;
+    final next = !_danmakuEnabled;
     try {
-      await _setPreferences(_preferences.copyWith(danmaku: !_danmakuEnabled));
+      await _setPreferences(_preferences.copyWith(danmaku: next));
+      if (!mounted || _closed) return;
+      // 开了却拿不到弹幕身份时立刻说清楚，别让用户对着空画面等
+      if (next && !_danmaku.supported) {
+        _notice(_plan?.local == true ? '本地播放不加载弹幕' : '本集暂不支持弹幕');
+      }
     } catch (_) {
       _notice('弹幕偏好未能保存，请重试');
     }
@@ -1250,6 +1386,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openPanel(PlayerMenuSection section) async {
     if (_panelOpen || _closed) return;
+    _cancelAdvanceCountdown();
     _interactions.cancel();
     setState(() => _panelOpen = true);
     final menuTheme = _showFullscreen ? AppTheme.dark : Theme.of(context);
@@ -1412,6 +1549,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _back() {
+    _cancelAdvanceCountdown();
     if (_showFullscreen && !_television) {
       _rotate();
     } else {
@@ -1426,11 +1564,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     LanController.current?.detachPlayback(_lanIdentity);
     widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
-    _danmaku.dispose();
+    _danmaku
+      ..removeListener(_danmakuStatusChanged)
+      ..dispose();
     _preloader.dispose();
     _generation++;
     WidgetsBinding.instance.removeObserver(this);
     _saveTimer?.cancel();
+    _mediaMemoryTimer?.cancel();
+    _advanceTimer?.cancel();
+    // 亮度改的是窗口真实亮度，离开播放器要还给系统
+    unawaited(_interactions.releaseBrightness());
     _healthTimer?.cancel();
     _errorTimer?.cancel();
     _pictureInPictureExitTimer?.cancel();
@@ -1656,6 +1800,8 @@ class _PlayerScreenState extends State<PlayerScreen>
             onEpisodes: () => _openPanel(PlayerMenuSection.episodes),
             onSpeed: () => _openPanel(PlayerMenuSection.speed),
             onQuality: () => _openPanel(PlayerMenuSection.quality),
+            routeLabel: _routeLabel,
+            onRoute: _plan?.hasAlternative == true ? _switchRoute : null,
             onDanmaku: widget.detail.drama.source == 'hongguo'
                 ? _toggleDanmaku
                 : null,
@@ -1705,6 +1851,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                   fit: BoxFit.contain,
                   controls: (_) => layeredControls,
                 ),
+              // 亮度遮罩模拟：手势亮度只调这层透明度，不修改系统亮度
+              if (_interactions.brightness < 1 &&
+                  !_interactions.brightnessViaSystem &&
+                  !hideOverlayForPictureInPicture)
+                IgnorePointer(
+                  child: ColoredBox(
+                    color: Colors.black.withValues(
+                      alpha: (1 - _interactions.brightness) * .72,
+                    ),
+                  ),
+                ),
               if (_loading && !hideOverlayForPictureInPicture)
                 ColoredBox(
                   color: Colors.black.withValues(alpha: .78),
@@ -1745,6 +1902,14 @@ class _PlayerScreenState extends State<PlayerScreen>
                     icon: Icons.play_disabled_rounded,
                   ),
                 ),
+              // 移动端竖屏加载/出错时 PlayerControls 顶栏（_feedTopBar）因
+              // enabled=false 不渲染，遮罩又盖住整个视频面，没有这个按钮
+              // 就只能依赖系统返回手势。
+              if (!_showFullscreen &&
+                  _mobile &&
+                  !hideOverlayForPictureInPicture &&
+                  (_loading || _error != null))
+                _overlayBackButton(),
               if ((_loading || _error != null) &&
                   !hideOverlayForPictureInPicture &&
                   _showFullscreen &&
@@ -1798,7 +1963,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
-              if (_interactions.hudState.type != SwipeAction.none &&
+              if ((_advanceSeconds > 0 ||
+                      _interactions.hudState.type != SwipeAction.none) &&
                   !hideOverlayForPictureInPicture)
                 _buildGestureHud(),
             ],
@@ -1808,8 +1974,59 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 连播倒计时提示：显示下一集标题与剩余秒数，点击可取消
+  Widget _buildAdvanceCountdown() {
+    final episodes = widget.detail.episodes;
+    final next = _index + 1;
+    final title = next < episodes.length
+        ? '即将播放第 ${episodes[next].number} 集'
+        : '即将播放下一集';
+    return Center(
+      child: GestureDetector(
+        key: const ValueKey('player-advance-countdown'),
+        onTap: _cancelAdvanceCountdown,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: .62),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '$_advanceSeconds',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '秒后自动播放 · 点此取消',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGestureHud() {
     final hud = _interactions.hudState;
+    if (_advanceSeconds > 0) return _buildAdvanceCountdown();
     switch (hud.type) {
       case SwipeAction.brightness:
       case SwipeAction.volume:
@@ -1853,47 +2070,72 @@ class _PlayerScreenState extends State<PlayerScreen>
       case SwipeAction.seek:
         final pos = hud.position ?? Duration.zero;
         final total = _player.state.duration;
-        final pct = hud.value.clamp(0.0, 1.0);
         return Positioned(
           left: 32,
           right: 32,
           bottom: 96,
           child: SafeArea(
             top: false,
-            child: Column(
+            child: Row(
+              children: [
+                Text(formatPosition(pos.inMilliseconds / 1000),
+                    style: const TextStyle(color: Colors.white, fontSize: 14)),
+                const Spacer(),
+                Text(
+                  total > Duration.zero
+                      ? '/ ${formatPosition(total.inMilliseconds / 1000)}'
+                      : '',
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        );
+      case SwipeAction.episode:
+        final forward = hud.value > 0;
+        return Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .55),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Text(formatPosition(pos.inMilliseconds / 1000),
-                        style: const TextStyle(color: Colors.white, fontSize: 14)),
-                    const Spacer(),
-                    Text(
-                      total > Duration.zero
-                          ? '/ ${formatPosition(total.inMilliseconds / 1000)}'
-                          : '',
-                      style: const TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                  ],
+                Icon(
+                  forward
+                      ? Icons.skip_next_rounded
+                      : Icons.skip_previous_rounded,
+                  color: Colors.white,
+                  size: 22,
                 ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(3),
-                  child: LinearProgressIndicator(
-                    value: pct,
-                    minHeight: 6,
-                    backgroundColor: Colors.white.withValues(alpha: .2),
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
+                const SizedBox(width: 8),
+                Text(
+                  hud.label ?? (forward ? '下一集' : '上一集'),
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
                 ),
               ],
             ),
           ),
         );
       case SwipeAction.none:
-      case SwipeAction.episode:
         return const SizedBox.shrink();
     }
+  }
+
+  Widget _overlayBackButton() {
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4, top: 8),
+        child: IconButton(
+          tooltip: '返回',
+          onPressed: _back,
+          icon: const Icon(Icons.arrow_back_ios_new_rounded),
+        ),
+      ),
+    );
   }
 
   Widget _mobilePlaybackPanel() {

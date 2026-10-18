@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'download_collections.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'local_media_screen.dart';
 import 'models.dart';
@@ -22,12 +23,20 @@ class DownloadsScreen extends StatefulWidget {
     required this.store,
     this.embedded = false,
     this.playerBuilder,
+    this.bottomInset = 0,
+    this.topInset = 0,
   });
   final AppRepository repository;
   final LocalStore store;
   final bool embedded;
   @visibleForTesting
   final Widget Function(DramaDetail, int, double)? playerBuilder;
+
+  /// 悬浮玻璃底栏出现时的内容底部避让高度。
+  final double bottomInset;
+
+  /// 悬浮玻璃顶栏的避让高度（手机端 > 0）。
+  final double topInset;
   @override
   State<DownloadsScreen> createState() => _DownloadsScreenState();
 }
@@ -141,22 +150,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       final completed = jobs.where((job) => job.completed).length;
       final accepted = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(completed > 0 ? '删除所选视频？' : '取消所选下载？'),
-          content: Text(
-            '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择“清理任务，保留视频”。',
+        builder: (context) => GlassDialogShell(
+          child: AlertDialog(
+            title: Text(completed > 0 ? '删除所选视频？' : '取消所选下载？'),
+            content: Text(
+              '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择“清理任务，保留视频”。',
+            ),
+            actions: [
+              TextButton(
+                autofocus: AppLayout.isTelevision(context),
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('保留'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认删除'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              autofocus: AppLayout.isTelevision(context),
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('保留'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认删除'),
-            ),
-          ],
         ),
       );
       if (accepted != true || !mounted || !_allowed) return;
@@ -287,7 +298,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, change) => AlertDialog(
+        builder: (context, change) => GlassDialogShell(
+          child: AlertDialog(
           title: const Text('筛选下载合集'),
           content: SizedBox(
             width: 420,
@@ -351,6 +363,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               child: const Text('应用'),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -1165,7 +1178,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       },
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    4 + widget.topInset,
+                    12,
+                    20 + widget.bottomInset,
+                  ),
                   itemCount: rows.length,
                   itemBuilder: (_, index) => switch (rows[index]) {
                     DownloadCollection collection => _collection(collection),
@@ -1187,6 +1205,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
+          flexibleSpace: const TopFog(),
           title: Text(title),
           actions: AppLayout.isTelevision(context) ? null : actions,
         ),

@@ -242,8 +242,11 @@ void main() {
       final pip = tester.getRect(
         find.byKey(const ValueKey('player-picture-in-picture')),
       );
+      // 线路键（plan 带备用线路时显示）插在清晰度与画中画之间，仍需保持聚类
+      final route = tester.getRect(find.byKey(const ValueKey('player-route')));
       expect(quality.left - speed.right, lessThan(8));
-      expect(pip.left - quality.right, lessThan(8));
+      expect(route.left - quality.right, lessThan(8));
+      expect(pip.left - route.right, lessThan(8));
       expect(pip.right, greaterThan(330));
       await unmount(tester, player);
     } finally {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'models.dart';
@@ -84,24 +85,29 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
     }
     final selected = await showDialog<String>(
       context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('导出哪部剧到 Emby？'),
-        children: [
-          if (_jobs.isNotEmpty)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, '*'),
-              child: Text('全部已下载 · ${_jobs.length} 集'),
-            ),
-          for (final entry in groups.entries)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, entry.key),
-              child: Text(
-                '${entry.value.first.drama.title} · 已下载 ${entry.value.length} 集',
+      builder: (context) => GlassDialogShell(
+        child: SimpleDialog(
+          title: const Text('导出哪部剧到 Emby？'),
+          children: [
+            if (_jobs.isNotEmpty)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, '*'),
+                child: Text('全部已下载 · ${_jobs.length} 集'),
               ),
-            ),
-          if (groups.isEmpty)
-            const Padding(padding: EdgeInsets.all(20), child: Text('请先下载分集')),
-        ],
+            for (final entry in groups.entries)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, entry.key),
+                child: Text(
+                  '${entry.value.first.drama.title} · 已下载 ${entry.value.length} 集',
+                ),
+              ),
+            if (groups.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('请先下载分集'),
+              ),
+          ],
+        ),
       ),
     );
     if (selected == null || !mounted) return;
@@ -151,21 +157,23 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
   Future<void> _remove(LocalMediaItem item) async {
     final yes = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除此媒体文件？'),
-        content: Text(
-          '将删除此成品文件。已单独保存的原分集不受影响。${item.merged || item.special ? '' : '此分集不再自动导出，需要时可手动重新导出。'}',
+      builder: (context) => GlassDialogShell(
+        child: AlertDialog(
+          title: const Text('删除此媒体文件？'),
+          content: Text(
+            '将删除此成品文件。已单独保存的原分集不受影响。${item.merged || item.special ? '' : '此分集不再自动导出，需要时可手动重新导出。'}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('保留'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('保留'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除'),
-          ),
-        ],
       ),
     );
     if (yes != true || !mounted) return;
@@ -199,6 +207,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
           .toList();
       return Scaffold(
         appBar: AppBar(
+          flexibleSpace: const TopFog(),
           title: const Text('本地媒体'),
           actions: [
             IconButton(

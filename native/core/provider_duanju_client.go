@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"duanjuapp/native/provider"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,18 @@ import (
 	"strings"
 	"time"
 )
+
+func duanjuCachedToken(source string, ttl time.Duration, fetch func(context.Context) (string, error)) (string, error) {
+	return provider.CachedToken(source, ttl, fetch)
+}
+
+func sortDuanjuChapters(chapters []Chapter) {
+	provider.SortChapters(chapters)
+}
+
+func duanjuFindBool(node map[string]any, keys ...string) bool {
+	return provider.FindBool(node, keys...)
+}
 
 type duanjuRequest struct {
 	Source  string
@@ -108,133 +121,43 @@ func (d *Downloader) duanjuJSON(ctx context.Context, request duanjuRequest) (map
 }
 
 func duanjuFindString(node map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, found := node[key]; found {
-			if text := nativeText(value); text != "" {
-				return text
-			}
-		}
-	}
-	return ""
+	return provider.FindString(node, keys...)
 }
 
 func duanjuFindInt(node map[string]any, keys ...string) int {
-	for _, key := range keys {
-		if value, found := node[key]; found {
-			switch typed := value.(type) {
-			case json.Number:
-				if number, err := typed.Int64(); err == nil {
-					return int(number)
-				}
-			case float64:
-				return int(typed)
-			case string:
-				if number, err := parseDuanjuNumber(typed); err == nil {
-					return number
-				}
-			}
-		}
-	}
-	return 0
+	return provider.FindInt(node, keys...)
 }
 
 func parseDuanjuNumber(value string) (int, error) {
-	trimmed := strings.TrimSpace(value)
-	if number, err := strconv.Atoi(trimmed); err == nil {
-		return number, nil
-	}
-	trimmed = strings.TrimSuffix(strings.TrimSuffix(trimmed, "集"), "全集")
-	trimmed = strings.TrimSpace(trimmed)
-	if number, err := strconv.Atoi(trimmed); err == nil {
-		return number, nil
-	}
-	return 0, errors.New("不是数字")
+	return provider.ParseNumber(value)
 }
 
 func duanjuFindMap(node map[string]any, keys ...string) map[string]any {
-	for _, key := range keys {
-		if value, found := node[key]; found {
-			if mapped, ok := value.(map[string]any); ok {
-				return mapped
-			}
-		}
-	}
-	return nil
+	return provider.FindMap(node, keys...)
 }
 
 func duanjuFindList(node map[string]any, keys ...string) []any {
-	for _, key := range keys {
-		if value, found := node[key]; found {
-			if listed, ok := value.([]any); ok {
-				return listed
-			}
-		}
-	}
-	return nil
+	return provider.FindList(node, keys...)
 }
 
 func duanjuMapList(value any) []map[string]any {
-	listed, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	rows := make([]map[string]any, 0, len(listed))
-	for _, entry := range listed {
-		if mapped, ok := entry.(map[string]any); ok {
-			rows = append(rows, mapped)
-		}
-	}
-	return rows
+	return provider.MapList(value)
 }
 
 func duanjuStringList(value any) []string {
-	listed, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	values := make([]string, 0, len(listed))
-	for _, entry := range listed {
-		switch typed := entry.(type) {
-		case string:
-			if text := strings.TrimSpace(typed); text != "" {
-				values = append(values, text)
-			}
-		case map[string]any:
-			if text := duanjuFindString(typed, "name", "title", "class_name"); text != "" {
-				values = append(values, text)
-			}
-		}
-	}
-	return values
+	return provider.StringList(value)
 }
 
 func duanjuCSV(values []string) string {
-	return strings.Join(values, ", ")
+	return provider.CSV(values)
 }
 
 func duanjuCover(base string, node map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if address := providerCoverAddress(node[key], base); address != "" {
-			return address
-		}
-	}
-	return ""
+	return provider.Cover(base, node, keys...)
 }
 
 func duanjuReleaseStatus(raw string, total, current int) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "over", "finished", "completed", "2", "已完结", "完结":
-		return "finished"
-	case "ongoing", "serializing", "1", "连载中", "更新中":
-		return "ongoing"
-	}
-	if total > 0 && current >= total {
-		return "finished"
-	}
-	if current > 0 {
-		return "ongoing"
-	}
-	return ""
+	return provider.ReleaseStatus(raw, total, current)
 }
 
 func duanjuEpisodeNumber(raw string, fallback int) int {

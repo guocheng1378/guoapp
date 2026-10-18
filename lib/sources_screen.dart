@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'source_status.dart';
@@ -41,6 +42,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
   final _expandedHealth = <String>{};
   Timer? _timer;
   bool _polling = false;
+  bool _bulk = false;
   int _ticks = 0;
 
   @override
@@ -131,14 +133,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
     }
   }
 
-  Future<void> _toggle(SourceSite source, bool enabled) async {
-    setState(() => _errors.remove(source.id));
-    if (enabled && SourceSite.isRestricted(source.id)) {
-      final pinController = TextEditingController();
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('开启 ${source.name} 需要密码'),
+  /// 弹出一次管理员密码验证。ok 为 false 表示用户取消，error 非空表示验证失败。
+  Future<({bool ok, String? error})> _askAdminPin(String title) async {
+    final pinController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassDialogShell(
+        child: AlertDialog(
+          title: Text(title),
           content: TextField(
             controller: pinController,
             obscureText: true,
@@ -157,11 +159,32 @@ class _SourcesScreenState extends State<SourcesScreen> {
             ),
           ],
         ),
-      );
-      if (confirmed != true || !mounted) return;
-      final error = await widget.store.verifyAdminPin(pinController.text);
-      if (error != null) {
-        if (mounted) setState(() => _errors[source.id] = error);
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      pinController.dispose();
+      return (ok: false, error: null);
+    }
+    final error = await widget.store.verifyAdminPin(pinController.text);
+    pinController.dispose();
+    if (!mounted) return (ok: false, error: null);
+    return (ok: true, error: error);
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _toggle(SourceSite source, bool enabled) async {
+    setState(() => _errors.remove(source.id));
+    if (enabled && SourceSite.isRestricted(source.id)) {
+      final result = await _askAdminPin('开启 ${source.name} 需要密码');
+      if (!result.ok) return;
+      if (result.error != null) {
+        setState(() => _errors[source.id] = result.error!);
         return;
       }
     }
@@ -170,6 +193,36 @@ class _SourcesScreenState extends State<SourcesScreen> {
       if (enabled) unawaited(_refresh());
     } catch (error) {
       if (mounted) setState(() => _errors[source.id] = error.toString());
+    }
+  }
+
+  /// 一键开启/关闭当前用户可见的全部站源：一次验证密码、一次提交。
+  Future<void> _setAll(bool enabled) async {
+    if (_bulk) return;
+    final sources = widget.store.permittedSources;
+    if (sources.isEmpty) return;
+    setState(() {
+      _bulk = true;
+      _errors.clear();
+    });
+    try {
+      if (enabled &&
+          sources.any((source) => SourceSite.isRestricted(source.id))) {
+        final result = await _askAdminPin('开启全部站源需要密码');
+        if (!result.ok || !mounted) return;
+        if (result.error != null) {
+          _showMessage(result.error!);
+          return;
+        }
+      }
+      await widget.store.setSourceSwitches({
+        for (final source in sources) source.id: enabled,
+      });
+      if (enabled) unawaited(_refresh());
+    } catch (error) {
+      _showMessage(error.toString());
+    } finally {
+      if (mounted) setState(() => _bulk = false);
     }
   }
 
@@ -216,12 +269,34 @@ class _SourcesScreenState extends State<SourcesScreen> {
           ? viewPaddingBottom
           : paddingBottom;
       return Scaffold(
-        appBar: AppBar(title: const Text('站源管理')),
+        appBar: AppBar(
+          flexibleSpace: const TopFog(),
+          title: const Text('站源管理'),
+          actions: [
+            if (widget.store.profile.admin && sources.isNotEmpty) ...[
+              IconButton(
+                key: const ValueKey('sources-enable-all'),
+                tooltip: '一键开启全部（受限站源需要管理员密码）',
+                onPressed: _bulk ? null : () => _setAll(true),
+                icon: const Icon(Icons.done_all_rounded),
+              ),
+              IconButton(
+                key: const ValueKey('sources-disable-all'),
+                tooltip: '一键关闭全部',
+                onPressed: _bulk ? null : () => _setAll(false),
+                icon: const Icon(Icons.remove_done_rounded),
+              ),
+            ],
+          ],
+        ),
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 960),
             child: RefreshIndicator(
-              onRefresh: _refresh,
+              onRefresh: () {
+                HapticFeedback.mediumImpact();
+                return _refresh();
+              },
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
                 children: [
@@ -236,29 +311,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                       padding: EdgeInsets.all(24),
                       child: Text('当前用户没有可用站源'),
                     ),
-                  for (final group in SourceGroup.fromSources(sources))
-                    if (group.id == 'huangguo')
-                      Card(
-                        clipBehavior: Clip.antiAlias,
-                        child: ExpansionTile(
-                          key: const PageStorageKey('source-group-huangguo'),
-                          initiallyExpanded: group.sources.any(
-                            (source) => source.id == widget.initialSource,
-                          ),
-                          leading: const Icon(Icons.hub_outlined),
-                          title: const Text('黄果'),
-                          subtitle: Text(
-                            '${group.sources.length} 个入口 · ${group.sources.fold<int>(0, (count, source) => count + (_statuses[source.id]?.count ?? 0))} 部',
-                          ),
-                          childrenPadding: const EdgeInsets.all(8),
-                          children: [
-                            for (final source in group.sources)
-                              _sourceCard(source),
-                          ],
-                        ),
-                      )
-                    else
-                      for (final source in group.sources) _sourceCard(source),
+                  ..._categorizedSources(sources),
                 ],
               ),
             ),
@@ -267,6 +320,83 @@ class _SourcesScreenState extends State<SourcesScreen> {
       );
     },
   );
+
+  List<Widget> _categorizedSources(List<SourceSite> sources) {
+    // 三分类：短剧类 / 视频类 / 黄果类。黄果类成员（黄果系入口 + 黄豆/野果/
+    // 剧果）抽出独立成区，受限名单即黄果类；黄果系各入口平铺独立卡片。
+    final huangguo = sources
+        .where((site) => site.inHuangguoCategory)
+        .toList();
+    final rest = sources
+        .where((site) => !site.inHuangguoCategory)
+        .toList();
+    final shortDrama = rest.where((site) => site.isShortDrama).toList();
+    final video = rest.where((site) => site.isVideoSource).toList();
+    return [
+      if (shortDrama.isNotEmpty) ...[
+        _categoryHeader(
+          '短剧类',
+          shortDrama.length,
+          Icons.smart_display_outlined,
+          '竖屏短剧',
+        ),
+        ..._sourceGroupsOf(shortDrama),
+      ],
+      if (video.isNotEmpty) ...[
+        _categoryHeader(
+          '视频类',
+          video.length,
+          Icons.movie_outlined,
+          '横版播放 · 多线路与清晰度',
+        ),
+        ..._sourceGroupsOf(video),
+      ],
+      if (huangguo.isNotEmpty) ...[
+        _categoryHeader(
+          '黄果类',
+          huangguo.length,
+          Icons.hub_outlined,
+          '黄果系入口 · 精选与热门短剧',
+        ),
+        ..._sourceGroupsOf(huangguo),
+      ],
+    ];
+  }
+
+  Widget _categoryHeader(
+    String title,
+    int count,
+    IconData icon,
+    String subtitle,
+  ) => Padding(
+    padding: const EdgeInsets.only(top: 4, bottom: 12),
+    child: Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 8),
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(width: 8),
+        Text('$count 个'),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            subtitle,
+            style: Theme.of(context).textTheme.bodySmall,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  List<Widget> _sourceGroupsOf(List<SourceSite> sources) {
+    // 黄果系各入口（AI/旧版等）与其它类一致：groupId 已按源拆分，
+    // 全部平铺成独立卡片，仅靠黄果类区头归拢。
+    return [
+      for (final group in SourceGroup.fromSources(sources))
+        for (final source in group.sources) _sourceCard(source),
+    ];
+  }
 
   Widget _sourceCard(SourceSite source) {
     final status = _statuses[source.id];

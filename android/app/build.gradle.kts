@@ -56,6 +56,11 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
+            // jni/jnigen 绑定（shared_preferences_android、path_provider_android 等）
+            // 在运行时按硬编码 JVM 签名反射查找方法，R8 重命名会破坏签名导致
+            // NoSuchMethodError（getAll 的 Continuation 被混淆成 y4），必须关闭压缩。
+            isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName(if (releaseKey.exists()) "release" else "debug")
         }
     }

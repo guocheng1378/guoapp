@@ -60,20 +60,19 @@ func awaitSourceTask(t *testing.T, engine *nativeEngine, source string) nativeSo
 
 func TestSourceUpdatesPreservePagesOtherSourcesAndMetadata(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		if strings.HasPrefix(request.URL.Path, "/d/") {
-			id := strings.TrimPrefix(request.URL.Path, "/d/")
-			id = strings.TrimSuffix(id, "/")
+		if strings.HasPrefix(request.URL.Path, "/video/") {
+			id := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/video/"), "/")
 			body := fmt.Sprintf(`<html><head><title>合成剧集</title></head><body>
 				<script id="o5-video-init">var videoUrl = "https://example.test/%s/index.m3u8";</script>
 				<h1 class="o5-detail__title">合成剧集</h1>
 				</body></html>`, id)
 			return sourceFixtureResponse(request, 200, body), nil
 		}
-		if !strings.HasPrefix(request.URL.Path, "/genre/") {
+		if !strings.HasPrefix(request.URL.Path, "/ai-") && !strings.HasPrefix(request.URL.Path, "/chigua/") {
 			return nil, errors.New("unexpected path: " + request.URL.Path)
 		}
 		id := "new"
-		if strings.Contains(request.URL.Path, "/page/3/") {
+		if strings.HasSuffix(request.URL.Path, "/3/") {
 			id = "continued"
 		}
 		body := fixtureHuangguoAICards(
@@ -147,41 +146,41 @@ func TestSourceJobsDeduplicateCancelAndRecoverAfterRestart(t *testing.T) {
 		<-request.Context().Done()
 		return nil, request.Context().Err()
 	})
-	engine.catalogs[sourceHuangguoVideo] = []nativeDrama{{ID: "huangguo-video:video/fixture", Source: sourceHuangguoVideo, Title: "已有缓存"}}
-	if _, err := engine.startSourceTask(sourceHuangguoVideo, "update", nativeDrama{}); err != nil {
+	engine.catalogs[sourceHuangguoAI] = []nativeDrama{{ID: "huangguoai:fixture", Source: sourceHuangguoAI, Title: "已有缓存"}}
+	if _, err := engine.startSourceTask(sourceHuangguoAI, "update", nativeDrama{}); err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if _, err := engine.startSourceTask(sourceHuangguoVideo, "check", nativeDrama{}); err != nil {
+	if _, err := engine.startSourceTask(sourceHuangguoAI, "check", nativeDrama{}); err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() != 1 || engine.sourceStatus(sourceHuangguoVideo).Operation != "update" {
+	if calls.Load() != 1 || engine.sourceStatus(sourceHuangguoAI).Operation != "update" {
 		t.Fatal("duplicate request replaced the running task")
 	}
 	if count, _ := engine.workLease("", ""); count != 1 {
 		t.Fatal("background service cannot see source work")
 	}
-	engine.cancelSourceTask(sourceHuangguoVideo)
-	status := awaitSourceTask(t, engine, sourceHuangguoVideo)
+	engine.cancelSourceTask(sourceHuangguoAI)
+	status := awaitSourceTask(t, engine, sourceHuangguoAI)
 	if status.Count != 1 || status.Stage != "已停止" {
 		t.Fatal("cancel discarded cache or did not stop", status)
 	}
-	engine.changeSourceRecord(sourceHuangguoVideo, func(record *nativeSourceRecord) { record.Running = true })
+	engine.changeSourceRecord(sourceHuangguoAI, func(record *nativeSourceRecord) { record.Running = true })
 	restored := &nativeEngine{directory: engine.directory}
 	restored.loadSourceRecords()
-	if record := restored.sourceRecords[sourceHuangguoVideo]; record.Running || record.Error == "" {
+	if record := restored.sourceRecords[sourceHuangguoAI]; record.Running || record.Error == "" {
 		t.Fatal("interrupted work stayed running")
 	}
 }
 
 func TestSourceHealthRejectsHTML200AndPreservesFailureStage(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		switch request.URL.Path {
-		case "/videos":
-			return sourceFixtureResponse(request, 200, `<article class="video-card"><a href="/video/fixture" title="合成检测剧">合成检测剧</a></article>`), nil
-		case "/video/fixture":
-			return sourceFixtureResponse(request, 200, `<h1>合成检测剧</h1><div data-hls="https://media.example.test/master.m3u8"></div>`), nil
-		case "/master.m3u8":
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/ai-") || strings.HasPrefix(request.URL.Path, "/chigua/"):
+			return sourceFixtureResponse(request, 200, fixtureHuangguoAICards(struct{ id, title, cover string }{"fixture", "合成检测剧", "https://example.test/cover"})), nil
+		case strings.HasPrefix(request.URL.Path, "/video/"):
+			return sourceFixtureResponse(request, 200, `<html><head><title>合成检测剧</title></head><body><script id="o5-video-init">var videoUrl = "https://media.example.test/master.m3u8";</script><h1 class="o5-detail__title">合成检测剧</h1></body></html>`), nil
+		case request.URL.Path == "/master.m3u8":
 			response := sourceFixtureResponse(request, 200, `<html><title>Just a moment</title><script>_cf_chl_opt={}</script>Cloudflare</html>`)
 			response.Header.Set("Content-Type", "text/html")
 			return response, nil
@@ -190,8 +189,8 @@ func TestSourceHealthRejectsHTML200AndPreservesFailureStage(t *testing.T) {
 			return nil, errors.New("blocked")
 		}
 	})
-	err := engine.checkSource(context.Background(), sourceHuangguoVideo, nativeDrama{}, true)
-	status := engine.sourceStatus(sourceHuangguoVideo)
+	err := engine.checkSource(context.Background(), sourceHuangguoAI, nativeDrama{}, true)
+	status := engine.sourceStatus(sourceHuangguoAI)
 	if err == nil || status.Health == nil || status.Health.State != "failed" || len(status.Health.Steps) != 3 || status.Health.Steps[2].State != "failed" {
 		t.Fatal("HTML 200 was reported as playable", err, status.Health)
 	}
@@ -203,26 +202,24 @@ func TestSourceHealthRejectsHTML200AndPreservesFailureStage(t *testing.T) {
 func TestSourceHealthChecksHLSKeyAndBoundedMedia(t *testing.T) {
 	var segments atomic.Int32
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		switch request.URL.Path {
-		case "/videos":
-			return sourceFixtureResponse(request, 200, `<article class="video-card"><a href="/video/fixture" title="合成检测剧">合成检测剧</a></article>`), nil
-		case "/video/fixture":
-			return sourceFixtureResponse(request, 200, `<div data-hls="https://huangguo.video/master.m3u8"></div>`), nil
-		case "/master.m3u8":
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/ai-") || strings.HasPrefix(request.URL.Path, "/chigua/"):
+			return sourceFixtureResponse(request, 200, fixtureHuangguoAICards(struct{ id, title, cover string }{"fixture", "合成检测剧", "https://example.test/cover"})), nil
+		case strings.HasPrefix(request.URL.Path, "/video/"):
+			return sourceFixtureResponse(request, 200, `<html><head><title>合成检测剧</title></head><body><script id="o5-video-init">var videoUrl = "https://media.example.test/master.m3u8";</script><h1 class="o5-detail__title">合成检测剧</h1></body></html>`), nil
+		case request.URL.Path == "/master.m3u8":
 			return sourceFixtureResponse(request, 200, "#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=320x480\nmedia.m3u8?signature=a%2Fb\n"), nil
-		case "/media.m3u8":
+		case request.URL.Path == "/media.m3u8":
 			if request.URL.RawQuery != "signature=a%2Fb" {
 				t.Error("signed media URL changed")
 			}
 			return sourceFixtureResponse(request, 200, "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"/api/hls_key/fixture\"\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST"), nil
-		case "/api/preview-token":
-			return sourceFixtureResponse(request, 200, `{"ok":true,"token":"fixture-preview","expires_in":300}`), nil
-		case "/api/hls_key/fixture":
-			if request.Header.Get("X-Preview-Token") != "fixture-preview" {
-				t.Error("missing preview token")
+		case request.URL.Path == "/api/hls_key/fixture":
+			if request.Header.Get("X-Preview-Token") != "" {
+				t.Error("leaked preview token to key")
 			}
 			return sourceFixtureResponse(request, 200, "0123456789abcdef"), nil
-		case "/segment.ts":
+		case request.URL.Path == "/segment.ts":
 			segments.Add(1)
 			if request.Header.Get("Range") != "bytes=0-1023" || request.Header.Get("X-Preview-Token") != "" {
 				t.Error("unbounded probe or leaked token")
@@ -233,25 +230,25 @@ func TestSourceHealthChecksHLSKeyAndBoundedMedia(t *testing.T) {
 			return nil, errors.New("blocked")
 		}
 	})
-	if err := engine.checkSource(context.Background(), sourceHuangguoVideo, nativeDrama{}, true); err != nil {
+	if err := engine.checkSource(context.Background(), sourceHuangguoAI, nativeDrama{}, true); err != nil {
 		t.Fatal(err)
 	}
-	health := engine.sourceStatus(sourceHuangguoVideo).Health
+	health := engine.sourceStatus(sourceHuangguoAI).Health
 	if health.State != "ok" || len(health.Steps) != 5 || segments.Load() != 1 {
 		t.Fatal("incomplete health report", health)
 	}
 	body, err := os.ReadFile(filepath.Join(engine.directory, "sources.json"))
-	if err != nil || strings.Contains(string(body), "fixture-preview") {
-		t.Fatal("health persistence leaked preview token", err)
+	if err != nil || strings.Contains(string(body), "0123456789abcdef") {
+		t.Fatal("health persistence leaked media key", err)
 	}
 	var saved map[string]nativeSourceRecord
-	if json.Unmarshal(body, &saved) != nil || saved[sourceHuangguoVideo].Health == nil {
+	if json.Unmarshal(body, &saved) != nil || saved[sourceHuangguoAI].Health == nil {
 		t.Fatal("health report was not persisted")
 	}
 }
 
 func TestSourceBackoffUsesRelativeTimeAndRetainsTypedError(t *testing.T) {
-	backoff := &requestBackoff{host: "huangguo.video", status: 403, until: time.Now().Add(time.Minute)}
+	backoff := &requestBackoff{host: "media.example.test", status: 403, until: time.Now().Add(time.Minute)}
 	if !strings.Contains(backoff.Error(), "秒后") || strings.Contains(backoff.Error(), backoff.until.Format("15:04:05")) {
 		t.Fatal("retry time depends on native timezone")
 	}

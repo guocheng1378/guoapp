@@ -272,7 +272,7 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		http.Error(writer, "媒体地址无效", http.StatusBadGateway)
 		return
 	}
-	upstream.Header.Set("User-Agent", userAgent)
+	upstream.Header.Set("User-Agent", hongguoWebMediaUserAgent(asset.address))
 	upstream.Header.Set("Referer", session.referer)
 	for _, name := range []string{"Range", "If-Range"} {
 		if value := request.Header.Get(name); value != "" {
@@ -297,6 +297,15 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		finalURL = response.Request.URL
 	}
 	playlist := strings.Contains(asset.contentType, "mpegurl") || strings.Contains(contentType, "mpegurl") || strings.HasSuffix(strings.ToLower(finalURL.Path), ".m3u8")
+	if request.Method == http.MethodGet && !playlist {
+		prefix := make([]byte, 512)
+		read, _ := io.ReadFull(response.Body, prefix)
+		head := strings.TrimSpace(strings.TrimPrefix(string(prefix[:read]), "\ufeff"))
+		if strings.HasPrefix(head, "#EXTM3U") {
+			playlist = true
+		}
+		response.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix[:read]), response.Body))
+	}
 	if playlist && request.Method == http.MethodHead {
 		writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		writer.WriteHeader(http.StatusOK)

@@ -21,6 +21,11 @@ class CategoryRepository extends FixtureRepository {
   bool paginate = false;
   final rankRequests = <String>[];
 
+  /// 每页返回的剧集数；>1 时 id/标题带序号区分。
+  /// 轮播会消费排序后前 5 条并从网格去重，布局类用例需要 batch>1
+  /// 才能保证轮播下方仍有网格封面可断言。
+  int batch = 1;
+
   @override
   Future<CatalogPage> cached(String source, {String category = ''}) async =>
       category.isEmpty
@@ -38,7 +43,6 @@ class CategoryRepository extends FixtureRepository {
       CatalogCategory('comic_series', '漫剧'),
       CatalogCategory('ai_series', 'AI 剧'),
     ],
-    'huangguo-video' => const [CatalogCategory.all, CatalogCategory('2', '短片')],
     'huangguoai' => const [
       CatalogCategory.all,
       CatalogCategory('ai-duanju', 'AI 短剧'),
@@ -66,15 +70,21 @@ class CategoryRepository extends FixtureRepository {
     }
     return CatalogPage(
       [
-        Drama(
-          id: '$source:$category:$page',
-          source: source,
-          title: '$source · ${category.isEmpty ? '全部' : category}',
-          category: source == 'hongguo' ? '异能' : '',
-        ),
+        for (var i = 0; i < batch; i++)
+          Drama(
+            id: batch == 1
+                ? '$source:$category:$page'
+                : '$source:$category:$page:$i',
+            source: source,
+            title: batch == 1
+                ? '$source · ${category.isEmpty ? '全部' : category}'
+                : '$source · ${category.isEmpty ? '全部' : category}'
+                      ' · ${i + 1}',
+            category: source == 'hongguo' ? '异能' : '',
+          ),
       ],
       page: page,
-      hasMore: paginate && source == 'huangguo-video' && page == 1,
+      hasMore: paginate && source == 'huangguoai' && page == 1,
     );
   }
 
@@ -115,6 +125,7 @@ void main() {
     String source = 'hongguo',
     double width = 390,
     double scale = 1,
+    List<String> enableSwitches = const [],
   }) async {
     tester.view.physicalSize = Size(width, 844);
     tester.view.devicePixelRatio = 1;
@@ -124,6 +135,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final store = LocalStore(await SharedPreferences.getInstance());
     addTearDown(store.dispose);
+    for (final id in enableSwitches) {
+      await store.setSourceEnabled(id, true);
+    }
     await store.setSource(source);
     await tester.pumpWidget(DuanjuApp(repository: repository, store: store));
     await tester.pumpAndSettle();
@@ -136,18 +150,20 @@ void main() {
     ) async {
       await mount(
         tester,
-        CategoryRepository(),
+        CategoryRepository()..batch = 8,
         width: width,
         scale: width == 320 ? 2 : 1,
       );
       expect(find.byType(TextField), findsNothing);
+      // 轮播大卡占据内容流顶部，网格封面顺延其下。
+      expect(find.byKey(const ValueKey('home-carousel')), findsOneWidget);
       final coverTop = tester.getTopLeft(find.byType(DramaCover).first).dy;
-      expect(coverTop, lessThan(150));
+      expect(coverTop, lessThan(340));
       final switcher = find.byKey(const ValueKey('source-switch'));
-      final rankings = find.byKey(const ValueKey('open-rankings'));
+      final search = find.byKey(const ValueKey('toggle-search'));
       expect(
         tester.getCenter(switcher).dy,
-        closeTo(tester.getCenter(rankings).dy, 2),
+        closeTo(tester.getCenter(search).dy, 2),
       );
       await tester.tap(find.byKey(const ValueKey('toggle-search')));
       await tester.pumpAndSettle();
@@ -161,21 +177,28 @@ void main() {
   }
 
   testWidgets(
-    'one Huangguo source merges catalogs and categories and rejects stale replies',
+    'each Huangguo entry loads only its own catalog and rejects stale replies',
     (tester) async {
       final repository = CategoryRepository();
-      await mount(tester, repository, source: 'huangguoai');
-      expect(find.text('黄果'), findsOneWidget);
-      expect(find.text('入口'), findsNothing);
-      expect(find.text('旧版'), findsNothing);
+      await mount(
+        tester,
+        repository,
+        source: 'huangguoai',
+        enableSwitches: ['huangguoai', 'cloudfront'],
+      );
+      expect(find.text('黄果 AI'), findsOneWidget);
+      expect(find.text('黄果旧版'), findsNothing);
       expect(
         repository.categoryRequests.toSet(),
-        containsAll(['huangguo-video||1', 'huangguoai||1', 'cloudfront||1']),
+        contains('huangguoai||1'),
       );
+      expect(repository.categoryRequests, isNot(contains('cloudfront||1')));
       expect(find.text('AI成人短剧'), findsNothing);
       expect(find.text('AI 短剧'), findsOneWidget);
       Future<void> choose(String name) async {
-        final chip = find.widgetWithText(ChoiceChip, name);
+        // 分类胶囊自「主题商店移植」起为自定义 _StoreChip（非 ChoiceChip），
+        // 直接按文字定位胶囊（分类名只在胶囊上出现）。
+        final chip = find.text(name);
         await tester.ensureVisible(chip);
         await tester.tap(chip);
         await tester.pump();
@@ -196,10 +219,11 @@ void main() {
       expect(find.text('过期分类结果'), findsNothing);
       expect(
         repository.categoryRequests,
-        containsAll(['huangguoai|ai-duanju|1', 'cloudfront|old-short|1']),
+        contains('huangguoai|ai-duanju|1'),
       );
+      expect(repository.categoryRequests, isNot(contains('cloudfront|')));
       expect(find.text('huangguoai · ai-duanju'), findsOneWidget);
-      expect(find.text('cloudfront · old-short'), findsOneWidget);
+      expect(find.text('cloudfront · old-short'), findsNothing);
       expect(tester.takeException(), isNull);
     },
     skip: !allSourcesEnabled,
@@ -243,11 +267,13 @@ void main() {
         ..failLegacy = true
         ..paginate = true;
       final browser = CatalogBrowser(repository);
-      final group = SourceGroup.fromSources(
-        SourceSite.knownValues,
-      ).firstWhere((group) => group.id == 'huangguo');
+      // 黄果系源 groupId 已按源拆分，测试组手动构造。
+      final group = SourceGroup('huangguo', '黄果', [
+        SourceSite.byId('huangguoai'),
+        SourceSite.byId('cloudfront'),
+      ]);
       final first = await browser.load(group);
-      expect(first.items.length, 2);
+      expect(first.items.length, 1);
       expect(first.warning, '合成入口失败');
       repository.failLegacy = false;
       final next = await browser.load(group, more: true);
@@ -257,9 +283,9 @@ void main() {
             .length,
         2,
       );
-      expect(repository.categoryRequests, contains('huangguo-video||2'));
-      expect(repository.categoryRequests, isNot(contains('huangguoai||2')));
-      expect(next.items.length, 4);
+      expect(repository.categoryRequests, contains('huangguoai||2'));
+      expect(repository.categoryRequests, isNot(contains('cloudfront||2')));
+      expect(next.items.length, 3);
       expect(next.warning, isEmpty);
     },
   );
@@ -269,7 +295,10 @@ void main() {
     (tester) async {
       final repository = CategoryRepository();
       await mount(tester, repository);
-      await tester.tap(find.byKey(const ValueKey('open-rankings')));
+      // 榜单入口收进「⋯ → 榜单」。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('榜单').last);
       await tester.pumpAndSettle();
       expect(repository.rankRequests, ['hongguo-hot|1|false']);
       expect(find.text('总热播榜'), findsOneWidget);

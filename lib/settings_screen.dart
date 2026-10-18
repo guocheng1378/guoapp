@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core_bridge.dart';
+import 'glass.dart';
+import 'glass_preferences.dart';
 import 'app_theme.dart';
 import 'app_layout.dart';
 import 'background_downloads.dart';
@@ -71,27 +74,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     final selected = await showDialog<String>(
       context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('外观主题'),
-        children: [
-          RadioGroup<String>(
-            groupValue: widget.store.themeMode,
-            onChanged: (value) => Navigator.pop(context, value),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final mode in ['light', 'dark', 'system'])
-                  RadioListTile<String>(
-                    value: mode,
-                    title: Text(AppTheme.label(mode)),
-                    subtitle: mode == 'system'
-                        ? const Text('随设备的深色模式自动切换')
-                        : null,
-                  ),
-              ],
+      builder: (context) => GlassDialogShell(
+        child: SimpleDialog(
+          title: const Text('外观主题'),
+          children: [
+            RadioGroup<String>(
+              groupValue: widget.store.themeMode,
+              onChanged: (value) => Navigator.pop(context, value),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final mode in ['light', 'dark', 'system'])
+                    RadioListTile<String>(
+                      value: mode,
+                      title: Text(AppTheme.label(mode)),
+                      subtitle: mode == 'system'
+                          ? const Text('随设备的深色模式自动切换')
+                          : null,
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
     if (selected != null && mounted) {
@@ -151,19 +156,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           accepted =
               await showDialog<bool>(
                 context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('恢复备份？'),
-                  content: Text(summary),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('取消'),
-                    ),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('恢复'),
-                    ),
-                  ],
+                builder: (context) => GlassDialogShell(
+                  child: AlertDialog(
+                    title: const Text('恢复备份？'),
+                    content: Text(summary),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('恢复'),
+                      ),
+                    ],
+                  ),
                 ),
               ) ??
               false;
@@ -226,6 +233,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       title: '外观主题',
       subtitle: AppTheme.label(widget.store.themeMode),
       onPressed: _chooseTheme,
+    ),
+    (
+      id: 'glass-effect',
+      icon: Icons.blur_on_rounded,
+      title: '玻璃效果',
+      subtitle: GlassPreferences.enabled.value
+          ? '已开启：瓷面浮层质感'
+          : '已关闭：不透明浮层（低端设备更流畅）',
+      onPressed: () {
+        unawaited(GlassPreferences.setEnabled(!GlassPreferences.enabled.value));
+        setState(() {});
+      },
     ),
     (
       id: 'profiles',
@@ -323,7 +342,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
     builder: (_, _) => Scaffold(
-      appBar: AppBar(title: const Text('设置与备份')),
+      appBar: AppBar(
+          title: const Text('设置与备份'),
+          flexibleSpace: const TopFog(),
+        ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
@@ -382,6 +404,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(AppTheme.label(widget.store.themeMode)),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: _chooseTheme,
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: GlassPreferences.enabled,
+                builder: (context, glass, _) => SwitchListTile(
+                  key: const ValueKey('glass-setting'),
+                  value: glass,
+                  title: const Text('玻璃效果'),
+                  subtitle: const Text('瓷面浮层质感；低端设备可关闭以提升流畅度'),
+                  onChanged: (value) =>
+                      saveUserChange(context, () => GlassPreferences.setEnabled(value)),
+                ),
               ),
               ListTile(
                 leading: const Icon(Icons.people_outline),
@@ -557,15 +590,17 @@ class _StorageScreenState extends State<StorageScreen> {
       if (!mounted) return;
       parent = await showDialog<String>(
         context: context,
-        builder: (context) => SimpleDialog(
-          title: const Text('选择下载位置'),
-          children: [
-            for (final entry in directories.entries)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, entry.key),
-                child: Text(entry.value),
-              ),
-          ],
+        builder: (context) => GlassDialogShell(
+          child: SimpleDialog(
+            title: const Text('选择下载位置'),
+            children: [
+              for (final entry in directories.entries)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, entry.key),
+                  child: Text(entry.value),
+                ),
+            ],
+          ),
         ),
       );
     } else {
@@ -574,21 +609,23 @@ class _StorageScreenState extends State<StorageScreen> {
     if (parent == null || !mounted) return;
     final yes = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('迁移已下载内容？'),
-        content: Text(
-          '将视频、合并成品及导出内容迁移到：\n$parent\n\n下载会先暂停，复制成功后清理旧目录。请保证目标有足够空间，并在完成后继续下载。',
+      builder: (context) => GlassDialogShell(
+        child: AlertDialog(
+          title: const Text('迁移已下载内容？'),
+          content: Text(
+            '将视频、合并成品及导出内容迁移到：\n$parent\n\n下载会先暂停，复制成功后清理旧目录。请保证目标有足够空间，并在完成后继续下载。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('迁移'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('迁移'),
-          ),
-        ],
       ),
     );
     if (yes != true || !mounted) return;
@@ -610,7 +647,10 @@ class _StorageScreenState extends State<StorageScreen> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_busy,
     child: Scaffold(
-      appBar: AppBar(title: const Text('下载目录与空间')),
+      appBar: AppBar(
+          title: const Text('下载目录与空间'),
+          flexibleSpace: const TopFog(),
+        ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),

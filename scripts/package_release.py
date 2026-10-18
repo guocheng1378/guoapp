@@ -56,7 +56,7 @@ else:
     artifacts.append(target)
 
 checksums = []
-for artifact in sorted(output.glob(f'*-{version}-*')):
+for artifact in sorted(p for p in output.glob(f'*-{version}-*') if p.is_file()):
     digest = hashlib.sha256()
     with artifact.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):

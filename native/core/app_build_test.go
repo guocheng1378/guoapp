@@ -11,7 +11,7 @@ import (
 )
 
 func TestNativeBuildAuthorization(t *testing.T) {
-	for _, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoVideo, sourceHuangguoAI, sourceCloudFront, sourceDSD, "unknown"} {
+	for _, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoAI, sourceCloudFront, "unknown"} {
 		allowed := source == sourceHongguo || buildAllSources == "true" && source != "unknown"
 		for _, action := range []string{"catalog", "cached", "sourceStatus", "sourceJob", "cancelSourceJob", "detail", "cover", "resolve", "enqueueDownloads", "localPlayback"} {
 			input := nativeInput{Action: action, Source: source, Drama: nativeDrama{ID: source + ":123", Source: source}}
@@ -41,7 +41,7 @@ func TestNativeBuildAuthorization(t *testing.T) {
 func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *testing.T) {
 	manager := downloadTestManager(t)
 	records := []*nativeDownloadRecord{}
-	for index, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoVideo, sourceHuangguoAI, sourceCloudFront, sourceDSD} {
+	for index, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoAI, sourceCloudFront} {
 		drama := nativeDrama{ID: source + ":123", Source: source, Title: "合成下载"}
 		record := &nativeDownloadRecord{nativeDownloadJob: nativeDownloadJob{
 			ID: nativeDownloadID(drama.ID, 1), Drama: drama, Index: 1,
@@ -61,7 +61,7 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 	jobs, err := reopened.snapshot()
 	expected := 1
 	if buildAllSources == "true" {
-		expected = 6
+		expected = 4
 	}
 	if err != nil || len(jobs) != expected {
 		t.Fatalf("wrong visible downloads: %v, %v", jobs, err)
@@ -125,13 +125,8 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 			t.Fatal(err)
 		}
 		var saved []nativeDownloadRecord
-		if err := json.Unmarshal(stored, &saved); err != nil || len(saved) != 6 {
+		if err := json.Unmarshal(stored, &saved); err != nil || len(saved) != 4 {
 			t.Fatalf("saved hidden downloads lost: %v", err)
-		}
-	}
-	if buildAllSources == "true" {
-		if job := reopened.jobs[nativeDownloadID(sourceDSD+":123", 1)]; job == nil {
-			t.Fatal("DSD download was lost during bulk operations")
 		}
 	}
 }

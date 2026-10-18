@@ -182,10 +182,12 @@ func parseHuangguoRanking(body string, board rankingBoard) (rankingPage, error) 
 			seen, previous := map[string]bool{}, 0
 			for _, item := range graph.Items {
 				parsed, err := url.Parse(item.URL)
-				if err != nil || !strings.HasPrefix(parsed.Path, "/detail/") {
+				if err != nil || (!strings.HasPrefix(parsed.Path, "/detail/") && !strings.HasPrefix(parsed.Path, "/video/")) {
 					return rankingPage{}, failure
 				}
-				id := strings.TrimSuffix(strings.TrimPrefix(parsed.Path, "/detail/"), "/")
+				path := strings.TrimPrefix(parsed.Path, "/detail/")
+				path = strings.TrimPrefix(path, "/video/")
+				id := strings.TrimSuffix(path, "/")
 				if !rankingSourceID.MatchString(id) || strings.TrimSpace(item.Name) == "" || item.Position <= previous || seen[id] {
 					return rankingPage{}, failure
 				}

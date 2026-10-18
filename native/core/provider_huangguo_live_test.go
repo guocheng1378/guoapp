@@ -5,7 +5,6 @@ package core
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"testing"
 	"time"
 )
@@ -14,9 +13,8 @@ func TestHuangguoAIRealSiteCatalogAndDetail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	proxyURL, _ := url.Parse("http://127.0.0.1:18080")
 	transport := &http.Transport{
-		Proxy:               http.ProxyURL(proxyURL),
+		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        20,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
@@ -33,7 +31,8 @@ func TestHuangguoAIRealSiteCatalogAndDetail(t *testing.T) {
 	}
 
 	t.Run("catalog", func(t *testing.T) {
-		cats := []string{"rebuo-duanju", "jingxuan-duanju", "bikan-duanju", "quanbu-duanju", "renqi-duanju"}
+		cats := []string{"ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai", "chigua"}
+		var firstID string
 		for _, cat := range cats {
 			items, more, err := d.fetchHuangguoAICatalogPage(ctx, 1, cat)
 			if err != nil {
@@ -44,6 +43,9 @@ func TestHuangguoAIRealSiteCatalogAndDetail(t *testing.T) {
 				t.Errorf("  %s 目录为空!", cat)
 				continue
 			}
+			if firstID == "" {
+				firstID = items[0].SourceID
+			}
 			t.Logf("  %-20s %3d 条  more=%v", cat, len(items), more)
 			for i, it := range items {
 				if i >= 2 {
@@ -52,32 +54,34 @@ func TestHuangguoAIRealSiteCatalogAndDetail(t *testing.T) {
 				t.Logf("    [%d] srcID=%s  title=%s", i, it.SourceID, it.Title)
 			}
 		}
-	})
-
-	t.Run("detail_and_m3u8", func(t *testing.T) {
-		testCases := []string{"fang-mi-shu-ting-bu-dong-ren-hua", "dong-kuai-kai-men", "zuo-shou-ren-xin-you-shou-yan-luo"}
-		for _, srcID := range testCases {
-			_, chapters, err := d.GetHuangguoChapters(ctx, sourceHuangguoAI, srcID)
+		paged, _, err := d.fetchHuangguoAICatalogPage(ctx, 2, "ai-duanju")
+		if err != nil {
+			t.Logf("  page2 FAIL: %v", err)
+		} else {
+			t.Logf("  page2 ai-duanju %d 条", len(paged))
+		}
+		t.Run("detail_and_m3u8", func(t *testing.T) {
+			if firstID == "" {
+				t.Skip("catalog empty, no source id to verify")
+			}
+			_, chapters, err := d.GetHuangguoChapters(ctx, sourceHuangguoAI, firstID)
 			if err != nil {
-				t.Errorf("  %-50s FAIL: %v", srcID, err)
-				continue
+				t.Fatalf("  %s FAIL: %v", firstID, err)
 			}
 			if len(chapters) == 0 {
-				t.Errorf("  %-50s 无章节", srcID)
-				continue
+				t.Fatalf("  %s 无章节", firstID)
 			}
 			ch := chapters[0]
 			vl := ch.VideoURL
-			t.Logf("  %-50s title=%s", srcID, ch.Title)
-			t.Logf("    chapters=%d  videoURL=%s...", len(chapters), vl[:minInt(80, len(vl))])
+			t.Logf("  %s title=%s chapters=%d videoURL=%s...", firstID, ch.Title, len(chapters), vl[:minInt(80, len(vl))])
 			body, err := d.fetchProviderText(ctx, vl, "")
 			if err != nil {
 				t.Errorf("    m3u8 HTTP FAIL: %v", err)
 			} else {
-				ok := len(body) > 10 && (body[:7] == "#EXTM3U")
+				ok := len(body) > 10 && body[:7] == "#EXTM3U"
 				t.Logf("    m3u8 bytes=%d  valid=%v", len(body), ok)
 			}
-		}
+		})
 	})
 }
 

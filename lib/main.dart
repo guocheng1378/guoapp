@@ -12,6 +12,7 @@ import 'core_bridge.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'glass_preferences.dart';
 import 'home_screen.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
@@ -112,6 +113,7 @@ class _AppBootstrapState extends State<AppBootstrap>
     });
     try {
       final preferences = await SharedPreferences.getInstance();
+      await GlassPreferences.load(preferences);
       await _refreshDevice();
       await repository.initialize();
       if (mounted) {

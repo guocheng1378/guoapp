@@ -3,11 +3,11 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"duanjuapp/native/provider"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,23 +22,21 @@ type Config struct {
 	PageSize         int
 	Retries          int
 	InsecureTLS      bool
-	HuangguoAIURL    string
-	HuangguoVideoURL string
-	HuangdouURL      string
-	HongguoURL       string
-	HuangjuURL       string
-	HuangjuAPIURL    string
-	YeguoURL         string
-	YeguoAPIURL      string
-	SoraniAPIURL     string
-	DSDURL           string
-	Token            string
-	AESKeyHex        string
-	InterfaceKey     string
-	ParamKey         string
-	ParamIV          string
-	APIBase          string
-	CDNURL           string
+	HuangguoAIURL string
+	HuangdouURL   string
+	HongguoURL    string
+	HuangjuURL    string
+	HuangjuAPIURL string
+	YeguoURL      string
+	YeguoAPIURL   string
+	SoraniAPIURL  string
+	Token         string
+	AESKeyHex     string
+	InterfaceKey  string
+	ParamKey      string
+	ParamIV       string
+	APIBase       string
+	CDNURL        string
 }
 
 type Downloader struct {
@@ -59,15 +57,12 @@ type Downloader struct {
 	yeguo                 *yeguoAPIClient
 	soraniOnce            sync.Once
 	sorani                *soraniAPIClient
-	dsdCatalog            dsdCatalogState
 	diagnostics           *diagnosticLog
 	apiMu                 sync.Mutex
 	apiBase               string
 	apiFailures           map[string]time.Time
 	legacyOnce            sync.Once
 	legacy                *legacyAPIClient
-	previewMu             sync.Mutex
-	previewSessions       map[string]*huangguoPreviewSession
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -182,29 +177,7 @@ var nativeState struct {
 }
 
 func nativeText(value any) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case map[string]any:
-		for _, key := range []string{"url", "src", "cover", "image", "pic"} {
-			if text := nativeText(v[key]); text != "" {
-				return text
-			}
-		}
-	case []any:
-		for _, entry := range v {
-			if text := nativeText(entry); text != "" {
-				return text
-			}
-		}
-	case json.Number:
-		return string(v)
-	case float64:
-		return strconv.Itoa(int(v))
-	case int:
-		return strconv.Itoa(v)
-	}
-	return ""
+	return provider.NativeText(value)
 }
 
 func nativeNormalize(drama Drama) nativeDrama {
@@ -267,9 +240,6 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("站源重定向次数过多")
-			}
-			if len(via) > 0 && !strings.EqualFold(request.URL.Host, via[0].URL.Host) {
-				request.Header.Del("X-Preview-Token")
 			}
 			return nil
 		}}
@@ -535,15 +505,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && (source == sourceYeguo || source == sourceDSD) {
-		var items []Drama
-		var more bool
-		var err error
-		if source == sourceYeguo {
-			items, more, err = d.fetchYeguoCatalogPage(ctx, page, "", query)
-		} else {
-			items, more, err = d.fetchDSDCatalogPage(ctx, page, "", query)
-		}
+	if query != "" && source == sourceYeguo {
+		items, more, err := d.fetchYeguoCatalogPage(ctx, page, "", query)
 		if err != nil {
 			return result, err
 		}
@@ -636,19 +599,6 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchHuangjuCatalogPage(ctx, page, category, "")
 	case sourceYeguo:
 		items, result.HasMore, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
-	case sourceDSD:
-		items, result.HasMore, err = d.fetchDSDCatalogPage(ctx, page, category, "")
-	case sourceHuangguoVideo:
-		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
-		if category != "" {
-			address += "&category=" + url.QueryEscape(category)
-		}
-		var body string
-		body, err = d.fetchProviderText(ctx, address, d.providerBaseURL(source)+"/")
-		if err == nil {
-			items = parseHuangguoVideoCards(body, address)
-		}
-		result.HasMore = len(items) >= 20
 	case sourceCloudFront:
 		items, result.HasMore, err = d.fetchLegacyCatalogCategoryPage(ctx, page, category)
 	default:
@@ -659,7 +609,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if err != nil && len(items) == 0 {
 		return result, err
 	}
-	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceDSD && !isDuanjuProviderSource(source) {
+	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && !isDuanjuProviderSource(source) {
 		return result, errors.New("站源暂未返回剧集，请稍后刷新")
 	}
 	if err != nil {
@@ -689,16 +639,12 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 	switch source {
 	case sourceHuangguoAI:
 		raw, chapters, err = engine.downloader.fetchHuangguoAIDetail(ctx, sourceID)
-	case sourceHuangguoVideo:
-		raw, chapters, err = engine.downloader.fetchHuangguoVideoDetail(ctx, sourceID)
 	case sourceCloudFront:
 		raw, chapters, err = engine.downloader.fetchLegacyDetail(ctx, sourceID)
 	case sourceHuangju:
 		raw, chapters, err = engine.downloader.fetchHuangjuDetail(ctx, sourceID)
 	case sourceYeguo:
 		raw, chapters, err = engine.downloader.fetchYeguoDetail(ctx, sourceID)
-	case sourceDSD:
-		raw, chapters, err = engine.downloader.fetchDSDDetail(ctx, sourceID)
 	default:
 		if isDuanjuProviderSource(source) {
 			raw, chapters, err = engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)

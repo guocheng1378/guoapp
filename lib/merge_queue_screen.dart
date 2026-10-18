@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'models.dart';
@@ -73,7 +74,8 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
       final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => StatefulBuilder(
-          builder: (context, change) => AlertDialog(
+          builder: (context, change) => GlassDialogShell(
+            child: AlertDialog(
             title: const Text('选择要合并的剧'),
             content: SizedBox(
               width: 520,
@@ -135,6 +137,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
               ),
             ],
           ),
+          ),
         ),
       );
       if (accepted != true || !mounted || !_allowed) return;
@@ -169,6 +172,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
       final jobs = widget.library.merges.items;
       return Scaffold(
         appBar: AppBar(
+          flexibleSpace: const TopFog(),
           title: const Text('合并队列'),
           actions: [
             IconButton(

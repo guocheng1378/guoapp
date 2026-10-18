@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'catalog_filters.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_launch_screen.dart';
@@ -120,11 +122,6 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final refresh = RefreshAction(
-      loading: _loading || _more,
-      tooltip: '刷新推荐',
-      onPressed: () => _load(force: true),
-    );
     final content = Column(
       children: [
         CatalogFilters(
@@ -133,7 +130,6 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
           onCategory: _select,
           onRetry: () => _load(force: true),
           onExitDown: () => widget.gridKey?.currentState?.focusCurrent(),
-          trailing: widget.embedded ? refresh : null,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -237,7 +233,12 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                       );
                     }
                     return RefreshIndicator(
-                    onRefresh: () => _load(force: true),
+                    onRefresh: () {
+                      HapticFeedback.mediumImpact();
+                      return _load(force: true);
+                    },
+                    // anywhere：与首页下拉手感一致（顶部边缘之外起手也计刷新）。
+                    triggerMode: RefreshIndicatorTriggerMode.anywhere,
                     child: CustomScrollView(
                       controller: _scroll,
                       physics: const AlwaysScrollableScrollPhysics(),
@@ -301,7 +302,10 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
     );
     if (widget.embedded) return content;
     return Scaffold(
-      appBar: AppBar(title: const Text('红果推荐'), actions: [refresh]),
+      appBar: AppBar(
+          title: const Text('红果推荐'),
+          flexibleSpace: const TopFog(),
+        ),
       body: SafeArea(top: false, child: content),
     );
   }

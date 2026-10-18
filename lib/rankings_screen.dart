@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
 import 'catalog_filters.dart';
 import 'core_bridge.dart';
 import 'detail_screen.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'ranking_models.dart';
+import 'rank_local_boards.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 
@@ -27,6 +30,8 @@ class RankingsScreen extends StatefulWidget {
 
 class _RankingsScreenState extends State<RankingsScreen> {
   final _scroll = ScrollController();
+  final _localBoardsKey = GlobalKey<RemoteRowState>();
+  final _groupsKey = GlobalKey<RemoteRowState>();
   final _boardsKey = GlobalKey<RemoteRowState>();
   final _listKey = GlobalKey<RemoteListState>();
   List<RankingBoard> _boards = [];
@@ -40,6 +45,15 @@ class _RankingsScreenState extends State<RankingsScreen> {
   int _generation = 0;
   String? _error;
   String _updated = '';
+
+  /// 跨源本地榜（实时热度 / 排期表）的当前选择，优先于 [_board]。
+  LocalBoard? _localBoard;
+  /// 拉取到的各站源目录页条目，本地榜的数据原料。
+  List<Drama> _localCatalogs = [];
+  bool _localLoading = false;
+  /// 排期表展平后的行：`_ScheduleHeader` 或 `RankingItem`。
+  List<Object> _localRows = [];
+  String _localWarning = '';
 
   @override
   void initState() {
@@ -147,17 +161,108 @@ class _RankingsScreenState extends State<RankingsScreen> {
     }
   }
 
-  void _select(RankingBoard board) {
+  /// 站源开关与 VIP 过滤，榜内与本地榜共用。
+  bool _passes(Drama drama) =>
+      widget.store.allowsSource(drama.source) &&
+      !(drama.source == 'huangdou' && widget.store.hideVip && drama.vip);
+
+  bool _isFollowing(Drama drama) => widget.store.isFavorite(drama.id);
+
+  void _resetBoardState() {
+    _items = [];
+    _localRows = [];
+    _updated = '';
+    _page = 1;
+    _hasMore = false;
+  }
+
+  void _selectBoardId(String id) {
+    if (isLocalBoardId(id)) {
+      if (_localBoard?.id == id) return;
+      setState(() {
+        _localBoard = localBoards.firstWhere((board) => board.id == id);
+        _board = null;
+        _error = null;
+        _resetBoardState();
+      });
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+      _loadLocal();
+      return;
+    }
+    final board = _boards.firstWhere((board) => board.id == id);
     if (_board?.id == board.id) return;
     setState(() {
       _board = board;
-      _items = [];
-      _updated = '';
-      _page = 1;
-      _hasMore = false;
+      _localBoard = null;
+      _error = null;
+      _resetBoardState();
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
     _load();
+  }
+
+  /// 本地榜不请求任何榜单接口：用各站源目录页已有的 heat/views/onlineDate 聚合。
+  ///
+  /// 原料只在首次或强制刷新时拉取，之后两个本地榜共用同一批目录。
+  Future<void> _loadLocal({bool force = false}) async {
+    final local = _localBoard;
+    if (local == null) return;
+    final generation = ++_generation;
+    setState(() {
+      _localLoading = true;
+      _error = null;
+    });
+    try {
+      if (_localCatalogs.isEmpty || force) {
+        final sources = {for (final board in _boards) board.source}.toList();
+        final pages = await Future.wait([
+          for (final source in sources)
+            widget.repository
+                .catalog(source, force: force)
+                .then((page) => page.items)
+                .catchError((Object _) => const <Drama>[]),
+        ]);
+        if (!mounted || generation != _generation) return;
+        final dramas = <Drama>[];
+        for (final rows in pages) {
+          dramas.addAll(rows);
+        }
+        _localCatalogs = dramas;
+        _localWarning = _localCatalogs.isEmpty ? '各站源目录暂无数据。' : '';
+      }
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _localRows = local.kind == LocalBoardKind.schedule
+            ? _scheduleRows()
+            : buildHeatBoard(_visible(_localCatalogs));
+        _localLoading = false;
+        _error = _localWarning.isEmpty ? null : _localWarning;
+      });
+    } catch (error) {
+      if (mounted && generation == _generation) {
+        setState(() {
+          _error = error.toString();
+          _localLoading = false;
+        });
+      }
+    }
+  }
+
+  List<Drama> _visible(Iterable<Drama> dramas) =>
+      dramas.where(_passes).toList();
+
+  /// 排期表展平为「表头 + 条目」的行序列，手机端与 TV 端共用同一份数据。
+  List<Object> _scheduleRows() {
+    final groups = buildScheduleGroups(
+      _visible(_localCatalogs),
+      isFollowing: _isFollowing,
+    );
+    return [
+      for (final group in groups) ...[
+        _ScheduleHeader(group.label, group.total),
+        ...group.items,
+      ],
+    ];
   }
 
   @override
@@ -177,42 +282,34 @@ class _RankingsScreenState extends State<RankingsScreen> {
             metric: item.metric,
           ),
         )
-        .where(
-          (item) =>
-              widget.store.allowsSource(item.drama.source) &&
-              !(item.drama.source == 'huangdou' &&
-                  widget.store.hideVip &&
-                  item.drama.vip),
+        .where((item) => _passes(item.drama))
+        .toList();
+    final localRows = _localRows
+        .map(
+          (row) => row is RankingItem
+              ? RankingItem(
+                  row.rank,
+                  widget.repository.catalogUpdates.current(row.drama),
+                  metric: row.metric,
+                )
+              : row,
         )
         .toList();
+    final rows = _localBoard == null ? items : localRows;
+    final busy = _localBoard == null ? _loading || _more : _localLoading;
     return Scaffold(
       appBar: AppBar(
-        title: PopupMenuButton<SourceGroup>(
-          tooltip: '切换榜单站源',
-          enabled: groups.length > 1,
-          onSelected: (group) =>
-              _select(_boards.firstWhere((board) => board.groupId == group.id)),
-          itemBuilder: (_) => [
-            for (final group in groups)
-              PopupMenuItem(value: group, child: Text(group.name)),
-          ],
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _board == null
-                    ? '榜单'
-                    : '${SourceSite.byId(_board!.source).groupName}榜单',
-              ),
-              if (groups.length > 1) const Icon(Icons.expand_more_rounded),
-            ],
-          ),
-        ),
+          flexibleSpace: const TopFog(),
+        title: const Text('榜单'),
         actions: [
           RefreshAction(
-            loading: _loading || _more,
+            loading: busy,
             tooltip: '更新榜单',
-            onPressed: _board == null ? _initialize : () => _load(force: true),
+            onPressed: _localBoard != null
+                ? () => _loadLocal(force: true)
+                : _board == null
+                ? _initialize
+                : () => _load(force: true),
           ),
         ],
       ),
@@ -220,7 +317,44 @@ class _RankingsScreenState extends State<RankingsScreen> {
         top: false,
         child: Column(
           children: [
-            if (boards.isNotEmpty)
+            if (_boards.isNotEmpty)
+              CatalogFilters(
+                key: const ValueKey('ranking-local-boards'),
+                categories: [
+                  for (final board in localBoards)
+                    CatalogCategory(board.id, board.name),
+                ],
+                category: _localBoard?.id ?? '',
+                remoteKey: _localBoardsKey,
+                remoteAutofocus: television,
+                onExitDown: television
+                    ? () => _groupsKey.currentState?.focusCurrent()
+                    : null,
+                onCategory: _selectBoardId,
+                onRetry: _initialize,
+              ),
+            if (_localBoard == null && groups.length > 1)
+              CatalogFilters(
+                key: ValueKey('ranking-groups-${_board?.groupId}'),
+                categories: [
+                  for (final group in groups)
+                    CatalogCategory(group.id, group.name),
+                ],
+                category: _board?.groupId ?? '',
+                remoteKey: _groupsKey,
+                remoteAutofocus: television && _boards.isEmpty,
+                onExitUp: television && _boards.isNotEmpty
+                    ? () => _localBoardsKey.currentState?.focusCurrent()
+                    : null,
+                onExitDown: television
+                    ? () => _boardsKey.currentState?.focusCurrent()
+                    : null,
+                onCategory: (id) => _selectBoardId(
+                  _boards.firstWhere((board) => board.groupId == id).id,
+                ),
+                onRetry: _initialize,
+              ),
+            if (_localBoard == null && boards.isNotEmpty)
               CatalogFilters(
                 key: ValueKey('ranking-boards-${_board!.groupId}'),
                 categories: [
@@ -229,31 +363,32 @@ class _RankingsScreenState extends State<RankingsScreen> {
                 ],
                 category: _board!.id,
                 remoteKey: _boardsKey,
-                remoteAutofocus: television,
+                remoteAutofocus: television && groups.length <= 1,
+                onExitUp: television && groups.length > 1
+                    ? () => _groupsKey.currentState?.focusCurrent()
+                    : null,
                 onExitDown: television
                     ? () => _listKey.currentState?.focusCurrent()
                     : null,
-                onCategory: (id) =>
-                    _select(boards.firstWhere((board) => board.id == id)),
+                onCategory: (id) => _selectBoardId(id),
                 onRetry: () => _load(force: true),
               ),
-            if (_board != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    [
-                      _board!.description,
-                      if (_updated.isNotEmpty) _updated,
-                    ].join(' '),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  [
+                    _localBoard?.description ?? _board?.description ?? '',
+                    if (_updated.isNotEmpty) _updated,
+                  ].join(' ').trim(),
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            if (_loading && items.isNotEmpty)
+            ),
+            if (busy && rows.isNotEmpty)
               const LinearProgressIndicator(minHeight: 2),
-            if (_error != null && items.isNotEmpty)
+            if (_error != null && rows.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
@@ -267,8 +402,10 @@ class _RankingsScreenState extends State<RankingsScreen> {
                       ),
                     ),
                     TextButton(
-                      onPressed: _loading || _more
+                      onPressed: busy
                           ? null
+                          : _localBoard != null
+                          ? () => _loadLocal(force: true)
                           : () => _load(more: _failedMore, force: true),
                       child: const Text('重试'),
                     ),
@@ -276,7 +413,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
                 ),
               ),
             Expanded(
-              child: _loading && items.isEmpty
+              child: busy && rows.isEmpty
                   ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -289,11 +426,17 @@ class _RankingsScreenState extends State<RankingsScreen> {
                         ],
                       ),
                     )
-                  : items.isEmpty
+                  : rows.isEmpty
                   ? StatusPanel(
                       title: _error == null ? '暂无榜单内容' : '榜单暂时无法加载',
-                      message: _error ?? '当前站源暂无可显示的榜单。',
-                      onRetry: _board == null
+                      message:
+                          _error ??
+                          (_localBoard != null
+                              ? '当前没有可聚合的站源目录数据。'
+                              : '当前站源暂无可显示的榜单。'),
+                      onRetry: _localBoard != null
+                          ? () => _loadLocal(force: true)
+                          : _board == null
                           ? _initialize
                           : () => _load(force: true),
                     )
@@ -301,29 +444,53 @@ class _RankingsScreenState extends State<RankingsScreen> {
                   ? RemoteList(
                       key: _listKey,
                       itemKeys: [
-                        for (final item in items)
-                          '${item.rank}-${item.drama.id}',
+                        for (final row in rows)
+                          if (row is _ScheduleHeader)
+                            'schedule-${row.label}'
+                          else if (row is RankingItem)
+                            '${row.rank}-${row.drama.id}'
+                          else
+                            'ranking-row',
                       ],
                       itemExtent: 140,
                       spacing: 10,
                       controller: _scroll,
                       onExitUp: () => _boardsKey.currentState?.focusCurrent(),
-                      itemBuilder: (_, index, node, onFocus) => _rankTile(
-                        items[index],
-                        focusNode: node,
-                        onFocus: onFocus,
-                      ),
+                      itemBuilder: (_, index, node, onFocus) {
+                        final row = rows[index];
+                        if (row is _ScheduleHeader) {
+                          return _scheduleHeader(row, tall: true);
+                        }
+                        if (row is! RankingItem) {
+                          return const SizedBox.shrink();
+                        }
+                        return _rankTile(
+                          row,
+                          focusNode: node,
+                          onFocus: onFocus,
+                        );
+                      },
                     )
                   : RefreshIndicator(
-                      onRefresh: () => _load(force: true),
+                      onRefresh: () {
+                        HapticFeedback.mediumImpact();
+                        return _localBoard != null
+                            ? _loadLocal(force: true)
+                            : _load(force: true);
+                      },
                       child: ListView.builder(
-                        key: ValueKey('ranking-${_board!.id}'),
+                        key: ValueKey(
+                          _localBoard != null
+                              ? 'ranking-${_localBoard!.id}'
+                              : 'ranking-${_board!.id}',
+                        ),
                         controller: _scroll,
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-                        itemCount: items.length + 1,
+                        itemCount:
+                            rows.length + (_localBoard == null ? 1 : 0),
                         itemBuilder: (context, index) {
-                          if (index == items.length) {
+                          if (_localBoard == null && index == rows.length) {
                             return Center(
                               child: _more
                                   ? const Padding(
@@ -341,7 +508,14 @@ class _RankingsScreenState extends State<RankingsScreen> {
                                     ),
                             );
                           }
-                          return _rankTile(items[index]);
+                          final row = rows[index];
+                          if (row is _ScheduleHeader) {
+                            return _scheduleHeader(row);
+                          }
+                          if (row is! RankingItem) {
+                            return const SizedBox.shrink();
+                          }
+                          return _rankTile(row);
                         },
                       ),
                     ),
@@ -352,12 +526,88 @@ class _RankingsScreenState extends State<RankingsScreen> {
     );
   }
 
+  Widget _scheduleHeader(_ScheduleHeader header, {bool tall = false}) {
+    final theme = Theme.of(context);
+    final total = '更新 ${header.total} 部';
+    if (tall) {
+      return Card(
+        child: SizedBox(
+          height: 140,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(header.label, style: theme.textTheme.titleMedium),
+                const SizedBox(height: 6),
+                Text(total, style: theme.textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Row(
+        children: [
+          Text(header.label, style: theme.textTheme.titleSmall),
+          const SizedBox(width: 8),
+          Text(total, style: theme.textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+
+  /// 分类标签 / 集数 / 更新进度 / 追更标记。
+  ///
+  /// 文案对齐云追条目：`[分类]`（`text_topic_tag_count`）、
+  /// 「共 N 部」（`text_topic_count`）、「更新至 N 集」（`text_update_to_episode`）。
+  Widget _rankMeta(RankingItem item) {
+    final theme = Theme.of(context);
+    final tags = categoryTagLabel(item.drama);
+    final episodes = episodeCountLabel(item.drama);
+    final update = updateLabel(item.drama);
+    final following = _isFollowing(item.drama);
+    if (tags.isEmpty && episodes.isEmpty && update.isEmpty && !following) {
+      return const SizedBox.shrink();
+    }
+    final style = theme.textTheme.bodySmall?.copyWith(fontSize: 12);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (final text in [tags, episodes, update])
+            if (text.isNotEmpty)
+              Text(
+                text,
+                style: style,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+          if (following)
+            Text(
+              '追更中',
+              style: style?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _rankTile(
     RankingItem item, {
     FocusNode? focusNode,
     VoidCallback? onFocus,
   }) {
     final theme = Theme.of(context);
+    final metric = rankingMetricLabel(item);
+    final update = updateLabel(item.drama);
+    final following = _isFollowing(item.drama);
     void open() => Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -405,18 +655,28 @@ class _RankingsScreenState extends State<RankingsScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium,
                 ),
-                if (item.drama.category.isNotEmpty)
-                  Text(
-                    item.drama.category,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                if (item.metric.isNotEmpty)
+                const SizedBox(height: 2),
+                _rankMeta(item),
+                if (metric.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      item.metric,
-                      style: TextStyle(color: theme.colorScheme.primary),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        metric,
+                        style: TextStyle(
+                          color: theme.colorScheme.onPrimaryContainer,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                   ),
               ],
@@ -452,9 +712,22 @@ class _RankingsScreenState extends State<RankingsScreen> {
       radius: 12,
       padding: EdgeInsets.zero,
       onPressed: open,
-      label:
-          '第 ${item.rank} 名，${item.drama.title}${item.metric.isEmpty ? '' : '，${item.metric}'}',
+      label: [
+        '第 ${item.rank} 名',
+        item.drama.title,
+        if (update.isNotEmpty) update,
+        if (metric.isNotEmpty) metric,
+        if (following) '追更中',
+      ].join('，'),
       child: Card(margin: EdgeInsets.zero, child: body),
     );
   }
+}
+
+/// 排期表的分组表头（手机端为紧凑标题行，TV 端为等高卡片以便焦点遍历）。
+class _ScheduleHeader {
+  const _ScheduleHeader(this.label, this.total);
+
+  final String label;
+  final int total;
 }

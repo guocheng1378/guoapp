@@ -1,12 +1,13 @@
 import 'models.dart';
 
 enum CatalogSort {
-  source('默认顺序'),
-  name('名称'),
-  season('自然季号'),
-  date('上线日期'),
+  // 源站顺序对 maccms 类站源即“最近更新”，是目录的默认排序。
+  source('源站顺序'),
   heat('热度'),
-  views('播放量');
+  views('播放量'),
+  date('上线日期'),
+  name('名称'),
+  season('自然季号');
 
   const CatalogSort(this.label);
   final String label;

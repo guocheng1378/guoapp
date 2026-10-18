@@ -150,11 +150,21 @@ class LocalStore extends ChangeNotifier {
     if (!SourceSite.isAvailable(source)) {
       return Future.error(StateError('站源无效'));
     }
+    return setSourceSwitches({source: enabled});
+  }
+
+  /// 批量写入站源开关（一次提交、一次通知）。忽略当前版本不存在的站源，
+  /// 使旧配置里的残留 id 不会污染开关表。
+  Future<void> setSourceSwitches(Map<String, bool> values) {
+    final clean = <String, bool>{
+      for (final entry in values.entries)
+        if (SourceSite.isAvailable(entry.key)) entry.key: entry.value,
+    };
     final epoch = _epoch;
     return _queue(() async {
       _requireAdmin();
       if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
-      final switches = {..._sourceSwitches, source: enabled};
+      final switches = {..._sourceSwitches, ...clean};
       await _commit({'sourceSwitches': jsonEncode(switches)});
       _sourceSwitches.clear();
       _sourceSwitches.addAll(switches);

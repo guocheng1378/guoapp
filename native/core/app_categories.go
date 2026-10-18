@@ -2,27 +2,22 @@ package core
 
 import (
 	"context"
+	"duanjuapp/native/provider"
 	"errors"
 	"fmt"
-	"html"
-	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 )
 
-type nativeCategory struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
+type nativeCategory = provider.CatalogCategory
 
 var nativeAICategories = []nativeCategory{
-	{ID: "rebuo-duanju", Name: "热播短剧"},
-	{ID: "jingxuan-duanju", Name: "精选短剧"},
-	{ID: "bikan-duanju", Name: "必看短剧"},
-	{ID: "quanbu-duanju", Name: "全部短剧"},
-	{ID: "renqi-duanju", Name: "人气短剧"},
+	{ID: "ai-duanju", Name: "AI成人短剧"},
+	{ID: "ai-manju", Name: "AI成人漫剧"},
+	{ID: "ai-huanlian", Name: "AI换脸"},
+	{ID: "ai-mogai", Name: "AI魔改"},
+	{ID: "chigua", Name: "黄果吃瓜"},
 }
 
 func nativeCatalogKey(source, category string) string {
@@ -53,17 +48,12 @@ func validNativeCategory(source, category string) bool {
 				return true
 			}
 		}
-	case sourceHuangguoVideo:
-		id, err := strconv.Atoi(category)
-		return err == nil && id > 0
 	case sourceCloudFront:
 		return strings.TrimSpace(category) == category
 	case sourceHuangju:
 		return category == huangjuNewestCategory || validHuangjuID(category) && !strings.HasPrefix(category, "@")
 	case sourceYeguo:
 		return validYeguoCategory(category)
-	case sourceDSD:
-		return webProviderNumericID.MatchString(category)
 	}
 	if isDuanjuProviderSource(source) {
 		return validDuanjuCategory(source, category)
@@ -102,13 +92,6 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 				all = append(all, nativeCategory{ID: tab.ID, Name: tab.Name})
 			}
 		}
-	case sourceHuangguoVideo:
-		address := d.providerBaseURL(source) + "/videos"
-		var body string
-		body, err = d.fetchProviderText(ctx, address, d.providerBaseURL(source)+"/")
-		if err == nil {
-			all = append(all, parseHuangguoVideoCategories(body)...)
-		}
 	case sourceHuangju:
 		var categories []nativeCategory
 		categories, err = d.fetchHuangjuCategories(ctx)
@@ -118,12 +101,6 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 	case sourceYeguo:
 		var categories []nativeCategory
 		categories, err = d.fetchYeguoCategories(ctx)
-		if err == nil {
-			all = append(all, categories...)
-		}
-	case sourceDSD:
-		var categories []nativeCategory
-		categories, err = d.fetchDSDCategories(ctx, force)
 		if err == nil {
 			all = append(all, categories...)
 		}
@@ -157,26 +134,6 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 var categoryAnchorPattern = regexp.MustCompile(`(?is)<a\b([^>]*)>(.*?)</a>`)
 var categoryTextPattern = regexp.MustCompile(`(?s)<[^>]*>`)
 
-func parseHuangguoVideoCategories(body string) []nativeCategory {
-	var categories []nativeCategory
-	seen := map[string]bool{}
-	for _, match := range categoryAnchorPattern.FindAllStringSubmatch(body, -1) {
-		href := html.UnescapeString(extractAttr("<a "+match[1]+">", "href"))
-		address, err := url.Parse(href)
-		if err != nil || address.Path != "" && strings.TrimRight(address.Path, "/") != "/videos" {
-			continue
-		}
-		id := address.Query().Get("category")
-		name := strings.TrimSpace(html.UnescapeString(categoryTextPattern.ReplaceAllString(match[2], "")))
-		if !validNativeCategory(sourceHuangguoVideo, id) || id == "" || seen[id] || name == "" || len([]rune(name)) > 24 {
-			continue
-		}
-		seen[id] = true
-		categories = append(categories, nativeCategory{ID: id, Name: name})
-	}
-	return categories
-}
-
 func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, category string) ([]Drama, bool, error) {
 	categories := nativeAICategories
 	if category != "" {
@@ -208,9 +165,9 @@ func (d *Downloader) fetchHuangguoAICatalogPage(ctx context.Context, page int, c
 			baseURL := strings.TrimRight(d.providerBaseURL(sourceHuangguoAI), "/")
 			var address string
 			if page <= 1 {
-				address = baseURL + "/genre/" + entry.ID + "/"
+				address = baseURL + "/" + entry.ID + "/"
 			} else {
-				address = fmt.Sprintf("%s/genre/%s/page/%d/", baseURL, entry.ID, page)
+				address = fmt.Sprintf("%s/%s/%d/", baseURL, entry.ID, page)
 			}
 			body, err := d.fetchProviderText(ctx, address, d.providerBaseURL(sourceHuangguoAI)+"/")
 			if err == nil {

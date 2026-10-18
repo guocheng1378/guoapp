@@ -82,6 +82,56 @@ abstract class AppRepository {
     ResourceSettings settings,
   ) async => throw AppFailure('当前环境不支持资源设置');
   final catalogUpdates = CatalogUpdates();
+
+  /// 详情内存缓存：进过一次的剧二次点按零网络直进；配合 prefetchDetails
+  /// 在目录首页加载后预取首屏剧，首次点按也能命中。带 TTL 与在途去重。
+  final Map<String, DramaDetail> _detailCache = {};
+  final Map<String, DateTime> _detailCacheAt = {};
+  final Map<String, Future<DramaDetail>> _detailPending = {};
+  static const Duration _detailTtl = Duration(minutes: 10);
+  static const int _detailCacheLimit = 32;
+
+  String _detailKey(Drama drama) => '${drama.source}|${drama.id}';
+
+  /// 子类用包壳方式接入缓存：命中/在途复用，否则走 [fetch] 并落缓存，
+  /// 失败不缓存。测试 fake 直接覆写 detail() 即可完全绕开缓存。
+  Future<DramaDetail> detailCached(
+    Drama drama,
+    Future<DramaDetail> Function() fetch,
+  ) {
+    final key = _detailKey(drama);
+    final at = _detailCacheAt[key];
+    if (at != null) {
+      if (DateTime.now().difference(at) >= _detailTtl) {
+        _detailCache.remove(key);
+        _detailCacheAt.remove(key);
+      } else {
+        return Future.value(_detailCache[key]!);
+      }
+    }
+    final pending = _detailPending[key];
+    if (pending != null) return pending;
+    final future = fetch().then((result) {
+      _detailCache[key] = result;
+      _detailCacheAt[key] = DateTime.now();
+      if (_detailCache.length > _detailCacheLimit) {
+        final oldest =
+            (_detailCacheAt.entries.toList()
+                  ..sort((a, b) => a.value.compareTo(b.value)))
+                .first
+                .key;
+        _detailCache.remove(oldest);
+        _detailCacheAt.remove(oldest);
+      }
+      return result;
+    });
+    _detailPending[key] = future;
+    return future.whenComplete(() => _detailPending.remove(key));
+  }
+
+  /// 后台预取详情（尽力而为，失败静默）。基类 no-op，由有网络的实现覆写。
+  void prefetchDetail(Drama drama) {}
+  void prefetchDetails(Iterable<Drama> dramas) {}
   Future<void> cancelPreload() async {}
   Future<PlaybackPlan?> preload(
     Drama drama,
@@ -342,7 +392,7 @@ class NativeRepository extends AppRepository {
     bool force = false,
   }) async {
     _authorize('hongguo');
-    return CatalogPage.fromJson(
+    final result = CatalogPage.fromJson(
       await _read('recommendations-$genre', {
         'action': 'recommendations',
         'category': genre,
@@ -350,6 +400,12 @@ class NativeRepository extends AppRepository {
         'force': force,
       }),
     );
+    // 推荐首屏同理预取详情：点卡零网络等待。
+    if (!more && result.items.isNotEmpty) {
+      _prefetchQueue.clear();
+      prefetchDetails(result.items.take(8));
+    }
+    return result;
   }
 
   @override
@@ -663,31 +719,22 @@ class NativeRepository extends AppRepository {
   }
 
   @override
-  Future<CatalogPage> catalog(
-    String source, {
-    int page = 1,
-    String query = '',
-    String category = '',
-    bool force = false,
-  }) async => CatalogPage.fromJson(
-    await _read('catalog-$source', {
-      'action': 'catalog',
-      'source': source,
-      'page': page,
-      'query': query,
-      'category': category,
-      'force': force,
-    }),
-  );
-  @override
-  Future<CatalogPage> cached(String source, {String category = ''}) async =>
-      CatalogPage.fromJson(
-        await _call({
-          'action': 'cached',
-          'source': source,
-          'category': category,
-        }),
-      );
+  Future<CatalogPage> cached(String source, {String category = ''}) async {
+    final result = CatalogPage.fromJson(
+      await _call({
+        'action': 'cached',
+        'source': source,
+        'category': category,
+      }),
+    );
+    // 冷启动/切分类常走磁盘缓存直显（catalog() 不会被调），
+    // 这里同样预取首屏剧详情，保证点卡零网络等待。
+    if (result.items.isNotEmpty) {
+      _prefetchQueue.clear();
+      prefetchDetails(result.items.take(8));
+    }
+    return result;
+  }
   @override
   Future<String> cover(Drama drama, {bool force = false}) async {
     final epoch = access?.profileEpoch;
@@ -710,9 +757,76 @@ class NativeRepository extends AppRepository {
   }
 
   @override
-  Future<DramaDetail> detail(Drama drama) async => DramaDetail.fromJson(
-    await _call({'action': 'detail', 'drama': drama.toJson()}),
+  Future<DramaDetail> detail(Drama drama) => detailCached(
+    drama,
+    () async => DramaDetail.fromJson(
+      await _call({'action': 'detail', 'drama': drama.toJson()}),
+    ),
   );
+
+  final _prefetchQueue = <Drama>[];
+  bool _prefetchPumping = false;
+
+  @override
+  void prefetchDetail(Drama drama) => prefetchDetails([drama]);
+
+  @override
+  void prefetchDetails(Iterable<Drama> dramas) {
+    for (final drama in dramas) {
+      final key = _detailKey(drama);
+      if (_detailCache.containsKey(key) || _detailPending.containsKey(key)) {
+        continue;
+      }
+      _prefetchQueue.add(drama);
+    }
+    _pumpPrefetch();
+  }
+
+  /// 串行预取队列：不打爆桥与上游站源；失败静默，
+  /// 真点按时启动页会正常走网络并给出错误 UI。
+  void _pumpPrefetch() {
+    if (_prefetchPumping) return;
+    _prefetchPumping = true;
+    unawaited(() async {
+      try {
+        while (_prefetchQueue.isNotEmpty) {
+          final drama = _prefetchQueue.removeAt(0);
+          try {
+            await detail(drama);
+          } catch (_) {}
+        }
+      } finally {
+        _prefetchPumping = false;
+      }
+    }());
+  }
+
+  @override
+  Future<CatalogPage> catalog(
+    String source, {
+    int page = 1,
+    String query = '',
+    String category = '',
+    bool force = false,
+  }) async {
+    final result = CatalogPage.fromJson(
+      await _read('catalog-$source', {
+        'action': 'catalog',
+        'source': source,
+        'page': page,
+        'query': query,
+        'category': category,
+        'force': force,
+      }),
+    );
+    // 目录首页加载完即预取首屏剧详情（搜索结果不预取）：
+    // 用户点卡时详情大概率已在缓存，进播放零网络等待。
+    if (page == 1 && query.isEmpty && result.items.isNotEmpty) {
+      _prefetchQueue.clear();
+      prefetchDetails(result.items.take(8));
+    }
+    return result;
+  }
   @override
   Future<PlaybackPlan> resolve(
     Drama drama,

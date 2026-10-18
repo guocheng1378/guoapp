@@ -1,14 +1,27 @@
 package core
 
-import "errors"
+import (
+	"duanjuapp/native/provider"
+	"errors"
+)
 
 var buildAllSources = "false"
 
 var errNativeBuildSource = errors.New("当前版本不包含此站源")
 
+func init() {
+	provider.Configure(provider.Config{AllSources: buildAllSources == "true"})
+}
+
 func nativeSourceAvailable(source string) bool {
-	source = canonicalProviderSource(source)
-	return source == sourceHongguo || buildAllSources == "true" && isHuangguoProviderSource(source)
+	syncBuildVariant()
+	return provider.Available(source)
+}
+
+func syncBuildVariant() {
+	if provider.AllSourcesEnabled() != (buildAllSources == "true") {
+		provider.Configure(provider.Config{AllSources: buildAllSources == "true"})
+	}
 }
 
 func nativeDramaAvailable(drama nativeDrama) bool {

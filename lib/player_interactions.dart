@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart';
 
-import 'app_layout.dart';
+import 'screen_brightness.dart';
 import 'widgets.dart';
 
 enum SwipeAction { none, brightness, volume, seek, episode }
@@ -16,10 +15,12 @@ class GestureHudState {
     this.type = SwipeAction.none,
     this.value = 0.0,
     this.position,
+    this.label,
   });
   final SwipeAction type;
-  final double value;              // 0.0 ~ 1.0，亮度/音量比例
+  final double value;              // 0.0 ~ 1.0，亮度/音量比例；episode 时存方向(1 下一集/-1 上一集)
   final Duration? position;       // seek 目标位置
+  final String? label;            // episode 切换提示文案
 }
 
 class PlayerInteractions extends ChangeNotifier {
@@ -29,20 +30,18 @@ class PlayerInteractions extends ChangeNotifier {
     required this.baseSpeed,
     required this.onTogglePlayback,
     this.onFullscreen,
-    required this.onEpisode,
+    this.onEpisode,
     this.onSeek,
+    this.initialBrightness = 1.0,
+    this.initialVolume,
+    this.onGestureStart,
   }) {
+    _brightness = initialBrightness.clamp(.05, 1.0);
+    _volumeMemory = (initialVolume ?? 100).clamp(0.0, 100.0);
     _playing = player.stream.playing.listen((playing) {
-      if (!playing) cancel();
+      // 滑动快进期间主动暂停画面做冻结预览，不视为外部打断
+      if (!playing && !_pausedForSeek) cancel();
     });
-    AppDevice.getBrightness()
-        .then((val) {
-          if (!_disposed) {
-            _brightness = val;
-            notifyListeners();
-          }
-        })
-        .catchError((_) {});
   }
 
   final Player player;
@@ -50,19 +49,25 @@ class PlayerInteractions extends ChangeNotifier {
   final double Function() baseSpeed;
   final VoidCallback onTogglePlayback;
   final VoidCallback? onFullscreen;
-  final String Function(int direction) onEpisode;
+  final String Function(int direction)? onEpisode;
   final Future<void> Function(Duration)? onSeek;
+
+  /// 跨剧沿用的手感：遮罩亮度与播放器音量
+  final double initialBrightness;
+  final double? initialVolume;
+
+  /// 手指按下即通知（连播倒计时等外部状态据此让位）
+  final VoidCallback? onGestureStart;
   late final StreamSubscription<bool> _playing;
   Timer? _holdTimer;
   Timer? _hintTimer;
+  Timer? _rateEaseTimer;
   Future<void> _rates = Future<void>.value();
   final Set<int> _pointers = {};
   int? _pointer;
   Offset? _origin;
   Offset? _lastPosition;
   Offset? _lastTapOrigin;
-  Duration _started = Duration.zero;
-  double _swipeThreshold = 70;
   bool _swipeEnabled = false;
   bool _moved = false;
   bool _held = false;
@@ -75,33 +80,79 @@ class PlayerInteractions extends ChangeNotifier {
   DateTime _ignoreTapUntil = DateTime(2000);
   SwipeAction _swipeAction = SwipeAction.none;
   GestureHudState _hudState = const GestureHudState();
-  double _brightness = 0.5;
+  double _brightness = 1.0;
+  bool _brightnessViaSystem = false;
+  bool _pausedForSeek = false;
+  bool _wasPlayingBeforeSeek = false;
   double _initialBrightness = 0.5;
   double _initialVolume = 100;
+  double _volumeMemory = 100;
   double _originPositionMs = 0;
   double _viewHeight = 0.0;
   double _viewWidth = 0.0;
+  bool _episodeFired = false;
   Timer? _hudTimer;
 
   GestureHudState get hudState => _hudState;
   double get brightness => _brightness;
+
+  /// 当前音量（0~100），供播放页持久化后跨剧沿用
+  double get volume => _volumeMemory;
   bool get isBrightnessActive => _hudState.type == SwipeAction.brightness;
   Offset? get lastTapOrigin => _lastTapOrigin;
   double get viewWidth => _viewWidth;
 
   void setBrightnessDirect(double value) {
     if (_disposed) return;
-    _brightness = value.clamp(0.01, 1.0);
-    AppDevice.setBrightness(_brightness);
+    _applyBrightness(value);
     _showHud(SwipeAction.brightness, _brightness);
   }
+
+  /// 亮度统一出口：Android 走窗口真实亮度（与系统同一套背光，不突兀），
+  /// 平台不支持时退回画面遮罩模拟。
+  void _applyBrightness(double value) {
+    _brightness = value.clamp(0.01, 1.0);
+    if (_brightnessViaSystem) {
+      unawaited(ScreenBrightness.apply(_brightness));
+    }
+  }
+
+  /// 以系统当前亮度为起点，并把后续调节切到「真实亮度」模式。
+  Future<void> adoptSystemBrightness(double systemValue) async {
+    if (_disposed) return;
+    _brightness = systemValue.clamp(0.01, 1.0);
+    final ok = await ScreenBrightness.apply(_brightness);
+    if (_disposed) return;
+    // 通道不可用时保持遮罩模拟，保证亮度依然可调
+    _brightnessViaSystem = ok;
+    notifyListeners();
+  }
+
+  /// 退出播放器：恢复「跟随系统亮度」，别把用户的系统亮度留在被改过的状态。
+  Future<void> releaseBrightness() async {
+    if (_disposed) return;
+    if (_brightnessViaSystem) await ScreenBrightness.followSystem();
+  }
+
+  /// 亮度是否已交给系统背光（true 时画面不该再叠黑纱）。
+  bool get brightnessViaSystem => _brightnessViaSystem;
 
   void dismissBrightnessHud() {
     _scheduleDismissHud();
   }
 
+  /// 进入安静期：滑动调进度提交后调用，期间提示不再唤出工具栏。
+  void enterQuietPeriod() {
+    _quietUntil = DateTime.now().add(const Duration(milliseconds: 1600));
+  }
+
   String get feedback => _feedback;
   bool get boosting => _boosting;
+
+  /// 安静期：滑动调进度刚结束时，提示照弹但不该把工具栏唤出来，
+  /// 否则「快进至 xx」的提示会把控制条重新顶到画面上。
+  bool get quiet => DateTime.now().isBefore(_quietUntil);
+  DateTime _quietUntil = DateTime(2000);
   bool get suppressTap => DateTime.now().isBefore(_ignoreTapUntil);
   Future<void> get pendingRates => _rates;
 
@@ -114,7 +165,7 @@ class PlayerInteractions extends ChangeNotifier {
     }
     if (!persistent && message.isNotEmpty) {
       _hintTimer = Timer(const Duration(milliseconds: 1200), () {
-        hint(_boosting ? '3 倍速 · 松开恢复' : '', persistent: true);
+        hint(_boosting ? '2 倍速 · 松开恢复' : '', persistent: true);
       });
     }
   }
@@ -133,6 +184,14 @@ class PlayerInteractions extends ChangeNotifier {
     return _rates;
   }
 
+  // 滑动快进步长随片长自适应：滑满 1/3 屏宽 ≈ 片长的 1/6
+  // （短剧 90 秒 → 约 15 秒/次；60 秒 → 10 秒；长视频封顶 120 秒防失控）
+  double _seekSecondsPerThird() {
+    final durationMs = player.state.duration.inMilliseconds;
+    if (durationMs <= 0) return 5.0;
+    return (durationMs / 6000.0).clamp(5.0, 120.0);
+  }
+
   void _beginHold({bool keyboard = false}) {
     if (!available() || _holdTimer != null || _boosting) return;
     _keyboardHold = keyboard;
@@ -146,8 +205,9 @@ class PlayerInteractions extends ChangeNotifier {
       }
       _boosting = true;
       _held = true;
-      unawaited(_setRate(3));
-      hint('3 倍速 · 松开恢复', persistent: true);
+      _rateEaseTimer?.cancel();
+      unawaited(_setRate(2));
+      hint('2 倍速 · 松开恢复', persistent: true);
     });
   }
 
@@ -159,11 +219,39 @@ class PlayerInteractions extends ChangeNotifier {
     _keyboardHold = false;
     _boosting = false;
     if (boosted) {
-      unawaited(_setRate(baseSpeed()));
+      _easeRateBack();
       if (!silent) hint('恢复 ${baseSpeed()} 倍速');
     } else if (tap && wasKeyboard) {
       seek(5);
     }
+  }
+
+  // 松开长按加速后先回 1.5 倍再回正常倍速，避免速率瞬间跳变
+  void _easeRateBack() {
+    _rateEaseTimer?.cancel();
+    final base = baseSpeed();
+    if (base >= 1.5) {
+      unawaited(_setRate(base));
+      return;
+    }
+    unawaited(_setRate(1.5));
+    _rateEaseTimer = Timer(const Duration(milliseconds: 160), () {
+      if (!_disposed) unawaited(_setRate(baseSpeed()));
+    });
+  }
+
+  // 滑动快进时冻结画面：暂停播放让画面停在当前帧，预览更直观
+  void _pauseForSeekPreview() {
+    if (_pausedForSeek || !player.state.playing) return;
+    _pausedForSeek = true;
+    _wasPlayingBeforeSeek = true;
+    unawaited(player.pause());
+  }
+
+  void _resumeAfterSeek() {
+    if (!_pausedForSeek) return;
+    _pausedForSeek = false;
+    if (_wasPlayingBeforeSeek && !_disposed) unawaited(player.play());
   }
 
   void cancel() {
@@ -175,7 +263,13 @@ class PlayerInteractions extends ChangeNotifier {
     _pointer = null;
     _origin = null;
     _lastPosition = null;
+    _hudTimer?.cancel();
+    if (_hudState.type != SwipeAction.none) {
+      _hudState = const GestureHudState();
+      notifyListeners();
+    }
     _endHold(silent: true);
+    _resumeAfterSeek();
     hint('');
   }
 
@@ -191,20 +285,28 @@ class PlayerInteractions extends ChangeNotifier {
       return;
     }
     if (!available() || event.buttons != kPrimaryButton) return;
+    onGestureStart?.call();
     _pointer = event.pointer;
     _origin = _lastPosition = _lastTapOrigin = event.localPosition;
-    _started = event.timeStamp;
-    _swipeEnabled = swipeEnabled && event.kind == PointerDeviceKind.touch;
-    _swipeThreshold = math.max(30, math.min(80, height * .08));
     _viewHeight = height;
     _viewWidth = width;
+    // 左右边缘留出系统返回手势禁区，避免与滑动快进/快退冲突
+    _swipeEnabled = swipeEnabled &&
+        event.kind == PointerDeviceKind.touch &&
+        (width <= 0 ||
+            (event.localPosition.dx > 24 &&
+                event.localPosition.dx < width - 24));
     _moved = _held = false;
     _swipeAction = SwipeAction.none;
+    _episodeFired = false;
 
     if (_swipeEnabled && width > 0) {
       // 记录起始值，后续在 pointerMove 里根据方向选择分支
       _initialBrightness = _brightness;
-      _initialVolume = player.state.volume;
+      // 音量以记忆值为起点（换源后播放器音量会被重置），并同步回记忆
+      final currentVolume = player.state.volume;
+      if (currentVolume > 0) _volumeMemory = currentVolume;
+      _initialVolume = _volumeMemory;
       final pos = player.state.position.inMilliseconds;
       _originPositionMs = pos.isFinite ? pos.toDouble() : 0.0;
     }
@@ -228,52 +330,62 @@ class PlayerInteractions extends ChangeNotifier {
       // 水平位移显著大于垂直 → seek
       if (absDx > absDy * 1.2 && absDx > 15) {
         _swipeAction = SwipeAction.seek;
+        _pauseForSeekPreview();
       } else if (absDy > absDx * 1.2 && absDy > 15) {
-        // 垂直位移：按 x 位置分亮度(左35%) / 音量(右35%) / 切集(中间)
+        // 垂直位移：左 35% 亮度 / 右 35% 音量，中间竖滑切上/下集
         final x = event.localPosition.dx;
         if (x < _viewWidth * 0.35) {
           _swipeAction = SwipeAction.brightness;
-          AppDevice.getBrightness().then((val) {
-            if (_pointer == event.pointer) {
-              _initialBrightness = _brightness = val;
-            }
-          });
+          _initialBrightness = _brightness;
         } else if (x > _viewWidth * 0.65) {
           _swipeAction = SwipeAction.volume;
-        } else {
+        } else if (onEpisode != null) {
           _swipeAction = SwipeAction.episode;
         }
       }
     }
-    if (_swipeAction == SwipeAction.none || _swipeAction == SwipeAction.episode) return;
+    if (_swipeAction == SwipeAction.none) return;
 
     if (_swipeAction == SwipeAction.brightness) {
       final dy = _origin!.dy - event.localPosition.dy; // 向上滑动 = 变亮
-      final deltaRatio = dy / (_viewHeight * 0.6);
-      _brightness = (_initialBrightness + deltaRatio).clamp(0.01, 1.0);
-      AppDevice.setBrightness(_brightness);
+      final deltaRatio = dy / (_viewHeight * 0.35);
+      // 亮度：Android 直接改窗口真实亮度，其他平台退回遮罩模拟
+      _applyBrightness(_initialBrightness + deltaRatio);
       _showHud(SwipeAction.brightness, _brightness);
     } else if (_swipeAction == SwipeAction.volume) {
       final dy = _origin!.dy - event.localPosition.dy; // 向上滑动 = 加音量
-      final deltaRatio = dy / (_viewHeight * 0.6);
+      final deltaRatio = dy / (_viewHeight * 0.35);
       final newVol = (_initialVolume + deltaRatio * 100).clamp(0.0, 100.0);
       unawaited(player.setVolume(newVol));
-      if (newVol > 0) _unmutedVolume = newVol;
+      if (newVol > 0) {
+        _unmutedVolume = newVol;
+        _volumeMemory = newVol;
+      }
       _showHud(SwipeAction.volume, newVol / 100.0);
     } else if (_swipeAction == SwipeAction.seek) {
-      // 水平滑动：向右 = 快进，向左 = 后退
+      // 水平滑动：向右 = 快进，向左 = 后退；步长随片长自适应
       final dx = event.localPosition.dx - _origin!.dx;
-      // 每滑动屏幕宽度的 1/3 = 5 秒
-      final secondsDelta = (dx / (_viewWidth * 0.33)) * 5.0;
+      final secondsDelta = (dx / (_viewWidth * 0.33)) * _seekSecondsPerThird();
       final durationMs = player.state.duration.inMilliseconds;
       var target = (_originPositionMs + secondsDelta * 1000).round();
       if (durationMs > 0) target = target.clamp(0, durationMs);
       target = target.clamp(0, const Duration(hours: 10).inMilliseconds);
       final targetDur = Duration(milliseconds: target);
       final progress = durationMs > 0 ? target / durationMs : 0.0;
+      // 滑动过程只刷新 HUD 预览（数值由手指位移直接算出，天然跟手），
+      // 不做真实 seek——逐帧 seek 会让解码器反复缓冲、画面追不上手；
+      // 最终位置在 pointerUp 一次性提交。
       _showHud(SwipeAction.seek, progress, position: targetDur);
-      // 实时 seek，让滑动跟手
-      unawaited((onSeek ?? player.seek)(targetDur));
+    } else if (_swipeAction == SwipeAction.episode) {
+      // 中间竖滑：上滑下一集、下滑上一集；达到阈值立即切一次，
+      // 本次手势内锁定，避免连滑连续跳集
+      if (_episodeFired || onEpisode == null) return;
+      final dy = _origin!.dy - event.localPosition.dy;
+      if (dy.abs() < _viewHeight * 0.12) return;
+      _episodeFired = true;
+      final forward = dy > 0;
+      final label = onEpisode!(forward ? 1 : -1);
+      _showHud(SwipeAction.episode, forward ? 1 : -1, label: label);
     }
   }
 
@@ -286,30 +398,24 @@ class PlayerInteractions extends ChangeNotifier {
     }
     if (_pointer != event.pointer || _origin == null) return;
     final delta = (_lastPosition ?? event.localPosition) - _origin!;
-    final isVertical =
-        delta.dy.abs() >= _swipeThreshold &&
-        delta.dy.abs() > delta.dx.abs() * 1.5;
 
-    if (_swipeAction == SwipeAction.episode &&
-        _swipeEnabled &&
-        !_held &&
-        _moved &&
-        isVertical &&
-        event.timeStamp - _started < const Duration(milliseconds: 1500)) {
-      if (available()) hint(onEpisode(delta.dy < 0 ? 1 : -1));
-    } else if (_swipeAction == SwipeAction.seek) {
-      // 提交最终的 seek 位置
+    if (_swipeAction == SwipeAction.seek) {
+      // 提交最终的 seek 位置（与滑动预览同一套自适应步长，保证所见即所得）
       final dx = delta.dx;
-      final secondsDelta = (dx / (_viewWidth * 0.33)) * 5.0;
+      final secondsDelta = (dx / (_viewWidth * 0.33)) * _seekSecondsPerThird();
       final durationMs = player.state.duration.inMilliseconds;
       var target = (_originPositionMs + secondsDelta * 1000).round();
       if (durationMs > 0) target = target.clamp(0, durationMs);
-      if ((target - _originPositionMs).abs() > 500) {
+      target = target.clamp(0, const Duration(hours: 10).inMilliseconds);
+      if ((target - _originPositionMs).abs() > 100) {
         unawaited((onSeek ?? player.seek)(Duration(milliseconds: target)));
       }
+      _resumeAfterSeek();
       _scheduleDismissHud();
+      enterQuietPeriod();
     } else if (_swipeAction == SwipeAction.brightness ||
-               _swipeAction == SwipeAction.volume) {
+               _swipeAction == SwipeAction.volume ||
+               _swipeAction == SwipeAction.episode) {
       _scheduleDismissHud();
     }
 
@@ -328,10 +434,20 @@ class PlayerInteractions extends ChangeNotifier {
     if (_pointers.isEmpty) _cancelUntilRelease = false;
   }
 
-  void _showHud(SwipeAction action, double value, {Duration? position}) {
+  void _showHud(
+    SwipeAction action,
+    double value, {
+    Duration? position,
+    String? label,
+  }) {
     if (_disposed) return;
     _hudTimer?.cancel();
-    _hudState = GestureHudState(type: action, value: value, position: position);
+    _hudState = GestureHudState(
+      type: action,
+      value: value,
+      position: position,
+      label: label,
+    );
     notifyListeners();
   }
 
@@ -357,14 +473,20 @@ class PlayerInteractions extends ChangeNotifier {
     if (!available()) return;
     final volume = (player.state.volume + delta).clamp(0.0, 100.0);
     unawaited(player.setVolume(volume));
-    if (volume > 0) _unmutedVolume = volume;
+    if (volume > 0) {
+      _unmutedVolume = volume;
+      _volumeMemory = volume;
+    }
     hint(volume == 0 ? '已静音' : '音量 ${volume.round()}%');
   }
 
   void toggleMute() {
     if (!available()) return;
     final current = player.state.volume;
-    if (current > 0) _unmutedVolume = current;
+    if (current > 0) {
+      _unmutedVolume = current;
+      _volumeMemory = current;
+    }
     final target = current > 0 ? 0.0 : _unmutedVolume;
     unawaited(player.setVolume(target));
     hint(target == 0 ? '已静音' : '音量 ${target.round()}%');
@@ -412,8 +534,8 @@ class PlayerInteractions extends ChangeNotifier {
       if (event is KeyDownEvent) toggleMute();
     } else if (key == LogicalKeyboardKey.mediaTrackNext ||
         key == LogicalKeyboardKey.mediaTrackPrevious) {
-      if (event is KeyDownEvent) {
-        hint(onEpisode(key == LogicalKeyboardKey.mediaTrackNext ? 1 : -1));
+      if (event is KeyDownEvent && onEpisode != null) {
+        hint(onEpisode!(key == LogicalKeyboardKey.mediaTrackNext ? 1 : -1));
       }
     } else {
       return KeyEventResult.ignored;
@@ -427,7 +549,7 @@ class PlayerInteractions extends ChangeNotifier {
     _holdTimer?.cancel();
     _hintTimer?.cancel();
     _hudTimer?.cancel();
-    AppDevice.resetBrightness(); // 离开播放器时自动恢复手机/平板系统默认亮度
+    _rateEaseTimer?.cancel();
     if (_boosting) unawaited(_setRate(baseSpeed()));
     _boosting = false;
     _playing.cancel();

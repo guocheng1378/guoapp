@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 
+import 'glass.dart';
 import 'models.dart';
 import 'playback_preferences.dart';
 import 'video_enhancement.dart';
@@ -470,7 +471,10 @@ class TelevisionEpisodeDialog extends StatelessWidget {
   final int currentIndex;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassDialogShell(
+    // 大面板弹窗放宽默认窄壳约束；玻璃关闭时壳自动降级不透明。
+    constraints: const BoxConstraints(maxWidth: 760),
+    child: AlertDialog(
     title: Text('选集 · 共 ${episodes.length} 集'),
     content: SizedBox(
       width: 700,
@@ -501,6 +505,7 @@ class TelevisionEpisodeDialog extends StatelessWidget {
         child: const Text('返回播放'),
       ),
     ],
+    ),
   );
 }
 
@@ -555,7 +560,9 @@ class TelevisionSettingsDialog extends StatelessWidget {
   final VoidCallback? onCompareEnhancement;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassDialogShell(
+    constraints: const BoxConstraints(maxWidth: 700),
+    child: AlertDialog(
     title: const Text('播放设置'),
     content: SizedBox(
       width: 640,
@@ -675,5 +682,6 @@ class TelevisionSettingsDialog extends StatelessWidget {
         child: const Text('返回播放'),
       ),
     ],
+    ),
   );
 }

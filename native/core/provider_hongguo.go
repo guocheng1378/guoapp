@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -148,11 +149,10 @@ func (d *Downloader) fetchHongguoChapters(ctx context.Context, sourceID string) 
 }
 
 func (d *Downloader) fetchHongguoWebChapters(ctx context.Context, sourceID string) (string, []Chapter, error) {
-	body, err := d.fetchProviderText(ctx, hongguoBaseURL+"/detail?series_id="+url.QueryEscape(sourceID), hongguoBaseURL+"/")
+	data, err := d.fetchHongguoRouterPage(ctx, hongguoBaseURL+"/detail?series_id="+url.QueryEscape(sourceID), hongguoBaseURL+"/")
 	if err != nil {
 		return "", nil, err
 	}
-	data := parseRouterData(body)
 	page := routerLoaderMap(data, "detail_page", "detail_")
 	detail, _ := page["seriesDetail"].(map[string]any)
 	if len(detail) == 0 {
@@ -166,11 +166,25 @@ func (d *Downloader) fetchHongguoWebChapters(ctx context.Context, sourceID strin
 		if vid == "" || vid == "<nil>" {
 			continue
 		}
+		if !hongguoNumericID.MatchString(vid) {
+			return title, nil, errors.New("红果网页详情返回了无效的剧集 ID")
+		}
 		idx := i + 1
 		chapters = append(chapters, Chapter{ID: providerChapterID(sourceHongguo, sourceID, vid), Source: sourceHongguo, Title: fmt.Sprintf("第%d集", idx), VideoURL: "hongguo-cenc://" + vid, CurrentEpisode: rawEpisode(idx)})
 	}
 	if len(chapters) == 0 {
 		return title, nil, errors.New("红果详情没有返回剧集 ID")
+	}
+	if declared := mapString(detail, "episode_cnt"); declared != "" {
+		total, convErr := strconv.Atoi(declared)
+		if convErr != nil || total != len(chapters) {
+			return title, nil, fmt.Errorf("红果网页详情分集数量与剧集总数不符（返回 %d 集，声明 %s）", len(chapters), declared)
+		}
+	}
+	for index, chapter := range chapters {
+		if chapter.EpisodeString(index+1) != strconv.Itoa(index+1) {
+			return title, nil, errors.New("红果网页详情分集列表不连续")
+		}
 	}
 	return title, chapters, nil
 }
@@ -219,13 +233,71 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	return providerMedia{}, fmt.Errorf("红果 App 取流失败：%v；网页取流失败：%v；备用取流失败：%w", publicError(nativeErr), publicError(pageErr), apiErr)
 }
 
+// hongguoWebUserAgent 站点网页路由（详情/播放页）只放行桌面浏览器 UA，
+// 核心默认的 iPhone UA 与各类移动 UA 都会被稳定 404。
+const hongguoWebUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+// hongguoWebMediaUserAgent 红果网页媒体（播放页公开直链）同样只放行桌面浏览器 UA，
+// 默认 UA 与移动 UA 会拿到 404；其他站源媒体沿用默认 UA。
+func hongguoWebMediaUserAgent(address string) string {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil {
+		return userAgent
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "hongguoduanju.com", "www.hongguoduanju.com":
+		return hongguoWebUserAgent
+	}
+	return userAgent
+}
+
+// hongguoRouterPageAttempts 站点会对网页请求随机返回 404，拉取后需重试再判定失败。
+const hongguoRouterPageAttempts = 3
+
+// hongguoMediaWarmAttempts 媒体直链的随机 404 率明显高于网页，预热需要更多次重试。
+const hongguoMediaWarmAttempts = 5
+
+// fetchHongguoRouterPage 拉取红果网页并解析 _ROUTER_DATA，
+// 使用浏览器 UA 并对站点随机返回的 404 做有限重试。
+func (d *Downloader) fetchHongguoRouterPage(ctx context.Context, pageURL, referer string) (map[string]any, error) {
+	ctx = context.WithValue(ctx, providerTextUserAgentKey{}, hongguoWebUserAgent)
+	var lastErr error
+	for attempt := 1; attempt <= hongguoRouterPageAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(time.Duration(attempt) * 400 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		body, err := d.fetchProviderText(ctx, pageURL, referer)
+		if err == nil {
+			return parseRouterData(body), nil
+		}
+		lastErr = err
+		var backoff *requestBackoff
+		if errors.As(err, &backoff) || ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
 func (d *Downloader) resolveHongguoWebMedia(ctx context.Context, seriesID, videoID string) (providerMedia, error) {
-	pageURL := hongguoBaseURL + "/player/" + url.PathEscape(seriesID) + "/" + url.PathEscape(videoID)
-	body, err := d.fetchProviderText(ctx, pageURL, hongguoBaseURL+"/")
+	base := d.providerBaseURL(sourceHongguo)
+	pageURL := base + "/player/" + url.PathEscape(seriesID) + "/" + url.PathEscape(videoID)
+	data, err := d.fetchHongguoRouterPage(ctx, pageURL, base+"/")
 	if err != nil {
 		return providerMedia{}, err
 	}
-	page := routerLoaderMap(parseRouterData(body), "player_", "player_page")
+	page := routerLoaderMap(data, "player_", "player_page")
+	// 新版播放页：公开剧集的播放信息收敛在 publicVideoSeo，取流走站点 SEO 直链。
+	if seo, _ := page["publicVideoSeo"].(map[string]any); len(seo) > 0 {
+		return d.hongguoPublicSEOMedia(ctx, base, seo, seriesID, videoID)
+	}
+	// 旧版播放页：video_player_info 内直接给出播放地址。
 	if mapString(page, "vid") != videoID || mapString(page, "series_id") != seriesID {
 		return providerMedia{}, fmt.Errorf("红果未返回所请求的剧集，可能仅允许网页试看；请在站点确认该集的访问权限")
 	}
@@ -235,13 +307,94 @@ func (d *Downloader) resolveHongguoWebMedia(ctx context.Context, seriesID, video
 		return providerMedia{}, fmt.Errorf("红果该集未提供公开播放地址，可能需要登录或 App 授权；不会将试看集冒充该集下载")
 	}
 	duration, _ := strconv.ParseFloat(mapString(info, "duration"), 64)
-	media := providerMedia{URL: addresses[0], Referer: d.providerBaseURL(sourceHongguo) + "/", Duration: time.Duration(duration * float64(time.Second))}
+	media := providerMedia{URL: addresses[0], Referer: base + "/", Duration: time.Duration(duration * float64(time.Second))}
 	for _, address := range addresses {
 		variant := media
 		variant.URL, variant.Variants = address, nil
 		media.Variants = append(media.Variants, variant)
 	}
 	return media, nil
+}
+
+// hongguoPublicSEOMedia 解析新版播放页的公开播放信息。
+// 站点播放器对 available 的剧集使用 /video/public/{vid}/360p.mp4 直链（仅 360p）。
+func (d *Downloader) hongguoPublicSEOMedia(ctx context.Context, base string, seo map[string]any, seriesID, videoID string) (providerMedia, error) {
+	if mapString(seo, "seriesId") != seriesID || mapString(seo, "itemId") != videoID {
+		return providerMedia{}, fmt.Errorf("红果网页未返回所请求的剧集，可能仅允许网页试看；请在站点确认该集的访问权限")
+	}
+	if !hongguoSEOAvailable(seo) {
+		return providerMedia{}, fmt.Errorf("红果该集未开放公开播放，可能需要登录或 App 授权；不会将试看集冒充该集下载")
+	}
+	address := base + hongguoPublicVideoPath(videoID)
+	if address == "" {
+		return providerMedia{}, fmt.Errorf("红果该集的公开播放地址无效")
+	}
+	if err := d.hongguoWarmPublicMedia(ctx, base, address); err != nil {
+		return providerMedia{}, err
+	}
+	duration, _ := strconv.ParseFloat(mapString(seo, "durationSeconds"), 64)
+	media := providerMedia{URL: address, Referer: base + "/", Duration: time.Duration(duration * float64(time.Second)), Quality: 360}
+	media.Variants = []providerMedia{media}
+	return media, nil
+}
+
+// hongguoWarmPublicMedia 站点对媒体直链的首次请求会随机 404（CDN 未就绪），
+// 播放器自身不会重试，这里先探测并重试至缓存就绪，再交给播放器。
+func (d *Downloader) hongguoWarmPublicMedia(ctx context.Context, base, address string) error {
+	var lastErr error
+	for attempt := 1; attempt <= hongguoMediaWarmAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(time.Duration(attempt) * 400 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("User-Agent", hongguoWebUserAgent)
+		request.Header.Set("Referer", base+"/")
+		request.Header.Set("Range", "bytes=0-0")
+		response, err := d.client.Do(request)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		status := response.StatusCode
+		response.Body.Close()
+		if status == http.StatusOK || status == http.StatusPartialContent {
+			return nil
+		}
+		if status == http.StatusNotFound || status >= 500 {
+			lastErr = fmt.Errorf("红果公开媒体暂不可用（HTTP %d）", status)
+			continue
+		}
+		return fmt.Errorf("红果公开媒体不可访问（HTTP %d）", status)
+	}
+	return lastErr
+}
+
+// hongguoPublicVideoPath 站点播放器对公开剧集使用的 SEO 直链路径（固定 360p）。
+func hongguoPublicVideoPath(videoID string) string {
+	if !hongguoNumericID.MatchString(videoID) {
+		return ""
+	}
+	return "/video/public/" + videoID + "/360p.mp4"
+}
+
+func hongguoSEOAvailable(seo map[string]any) bool {
+	if flag, ok := seo["available"].(bool); ok {
+		return flag
+	}
+	switch strings.ToLower(strings.TrimSpace(mapString(seo, "available"))) {
+	case "true", "1":
+		return true
+	}
+	return false
 }
 
 func hongguoDramaFromAny(v any, category string) Drama {

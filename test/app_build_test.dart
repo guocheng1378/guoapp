@@ -15,20 +15,19 @@ void main() {
   const red = FixtureRepository.free;
   const other = FixtureRepository.vip;
 
-  test('edition sources include DSD only in the all-source build', () async {
+  test('edition sources exclude the retired DSD source', () async {
     SharedPreferences.setMockInitialValues({'source': 'huangdou'});
     final store = LocalStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
-    expect(store.sources.length, allSourcesEnabled ? 8 : 1);
+    expect(store.sources.length, allSourcesEnabled ? 20 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
-      allSourcesEnabled,
+      isFalse,
     );
-    expect(SourceSite.isAvailable('dsd'), allSourcesEnabled);
+    expect(SourceSite.isAvailable('dsd'), isFalse);
     expect(SourceSite.isKnown('dsd'), isTrue);
-    expect(SourceSite.byId('dsd').name, '帝果');
     expect(store.allowsSource('dsd'), isFalse);
-    expect(store.source, allSourcesEnabled ? 'huangdou' : 'hongguo');
+    expect(store.source, 'hongguo');
     store.dispose();
   });
 
@@ -131,12 +130,9 @@ void main() {
     final store = LocalStore(await SharedPreferences.getInstance());
     expect(store.configurationError, isNull);
     expect(store.profile.sources, ['dsd']);
-    expect(
-      store.sources.map((source) => source.id),
-      allSourcesEnabled ? ['dsd'] : [],
-    );
-    expect(store.source, allSourcesEnabled ? 'dsd' : '');
-    expect(store.allowsSource('dsd'), allSourcesEnabled);
+    expect(store.sources, isEmpty);
+    expect(store.source, '');
+    expect(store.allowsSource('dsd'), isFalse);
     store.dispose();
   });
 

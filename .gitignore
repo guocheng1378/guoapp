@@ -38,3 +38,8 @@ ios/Flutter/flutter_export_environment.sh
 ios/Runner/GeneratedPluginRegistrant.*
 ios/DuanjuCore/*.xcframework/
 **/xcuserdata/
+
+# 本地开发残留（不入库）
+/*.png
+/fix_anchor.ps1
+/分析报告-*.md

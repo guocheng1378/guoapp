@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
+import 'glass.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 
@@ -43,23 +44,28 @@ class EpisodeRangeBar extends StatelessWidget {
             }
           }
 
-          return AlertDialog(
-            title: const Text('跳转到指定集数'),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: InputDecoration(labelText: '集数', errorText: error),
-              onSubmitted: (_) => submit(),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('取消'),
+          return GlassDialogShell(
+            child: AlertDialog(
+              title: const Text('跳转到指定集数'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: InputDecoration(
+                  labelText: '集数',
+                  errorText: error,
+                ),
+                onSubmitted: (_) => submit(),
               ),
-              FilledButton(onPressed: submit, child: const Text('定位')),
-            ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('定位')),
+              ],
+            ),
           );
         },
       ),

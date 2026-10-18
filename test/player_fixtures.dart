@@ -97,6 +97,12 @@ class ScriptedPlayer extends PlatformPlayer {
   }
 
   @override
+  Future<void> play() async {
+    state = state.copyWith(playing: true);
+    playingController.add(true);
+  }
+
+  @override
   Future<void> playOrPause() async {
     state = state.copyWith(playing: !state.playing);
     playingController.add(state.playing);

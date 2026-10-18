@@ -125,29 +125,25 @@ func (d *Downloader) fetchHuangdouChapters(ctx context.Context, sourceID string)
 }
 
 func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangdouAPIClient, sourceID string, seq int) (providerMedia, error) {
-	// 先试 free hls（surge-modules 端到端验证不鉴权线路，付费集也能播）。
-	if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
-		return freeMedia, nil
-	}
-
+	// 加密 API 优先：免费集直接返回带签名/exp 的正片 m3u8 与 hls_key，单次请求即可播放；
+	// VIP 集返回 is_preview + preview_m3u8，再降级试免费 hls 线路。
 	var decoded any
 	if err := client.call(ctx, "/drama/play", map[string]any{"id": sourceID, "seq": strconv.Itoa(seq)}, &decoded); err != nil {
+		if freeMedia, freeErr := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); freeErr == nil {
+			return freeMedia, nil
+		}
 		return providerMedia{}, err
 	}
 	data := huangdouDataMap(decoded)
 	media := firstNonEmpty(mapString(data, "m3u8"), mapString(data, "url"), mapString(data, "play_url"), mapString(data, "playUrl"))
-	if huangdouPreviewOnly(data, media, client.host) {
-		// preview 时再试一次 free hls 兜底
-		if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
+	if media == "" || huangdouPreviewOnly(data, media, client.host) {
+		if freeMedia, freeErr := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); freeErr == nil {
 			return freeMedia, nil
 		}
-		return providerMedia{}, &huangdouAPIError{code: "preview", message: "黄豆仅提供试看，未取得该集正片；不会把试看内容当作完整分集"}
-	}
-	if media == "" {
-		if freeMedia, err := d.huangdouFreeHLSPlayback(ctx, sourceID, seq); err == nil {
-			return freeMedia, nil
+		if media == "" {
+			return providerMedia{}, errors.New("黄豆未提供有效的播放地址，免费线路也不可用")
 		}
-		return providerMedia{}, errors.New("黄豆未提供有效的播放地址，备用播放列表也不可用")
+		return providerMedia{}, &huangdouAPIError{code: "preview", message: "黄豆该集需要站点 VIP 权限，未登录只提供试看片段；不会把试看内容当作完整分集"}
 	}
 	media = resolveProviderURL(client.host+"/", media)
 	if !isProviderHTTPMediaURL(media) {
@@ -168,16 +164,19 @@ func (d *Downloader) resolveHuangdouPlayback(ctx context.Context, client *huangd
 }
 
 // huangdouFreeHLSPlayback — 并行试 huangdouAPIMirrors 里所有 host 的 free hls 线路，
-// 直出 GET /api/drama/hls/{id}/{seq}/play.m3u8?line=free（所有 17 个 host 上均存活）。
-// 先于加密 API 尝试，4s 内返回第一个成功的 m3u8。
+// 直出 GET /api/drama/hls/{id}/{seq}/play.m3u8?line=free。
+// 2026-10 起站方对 VIP 集在该线路一律 403，因此探测请求不记录 403 冷却，
+// 全部 host 明确失败时立即返回，避免拖垮后续加密 API 兜底。
 func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID string, seq int) (providerMedia, error) {
 	sourceID = strings.TrimPrefix(strings.TrimSpace(sourceID), "rp_")
-	hosts := huangdouAPIMirrors // 全部 17 个 host 上 free hls 均存活
+	hosts := huangdouAPIMirrors
 	resultCh := make(chan providerMedia, len(hosts))
+	doneCh := make(chan struct{}, len(hosts))
 	for _, h := range hosts {
 		go func(h string) {
+			defer func() { doneCh <- struct{}{} }()
 			u := fmt.Sprintf("https://%s/api/drama/hls/%s/%d/play.m3u8?line=free", h, url.PathEscape(sourceID), seq)
-			pl, err := d.fetchProviderText(ctx, u, "https://"+h+"/home")
+			pl, err := d.fetchProviderText(withoutBackoffRecording(ctx), u, "https://"+h+"/home")
 			if err == nil && strings.HasPrefix(strings.TrimSpace(pl), "#EXTM3U") {
 				select {
 				case resultCh <- providerMedia{URL: u, Referer: "https://" + h + "/home"}:
@@ -186,15 +185,23 @@ func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID strin
 			}
 		}(h)
 	}
-	for i := 0; i < len(hosts); i++ {
+	answered := 0
+	for answered < len(hosts) {
 		select {
 		case m := <-resultCh:
 			return m, nil
+		case <-doneCh:
+			answered++
 		case <-time.After(15 * time.Second):
-			return providerMedia{}, errors.New("free hls 线路探测超时")
+			return providerMedia{}, errors.New("免费 hls 线路探测超时")
 		}
 	}
-	return providerMedia{}, errors.New("free hls 线路不可用")
+	select {
+	case m := <-resultCh:
+		return m, nil
+	default:
+	}
+	return providerMedia{}, errors.New("免费 hls 线路不提供该集")
 }
 
 // call 并行快速探测前 7 个 mirror（各自独立 15s 超时），第一个成功的胜出。

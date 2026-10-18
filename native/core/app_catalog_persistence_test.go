@@ -221,11 +221,13 @@ func TestNativeHongguoStalledCursorKeepsPartialItems(t *testing.T) {
 func TestNativeCatalogPreservesLargeLibraryAndPage501(t *testing.T) {
 	var requested string
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path != "/api/videos/category/ai-duanju" {
+		const prefix = "/ai-duanju/"
+		if !strings.HasPrefix(request.URL.Path, prefix) {
 			return nil, errors.New("only synthetic catalog metadata is allowed")
 		}
-		requested = request.URL.Query().Get("page")
-		return sourceFixtureResponse(request, 200, `{"data":[{"id":"6001","title":"第6001部"}]}`), nil
+		requested = strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, prefix), "/")
+		card := `<article class="o5-card"><a href="https://huangguoai.com/d/6001/" class="o5-card__poster"><img src="https://example.test/cover-6001.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguoai.com/d/6001/" class="o5-card__title">第6001部</a></h3><span class="o5-card__ep">全</span></div></article>`
+		return sourceFixtureResponse(request, 200, "<html><body><div class='o5-grid'>"+card+"</div></body></html>"), nil
 	})
 	items := make([]nativeDrama, 6000)
 	for index := range items {

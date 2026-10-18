@@ -5,6 +5,7 @@ import 'catalog_sort.dart';
 import 'core_bridge.dart';
 import 'drama_actions.dart';
 import 'follow_state.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
@@ -22,6 +23,8 @@ class SavedLibrary extends StatefulWidget {
     this.remoteAutofocus = false,
     this.onExitLeft,
     this.onExitUp,
+    this.bottomInset = 0,
+    this.topInset = 0,
   });
 
   final AppRepository repository;
@@ -33,6 +36,12 @@ class SavedLibrary extends StatefulWidget {
   final bool remoteAutofocus;
   final VoidCallback? onExitLeft;
   final VoidCallback? onExitUp;
+
+  /// 悬浮玻璃底栏出现时的内容底部避让高度。
+  final double bottomInset;
+
+  /// 悬浮玻璃顶栏的避让高度（手机端 > 0）。
+  final double topInset;
 
   @override
   State<SavedLibrary> createState() => _SavedLibraryState();
@@ -52,19 +61,21 @@ class _SavedLibraryState extends State<SavedLibrary> {
     final epoch = widget.store.profileEpoch;
     final accepted = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('清空观看记录？'),
-        content: const Text('这会删除当前用户的观看进度，追剧状态和手动已看标记会保留。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('清空'),
-          ),
-        ],
+      builder: (context) => GlassDialogShell(
+        child: AlertDialog(
+          title: const Text('清空观看记录？'),
+          content: const Text('这会删除当前用户的观看进度，追剧状态和手动已看标记会保留。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('清空'),
+            ),
+          ],
+        ),
       ),
     );
     if (accepted == true && mounted && epoch == widget.store.profileEpoch) {
@@ -99,7 +110,12 @@ class _SavedLibraryState extends State<SavedLibrary> {
       onMore: () => _actions(drama),
       actions: DramaActionButton(
         drama: drama,
-        onPressed: () => _actions(drama),
+        store: widget.store,
+        history: widget.history,
+        onContinue: () => widget.onContinue(drama),
+        onDownload: widget.onDownload == null
+            ? null
+            : () => widget.onDownload!(drama),
       ),
       badge: badge,
       subtitle: watched == null
@@ -280,12 +296,22 @@ class _SavedLibraryState extends State<SavedLibrary> {
               'saved-${widget.history}-$_filter-${_search.text}',
             ),
             slivers: [
-              SliverToBoxAdapter(child: Column(children: header)),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.only(top: widget.topInset),
+                  child: Column(children: header),
+                ),
+              ),
               if (items.isEmpty)
                 SliverFillRemaining(hasScrollBody: false, child: empty)
               else
                 SliverPadding(
-                  padding: EdgeInsets.fromLTRB(padding, 0, padding, 20),
+                  padding: EdgeInsets.fromLTRB(
+                    padding,
+                    0,
+                    padding,
+                    20 + widget.bottomInset,
+                  ),
                   sliver: SliverGrid(
                     gridDelegate: dramaGridDelegate(
                       context,

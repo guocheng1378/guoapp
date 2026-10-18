@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'glass.dart';
 import 'search_input.dart';
 import 'app_layout.dart';
 import 'package:flutter/services.dart';
@@ -910,7 +911,9 @@ class TelevisionActionDialog extends StatelessWidget {
   final List<TelevisionAction> options;
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassDialogShell(
+    constraints: const BoxConstraints(maxWidth: 580),
+    child: AlertDialog(
     title: Text(title),
     content: SizedBox(
       width: 520,
@@ -947,6 +950,7 @@ class TelevisionActionDialog extends StatelessWidget {
           },
         ),
       ),
+    ),
     ),
   );
 }
@@ -994,7 +998,9 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => GlassDialogShell(
+    constraints: const BoxConstraints(maxWidth: 520),
+    child: AlertDialog(
     title: Text(widget.title),
     content: SizedBox(
       width: 460,
@@ -1048,5 +1054,6 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
         child: const Text('搜索'),
       ),
     ],
+    ),
   );
 }

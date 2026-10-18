@@ -141,7 +141,7 @@ func soraniDramaFromMap(row map[string]any) (Drama, error) {
 		Desc: truncate(description, 12000), Intro: truncate(description, 12000),
 		Cover: cover, CoverURL: cover,
 		TotalEpisode: episodes, EpisodeCount: episodes,
-		Category: category, ChannelName: "青空次元",
+		Category: category, ChannelName: duanjuSourceName(sourceSorani),
 		Tags: tags, Score: score,
 	}, nil
 }

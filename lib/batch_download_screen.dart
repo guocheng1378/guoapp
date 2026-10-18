@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'batch_downloads.dart';
 import 'core_bridge.dart';
 import 'downloads_screen.dart';
+import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
@@ -73,7 +74,10 @@ class _BatchDownloadScreenState extends State<BatchDownloadScreen> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: Listenable.merge([_batch, widget.store]),
     builder: (context, _) => Scaffold(
-      appBar: AppBar(title: const Text('批量下载')),
+      appBar: AppBar(
+          title: const Text('批量下载'),
+          flexibleSpace: const TopFog(),
+        ),
       body: SafeArea(
         top: false,
         child: !_batch.hasAccess

@@ -2,19 +2,35 @@ import 'dart:convert';
 
 import 'app_build.dart';
 
+enum SourceCategory {
+  shortDrama,
+  video,
+}
+
 class SourceSite {
   const SourceSite(this.id, this.name, this.description);
   final String id;
   final String name;
   final String description;
+  SourceCategory get category => _categories[id] ?? SourceCategory.shortDrama;
+  bool get isShortDrama => category == SourceCategory.shortDrama;
+  bool get isVideoSource => category == SourceCategory.video;
+
+  /// 黄果类成员：黄果系入口（AI/旧版/视频）+ 黄豆/野果/剧果。
+  /// 站源管理页独立成「黄果类」分区；受限名单即该类（受限的只有黄果类）。
+  static const huangguoCategoryIds = <String>{
+    'huangguo-video',
+    'huangguoai',
+    'cloudfront',
+    'huangdou',
+    'yeguo',
+    'huangju',
+  };
+  bool get inHuangguoCategory => huangguoCategoryIds.contains(id);
+
+  bool? get shortPlayOverride => _shortPlay[id];
   bool get onlineSearch => id == 'hongguo' || pagedSearch;
   bool get pagedSearch => id == 'huangju' || duanjuPaged;
-  bool get isShortPlaySource => const {
-    'hongguo',
-    'huangdou',
-    'huangju',
-    'huangguoai',
-  }.contains(id);
   bool get duanjuPaged => const {
     'yingshigongchang',
     'hongniu',
@@ -23,11 +39,10 @@ class SourceSite {
     'dytt',
   }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
-  String get groupId => switch (id) {
-    'huangguo-video' || 'huangguoai' || 'cloudfront' => 'huangguo',
-    _ => id,
-  };
-  String get groupName => groupId == 'huangguo' ? '黄果' : name;
+  // 黄果系入口（AI/旧版/视频）各自成组：主界面站源菜单与站源管理页
+  // 均单独显示各入口，站源管理页仅按黄果类区头归拢。
+  String get groupId => id;
+  String get groupName => name;
   String get entryName => switch (id) {
     'huangguo-video' => '视频',
     'huangguoai' => 'AI',
@@ -49,15 +64,30 @@ class SourceSite {
     SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
   ];
   static const dsd = SourceSite('dsd', '帝果', '帝果合成短剧 · VIP 直免');
+  // engineValues：Go 引擎已注册（specs.go 共 25 源）、体检全绿，但此前漏出
+  // UI 白名单的站源，2026-10-18 恢复展示；不在受限名单，默认启用。
+  static const engineValues = [
+    SourceSite('yeguo', '野果', 'API · 网页解析 · 短剧'),
+    SourceSite('yaguo', '芽果', 'API · 星芽短剧'),
+    SourceSite('maoguo', '猫果', 'API · 七猫短剧'),
+    SourceSite('fanguo', '饭果', 'API · 西饭短剧'),
+    SourceSite('heguo', '河果', '网页 · 河马剧场'),
+    SourceSite('xingguo', '星果', 'API · 星星短剧'),
+    SourceSite('huaguo', '花生', 'maccms · 短剧采集'),
+    SourceSite('wangguo', '短剧网站', 'maccms · 短剧聚合'),
+    SourceSite('faguo', '168 影院', 'maccms · 影视采集'),
+    SourceSite('wuguo', '五五', 'maccms · 短剧采集'),
+  ];
+  // knownValues 只含当前版本提供的站源；allValues 额外保留已下线源（dsd、
+  // huangguo-video），旧用户配置与备份仍可解析，但界面不再展示。
   static const knownValues = [
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '剧果', '热门 · 最新 · 分类短剧'),
-    SourceSite('huangguo-video', '黄果视频', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
-    dsd,
     ...duanjuValues,
+    ...engineValues,
   ];
   static const allValues = [
     hongguo,
@@ -68,23 +98,67 @@ class SourceSite {
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
     dsd,
     ...duanjuValues,
+    ...engineValues,
   ];
   static const values = allSourcesEnabled ? knownValues : [hongguo];
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
-  static bool isRestricted(String id) => const {
-        'huangdou',
-        'huangju',
-        'huangguo-video',
-        'huangguoai',
-        'cloudfront',
-        'dsd',
-        'dongpiandi',
-        'sorani',
-        'yingshigongchang',
-      }.contains(id);
+  // 受限站源 = 黄果类成员（黄果系入口 + 黄豆/野果/剧果），默认关闭；
+  // 其余分类的站源一律默认开放。
+  static bool isRestricted(String id) => huangguoCategoryIds.contains(id);
   static SourceSite byId(String id) =>
       allValues.firstWhere((site) => site.id == id, orElse: () => hongguo);
+
+  static const _categories = <String, SourceCategory>{
+    'hongguo': SourceCategory.shortDrama,
+    'huangdou': SourceCategory.shortDrama,
+    'huangju': SourceCategory.shortDrama,
+    'huangguoai': SourceCategory.shortDrama,
+    'cloudfront': SourceCategory.video,
+    'huangguo-video': SourceCategory.video,
+    'yeguo': SourceCategory.shortDrama,
+    'dsd': SourceCategory.shortDrama,
+    'yaguo': SourceCategory.shortDrama,
+    'maoguo': SourceCategory.shortDrama,
+    'fanguo': SourceCategory.shortDrama,
+    'guanguo': SourceCategory.shortDrama,
+    'heguo': SourceCategory.shortDrama,
+    'xingguo': SourceCategory.shortDrama,
+    'huaguo': SourceCategory.shortDrama,
+    'niuguo': SourceCategory.shortDrama,
+    'wangguo': SourceCategory.shortDrama,
+    'faguo': SourceCategory.shortDrama,
+    'piguo': SourceCategory.shortDrama,
+    'wuguo': SourceCategory.shortDrama,
+    'yingshigongchang': SourceCategory.video,
+    '360zy': SourceCategory.video,
+    'modu': SourceCategory.video,
+    'dytt': SourceCategory.video,
+    'shandian': SourceCategory.video,
+    'hongniu': SourceCategory.video,
+    'niuniuzy': SourceCategory.video,
+    'wsyzy': SourceCategory.video,
+    'sorani': SourceCategory.video,
+    'dongpiandi': SourceCategory.video,
+  };
+
+  static const _shortPlay = <String, bool>{
+    'hongguo': true,
+    'huangdou': true,
+    'huangju': true,
+    'huangguoai': true,
+    'huangguo-video': false,
+    'cloudfront': false,
+    'sorani': false,
+    'yingshigongchang': false,
+    '360zy': false,
+    'modu': false,
+    'dytt': false,
+    'shandian': false,
+    'hongniu': false,
+    'niuniuzy': false,
+    'wsyzy': false,
+  };
 }
 
 class SourceGroup {
@@ -158,32 +232,6 @@ class Drama {
     'ongoing' => '连载中',
     _ => '状态未知',
   };
-
-  /// 判定是否为短剧（竖屏沉浸式上下滑切换播放器）。
-  /// 三层判定：source 硬编码 > catalog category > 集数阈值。
-  bool get isShortPlay {
-    if (SourceSite.isKnown(source)) {
-      if (SourceSite.byId(source).isShortPlaySource) return true;
-      // 长剧/影视/动漫源直接排除
-      if (const {
-        'huangguo-video',
-        'cloudfront',
-        'sorani',
-        'yingshigongchang',
-        '360zy',
-        'modu',
-        'dytt',
-        'shandian',
-        'hongniu',
-        'niuniuzy',
-        'wsyzy',
-      }.contains(source)) {
-        return false;
-      }
-    }
-    // fallback：集数在 [3, 100] 范围内视为短剧
-    return episodes >= 3 && episodes <= 100;
-  }
 
   factory Drama.fromJson(Map<String, dynamic> json) => Drama(
     id: json['id'] as String? ?? '',

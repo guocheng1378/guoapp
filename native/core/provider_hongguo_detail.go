@@ -54,8 +54,8 @@ func (downloader *Downloader) hongguoAppDetail(ctx context.Context, seriesID str
 	}
 	client.mu.Lock()
 	if err == nil {
-		if len(client.details) >= 128 {
-			client.details = map[string]hongguoDetailEntry{}
+		if len(client.details) >= hongguoDetailCacheLimit {
+			hongguoEvictOldestDetails(client.details)
 		}
 		entry.ExpiresAt = time.Now().Add(5 * time.Minute)
 		client.details[seriesID] = entry
@@ -95,13 +95,15 @@ func parseHongguoAppDetail(result map[string]any, seriesID string) (hongguoDetai
 			Title: fmt.Sprintf("第%d集", index), VideoURL: "hongguo-cenc://" + videoID, CurrentEpisode: rawEpisode(index),
 		})
 	}
-	sort.Slice(entry.Chapters, func(left, right int) bool {
-		leftIndex, _ := strconv.Atoi(entry.Chapters[left].EpisodeString(left + 1))
-		rightIndex, _ := strconv.Atoi(entry.Chapters[right].EpisodeString(right + 1))
-		return leftIndex < rightIndex
+	sort.SliceStable(entry.Chapters, func(left, right int) bool {
+		return hongguoChapterEpisode(entry.Chapters[left]) < hongguoChapterEpisode(entry.Chapters[right])
 	})
-	total, _ := strconv.Atoi(mapString(detail, "episode_cnt"))
-	if len(entry.Chapters) == 0 || total > len(entry.Chapters) {
+	totalText := mapString(detail, "episode_cnt")
+	total, convErr := strconv.Atoi(totalText)
+	if convErr != nil || total <= 0 {
+		return entry, errors.New("红果 App 未返回有效的分集总数，已尝试其他详情入口")
+	}
+	if len(entry.Chapters) != total {
 		return entry, errors.New("红果 App 未返回完整分集，已尝试其他详情入口")
 	}
 	for index, chapter := range entry.Chapters {
@@ -124,4 +126,36 @@ func (downloader *Downloader) hongguoCachedDrama(drama Drama) Drama {
 		return mergeDramaMetadata(cached.Drama, drama)
 	}
 	return drama
+}
+
+const hongguoDetailCacheLimit = 128
+
+// hongguoEvictOldestDetails 淘汰最早过期的详情缓存，
+// 避免到达上限时整表清空误伤尚未过期的条目。
+func hongguoEvictOldestDetails(details map[string]hongguoDetailEntry) {
+	type agedDetail struct {
+		key       string
+		expiresAt time.Time
+	}
+	entries := make([]agedDetail, 0, len(details))
+	for key, entry := range details {
+		entries = append(entries, agedDetail{key: key, expiresAt: entry.ExpiresAt})
+	}
+	sort.Slice(entries, func(left, right int) bool {
+		return entries[left].expiresAt.Before(entries[right].expiresAt)
+	})
+	for len(details) >= hongguoDetailCacheLimit && len(entries) > 0 {
+		delete(details, entries[0].key)
+		entries = entries[1:]
+	}
+}
+
+// hongguoChapterEpisode 解析章节自身标注的集数；
+// 缺失或非法时返回 0，由后续连续性校验拦截，不参与排序兜底。
+func hongguoChapterEpisode(chapter Chapter) int {
+	index, err := strconv.Atoi(chapter.EpisodeString(0))
+	if err != nil || index < 0 {
+		return 0
+	}
+	return index
 }

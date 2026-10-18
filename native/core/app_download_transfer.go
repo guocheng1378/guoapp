@@ -185,7 +185,7 @@ func (manager *nativeDownloads) downloadFileAttempt(ctx context.Context, address
 	if err != nil {
 		return 0, false, err
 	}
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", hongguoWebMediaUserAgent(address))
 	request.Header.Set("Referer", referer)
 	request.Header.Set("Accept-Encoding", "identity")
 	if offset > 0 {

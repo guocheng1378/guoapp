@@ -91,6 +91,12 @@ type requestLimiter struct {
 
 type backgroundCatalogKey struct{}
 
+type probeBackoffSkipKey struct{}
+
+func withoutBackoffRecording(ctx context.Context) context.Context {
+	return context.WithValue(ctx, probeBackoffSkipKey{}, true)
+}
+
 func newRequestLimiter(concurrency int, interval time.Duration) *requestLimiter {
 	if concurrency < 1 {
 		concurrency = 1
@@ -190,6 +196,9 @@ func (limiter *requestLimiter) acquire(ctx context.Context, request *http.Reques
 }
 
 func (limiter *requestLimiter) observe(request *http.Request, response *http.Response) {
+	if request.Context().Value(probeBackoffSkipKey{}) != nil {
+		return
+	}
 	if response.StatusCode != http.StatusForbidden && response.StatusCode != http.StatusTooManyRequests && !strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge") {
 		return
 	}

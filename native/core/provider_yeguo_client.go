@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	yeguoBaseURL    = "https://analyze.buxefaex.cc"
+	yeguoBaseURL    = "https://www.yeguodj.com"
 	yeguoTransitURL = "https://ygdj7.com"
 )
 
@@ -111,9 +111,14 @@ func isYeguoActiveSite(raw string) bool {
 		return false
 	}
 	host := strings.ToLower(address.Hostname())
-	return host == "analyze.buxefaex.cc" ||
-		strings.HasSuffix(host, ".buxefaex.cc") ||
-		strings.HasSuffix(host, ".fzchosdi.cc")
+	switch {
+	case host == "analyze.buxefaex.cc" || strings.HasSuffix(host, ".buxefaex.cc"),
+		strings.HasSuffix(host, ".fzchosdi.cc"),
+		host == "yeguodj.com" || host == "www.yeguodj.com" || strings.HasSuffix(host, ".yeguodj.com"),
+		host == "ocdjlxow.cc" || strings.HasSuffix(host, ".ocdjlxow.cc"):
+		return true
+	}
+	return false
 }
 
 func yeguoTransitDecodedText(body string) string {
@@ -181,7 +186,8 @@ func yeguoTransitSites(body string) []string {
 	for _, match := range yeguoTransitLiteral.FindAllString(text, 32) {
 		if parsed, err := url.Parse(match); err == nil {
 			host := strings.ToLower(parsed.Hostname())
-			if strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") {
+			if strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") ||
+				strings.HasSuffix(host, ".yeguodj.com") || strings.HasSuffix(host, ".ocdjlxow.cc") {
 				add(match)
 			}
 		}
@@ -302,7 +308,7 @@ func (client *yeguoAPIClient) do(ctx context.Context, request *http.Request, tim
 	return response, nil
 }
 
-func yeguoAPIBase(document *html.Node, configured string) (string, error) {
+func yeguoAPIBase(document *html.Node, configured, site string) (string, error) {
 	base := strings.TrimRight(configured, "/")
 	if base == "" {
 		for _, node := range providerHTMLNodes(document, func(node *html.Node) bool {
@@ -328,6 +334,13 @@ func yeguoAPIBase(document *html.Node, configured string) (string, error) {
 					break
 				}
 			}
+		}
+	}
+	if base == "" {
+		// 新版站点（Nuxt CSR）不再在 __NUXT_DATA__ 中暴露 apiBaseURL，
+		// 接口改为同域 pathinfo 入口：https://<site>/api.php/api/...
+		if site = strings.TrimRight(strings.TrimSpace(site), "/"); site != "" && isProviderHTTPMediaURL(site+"/api.php") {
+			base = site + "/api.php"
 		}
 	}
 	address, err := url.Parse(base)
@@ -423,7 +436,7 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	if err != nil {
 		return nil, err
 	}
-	apiBase, err := yeguoAPIBase(document, d.cfg.YeguoAPIURL)
+	apiBase, err := yeguoAPIBase(document, d.cfg.YeguoAPIURL, site)
 	if err != nil {
 		return nil, err
 	}
@@ -620,11 +633,16 @@ func (client *yeguoAPIClient) call(ctx context.Context, route string, parameters
 		if err != nil {
 			return nil, err
 		}
-		if mapString(payload, "status") != "1" {
-			if mapString(payload, "status") == "-1" {
+		// 旧协议载荷形如 {"status":"1","data":{...}}；新版信封 {errcode,timestamp,data:<密文>}
+		// 解密后直接是 {"data":{...}}，没有 status 字段。
+		if status := mapString(payload, "status"); status != "" && status != "1" {
+			if status == "-1" {
 				return nil, errors.New("野果当前内容需要站源授权")
 			}
 			return nil, fmt.Errorf("野果请求未完成：%s", firstNonEmpty(truncate(cleanText(mapString(payload, "msg")), 180), "请稍后重试"))
+		}
+		if code := mapString(payload, "errcode"); code != "" && code != "0" {
+			return nil, fmt.Errorf("野果请求未完成：%s", firstNonEmpty(truncate(cleanText(mapString(payload, "msg", "message")), 180), "请稍后重试"))
 		}
 		data, valid := payload["data"].(map[string]any)
 		if !valid {

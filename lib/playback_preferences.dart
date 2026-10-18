@@ -9,6 +9,8 @@ class PlaybackPreferences {
     this.autoAdvance = true,
     this.danmaku = true,
     this.preload = true,
+    this.brightness = 1,
+    this.volume = 100,
     this.enhancement = const VideoEnhancementPreferences(),
   });
 
@@ -17,6 +19,10 @@ class PlaybackPreferences {
   final bool autoAdvance;
   final bool danmaku;
   final bool preload;
+
+  /// 遮罩亮度（0.05~1）与播放器音量（0~100），跨剧沿用用户上次的手感
+  final double brightness;
+  final double volume;
   final VideoEnhancementPreferences enhancement;
 
   PlaybackPreferences copyWith({
@@ -25,6 +31,8 @@ class PlaybackPreferences {
     bool? autoAdvance,
     bool? danmaku,
     bool? preload,
+    double? brightness,
+    double? volume,
     VideoEnhancementPreferences? enhancement,
   }) => PlaybackPreferences(
     speed: speed ?? this.speed,
@@ -32,6 +40,8 @@ class PlaybackPreferences {
     autoAdvance: autoAdvance ?? this.autoAdvance,
     danmaku: danmaku ?? this.danmaku,
     preload: preload ?? this.preload,
+    brightness: brightness ?? this.brightness,
+    volume: volume ?? this.volume,
     enhancement: enhancement ?? this.enhancement,
   );
 
@@ -41,6 +51,8 @@ class PlaybackPreferences {
     'autoAdvance': autoAdvance,
     'danmaku': danmaku,
     'preload': preload,
+    'brightness': brightness,
+    'volume': volume,
     'enhancement': enhancement.toJson(),
   };
 
@@ -50,6 +62,15 @@ class PlaybackPreferences {
     final autoAdvance = value['autoAdvance'] as bool? ?? true;
     final danmaku = value['danmaku'] as bool? ?? true;
     final preload = value['preload'] as bool? ?? true;
+    // 亮度/音量只做夹取不做校验，旧备份缺字段时用默认值即可通过
+    final brightness = ((value['brightness'] as num?)?.toDouble() ?? 1).clamp(
+      .05,
+      1.0,
+    );
+    final volume = ((value['volume'] as num?)?.toDouble() ?? 100).clamp(
+      0.0,
+      100.0,
+    );
     if (!playbackSpeeds.contains(speed) || quality < 0 || quality > 4320) {
       throw const FormatException('播放偏好无效');
     }
@@ -59,6 +80,8 @@ class PlaybackPreferences {
       autoAdvance: autoAdvance,
       danmaku: danmaku,
       preload: preload,
+      brightness: brightness,
+      volume: volume,
       enhancement: VideoEnhancementPreferences.fromJson(value['enhancement']),
     );
   }

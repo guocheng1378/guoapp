@@ -33,6 +33,7 @@ type hongguoPlaybackReference struct {
 type hongguoPlaybackResponse struct {
 	Parse   json.RawMessage `json:"parse"`
 	JX      json.RawMessage `json:"jx"`
+	URL     string          `json:"url"`
 	KeyURLs []struct {
 		Name   string `json:"name"`
 		URL    string `json:"src"`
@@ -102,6 +103,14 @@ func (d *Downloader) resolveHongguoPlaybackAPI(ctx context.Context, seriesID, vi
 	}
 	if keyErr != nil {
 		return providerMedia{}, keyErr
+	}
+	if address := strings.TrimSpace(response.URL); address != "" {
+		if len(address) > 8192 || !isProviderHTTPMediaURL(address) {
+			return providerMedia{}, errors.New("红果备用播放接口返回的媒体地址无效")
+		}
+		direct := providerMedia{URL: address, Referer: "https://novel.snssdk.com/"}
+		direct.Variants = []providerMedia{direct}
+		return direct, nil
 	}
 	return providerMedia{}, errors.New("红果备用播放接口未返回该集可用的媒体和密钥，请稍后重试或确认该集是否仍可访问")
 }
