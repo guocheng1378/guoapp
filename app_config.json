@@ -3,10 +3,10 @@
   "announcement": {
     "enabled": true,
     "title": "欢迎使用真果鉴",
-    "message": "在 GitHub 上修改本段文案并提交保存后，所有用户下次打开应用即可看到新内容。",
+    "message": "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可联系我们（反馈卡内附 QQ：963484350）。",
     "button": "我知道了",
     "link": "",
-    "image": ""
+    "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
   },
   "update": {
     "enabled": true,
