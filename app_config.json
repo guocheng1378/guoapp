@@ -1,11 +1,12 @@
 {
-  "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。",
+  "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；image 为可选配图 URL（仅支持 http/https，留空或非法则不显示，加载失败自动隐藏）；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。",
   "announcement": {
     "enabled": true,
     "title": "欢迎使用真果鉴",
-    "message": "在 GitHub 上修改本段文案并提交保存后，所有用户下次打开应用即可看到新内容。",
+    "message": "公告弹窗现已支持配图：下方这张图同样是在 GitHub 上配置的，改 URL 即可换图。",
     "button": "我知道了",
-    "link": ""
+    "link": "",
+    "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
   },
   "update": {
     "enabled": true,
