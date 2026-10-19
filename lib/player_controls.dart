@@ -8,6 +8,8 @@ import 'lan_controller.dart';
 import 'player_interactions.dart';
 import 'widgets.dart';
 import 'video_enhancement.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 class PlayerControls extends StatefulWidget {
   const PlayerControls({
@@ -214,8 +216,10 @@ class _PlayerControlsState extends State<PlayerControls> {
   void _tap() {
     if (widget.interactions.suppressTap) return;
     widget.onFocusSurface();
-    // 单击切换控制条显隐（横竖屏一致）；播放/暂停走中央按钮
-    setState(() => _visible = !_visible);
+    // 单击切换控制条显隐（横竖屏一致）；播放/暂停走中央按钮。
+    // 必须走 _setVisible：子树下线（_fading=false）后只有它会重新上线，
+    // 否则控制栏收起一次就再也唤不出来了。
+    _setVisible(!_visible);
     _scheduleHide();
   }
 
@@ -271,13 +275,9 @@ class _PlayerControlsState extends State<PlayerControls> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      ripple.forward
-                          ? Icons.fast_forward_rounded
-                          : Icons.fast_rewind_rounded,
-                      color: Colors.white,
-                      size: 26,
-                    ),
+                    ripple.forward
+                        ? AppIcon(AppIcons.fastForward, color: Colors.white, size: 26)
+                        : AppIcon(AppIcons.fastRewind, color: Colors.white, size: 26),
                     Text(
                       ripple.forward ? '+10 秒' : '-10 秒',
                       style: const TextStyle(color: Colors.white, fontSize: 12),
@@ -467,7 +467,7 @@ class _PlayerControlsState extends State<PlayerControls> {
             _overlayIconButton(
               tooltip: '返回',
               onPressed: widget.onBack,
-              icon: Icons.arrow_back_ios_new_rounded,
+              icon: AppIcon(AppIcons.arrowBack),
             ),
             Expanded(
               child: Text(
@@ -485,7 +485,7 @@ class _PlayerControlsState extends State<PlayerControls> {
               _overlayIconButton(
                 tooltip: '旋转与全屏',
                 onPressed: widget.onFullscreen,
-                icon: Icons.screen_rotation_alt_rounded,
+                icon: AppIcon(AppIcons.screenRotate),
               ),
           ],
         ),
@@ -503,7 +503,7 @@ class _PlayerControlsState extends State<PlayerControls> {
             _overlayIconButton(
               tooltip: '退出全屏',
               onPressed: widget.onFullscreen,
-              icon: Icons.arrow_back_rounded,
+              icon: AppIcon(AppIcons.arrowBack),
             ),
             Expanded(
               child: Text(
@@ -526,7 +526,7 @@ class _PlayerControlsState extends State<PlayerControls> {
   Widget _overlayIconButton({
     required String tooltip,
     required VoidCallback? onPressed,
-    required IconData icon,
+    required Widget icon,
   }) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 2),
     child: IconButton(
@@ -534,7 +534,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       constraints: const BoxConstraints.tightFor(width: 44, height: 44),
       padding: EdgeInsets.zero,
       onPressed: onPressed,
-      icon: Icon(icon),
+      icon: icon,
     ),
   );
 
@@ -546,7 +546,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           IconButton(
             tooltip: '上一集',
             onPressed: widget.onPrevious,
-            icon: const Icon(Icons.skip_previous_rounded),
+            icon: AppIcon(AppIcons.skipPrevious),
           ),
           const SizedBox(width: 12),
         ],
@@ -557,14 +557,14 @@ class _PlayerControlsState extends State<PlayerControls> {
             widget.onTogglePlayback();
             _show();
           },
-          icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+          icon: playing ? AppIcon(AppIcons.pause) : AppIcon(AppIcons.play),
         ),
         if (showSkip) ...[
           const SizedBox(width: 12),
           IconButton(
             tooltip: '下一集',
             onPressed: widget.onNext,
-            icon: const Icon(Icons.skip_next_rounded),
+            icon: AppIcon(AppIcons.skipNext),
           ),
         ],
       ],
@@ -784,7 +784,7 @@ class _PlayerControlsState extends State<PlayerControls> {
   Widget _toolIcon({
     required Key key,
     required String tooltip,
-    required IconData icon,
+    required Widget icon,
     required VoidCallback? onPressed,
     bool selected = false,
   }) => _toolButton(
@@ -792,7 +792,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     tooltip: tooltip,
     onPressed: onPressed,
     selected: selected,
-    child: Icon(icon, size: 22),
+    child: icon,
   );
 
   Widget _toolText({
@@ -878,12 +878,9 @@ class _PlayerControlsState extends State<PlayerControls> {
                 height: 18,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : Icon(
-                link.connection == null
-                    ? Icons.cast_rounded
-                    : Icons.cast_connected_rounded,
-                size: 22,
-              ),
+            : link.connection == null
+                ? AppIcon(AppIcons.cast, size: 22)
+                : AppIcon(AppIcons.castConnected, size: 22),
       ),
     );
   }
@@ -938,7 +935,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           ? () => _panel(widget.onRetryDanmaku ?? widget.onDanmaku!)
           : null,
       child: widget.onRetryDanmaku != null
-          ? const Icon(Icons.refresh_rounded, size: 21)
+          ? AppIcon(AppIcons.refresh, size: 21)
           : Text(
               '弹',
               style: TextStyle(
@@ -1020,7 +1017,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         _toolIcon(
           key: const ValueKey('player-episodes'),
           tooltip: '选集',
-          icon: Icons.grid_view_rounded,
+          icon: AppIcon(AppIcons.gridView, size: 22),
           onPressed: widget.enabled ? () => _panel(widget.onEpisodes) : null,
         ),
       if (showCompare) _enhancementCompareButton(),
@@ -1029,8 +1026,8 @@ class _PlayerControlsState extends State<PlayerControls> {
           key: const ValueKey('player-volume'),
           tooltip: '音量',
           icon: volume == 0
-              ? Icons.volume_off_rounded
-              : Icons.volume_up_rounded,
+              ? AppIcon(AppIcons.volumeOff, size: 22)
+              : AppIcon(AppIcons.volumeUp, size: 22),
           onPressed: widget.enabled
               ? () => _panel(() => _openVolume(volume))
               : null,
@@ -1039,7 +1036,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         _toolIcon(
           key: const ValueKey('player-picture-in-picture'),
           tooltip: '画中画',
-          icon: Icons.picture_in_picture_alt_rounded,
+          icon: AppIcon(AppIcons.pip, size: 22),
           onPressed: widget.enabled
               ? () => _panel(widget.onPictureInPicture!)
               : null,
@@ -1049,8 +1046,8 @@ class _PlayerControlsState extends State<PlayerControls> {
           key: const ValueKey('player-fullscreen'),
           tooltip: fullscreen ? '退出全屏' : '旋转与全屏',
           icon: fullscreen
-              ? Icons.fullscreen_exit_rounded
-              : Icons.fullscreen_rounded,
+              ? AppIcon(AppIcons.fullscreenExit, size: 22)
+              : AppIcon(AppIcons.fullscreen, size: 22),
           onPressed: widget.onFullscreen,
         ),
     ];
@@ -1090,14 +1087,14 @@ class _PlayerControlsState extends State<PlayerControls> {
         _toolIcon(
           key: const ValueKey('player-episodes'),
           tooltip: '选集',
-          icon: Icons.grid_view_rounded,
+          icon: AppIcon(AppIcons.gridView, size: 22),
           onPressed: widget.enabled ? () => _panel(widget.onEpisodes) : null,
         ),
       if (widget.onPictureInPicture != null)
         _toolIcon(
           key: const ValueKey('player-picture-in-picture'),
           tooltip: '画中画',
-          icon: Icons.picture_in_picture_alt_rounded,
+          icon: AppIcon(AppIcons.pip, size: 22),
           onPressed: widget.enabled
               ? () => _panel(widget.onPictureInPicture!)
               : null,
@@ -1107,8 +1104,8 @@ class _PlayerControlsState extends State<PlayerControls> {
         key: const ValueKey('player-fullscreen-toggle'),
         tooltip: fullscreen ? '退出全屏' : '进入全屏',
         icon: fullscreen
-            ? Icons.fullscreen_exit_rounded
-            : Icons.fullscreen_rounded,
+            ? AppIcon(AppIcons.fullscreenExit, size: 22)
+            : AppIcon(AppIcons.fullscreen, size: 22),
         onPressed: widget.enabled && widget.onFullscreen != null
             ? widget.onFullscreen
             : null,
@@ -1159,13 +1156,11 @@ class _PlayerControlsState extends State<PlayerControls> {
                               setState(() => volume = next);
                               unawaited(widget.player.setVolume(next));
                             },
-                            icon: Icon(
-                              volume == 0
-                                  ? Icons.volume_off_rounded
-                                  : Icons.volume_up_rounded,
-                              size: 22,
-                              color: Colors.white,
-                            ),
+                            icon: volume == 0
+                                ? AppIcon(AppIcons.volumeOff,
+                                    color: Colors.white, size: 22)
+                                : AppIcon(AppIcons.volumeUp,
+                                    color: Colors.white, size: 22),
                           ),
                           SizedBox(
                             width: 44,
@@ -1242,7 +1237,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         return _toolIcon(
           key: const ValueKey('player-enhancement-compare'),
           tooltip: enhancement.comparing ? '原画对比中，点击恢复增强' : '原画对比',
-          icon: Icons.compare_rounded,
+          icon: AppIcon(AppIcons.compare, size: 22),
           onPressed: widget.enabled
               ? () {
                   widget.interactions.cancel();

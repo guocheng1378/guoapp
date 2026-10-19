@@ -104,15 +104,16 @@ func (s *Source) dramaFromNode(node map[string]any, base string) provider.Drama 
 	}
 	total := provider.FindInt(theater, "total", "total_num", "current_num")
 	return provider.Drama{
-		ID:           provider.DramaID(s.spec.ID, id),
-		Source:       s.spec.ID,
-		SourceID:     id,
-		Title:        provider.FindString(theater, "title", "name"),
-		Intro:        provider.FindString(theater, "descrip", "introduction", "desc"),
-		Cover:        provider.Cover(base, theater, "cover_url", "son_cover_url", "cover"),
-		EpisodeCount: json.Number(strconv.Itoa(total)),
-		Category:     provider.CSV(provider.StringList(theater["tags"])),
-		ChannelName:  provider.SourceName(s.spec.ID),
+		ID:            provider.DramaID(s.spec.ID, id),
+		Source:        s.spec.ID,
+		SourceID:      id,
+		Title:         provider.FindString(theater, "title", "name"),
+		Intro:         provider.FindString(theater, "descrip", "introduction", "desc"),
+		Cover:         provider.Cover(base, theater, "cover_url", "son_cover_url", "cover"),
+		EpisodeCount:  json.Number(strconv.Itoa(total)),
+		ReleaseStatus: provider.ReleaseStatus("", total, provider.FindInt(theater, "current_num")),
+		Category:      provider.CSV(provider.StringList(theater["tags"])),
+		ChannelName:   provider.SourceName(s.spec.ID),
 	}
 }
 

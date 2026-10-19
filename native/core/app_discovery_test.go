@@ -53,10 +53,10 @@ func TestNativeRankingPermissionsAndPersistentCache(t *testing.T) {
 	if nativeAuthorizeInput(nativeInput{Action: "rankings", Board: "unknown"}) == nil {
 		t.Fatal("unknown board accepted")
 	}
-	board, _ := findRankingBoard("hongguo-hot")
-	d := rankingTestDownloader(t, func(request *http.Request) (*http.Response, error) {
-		return rankingHTTPResponse(request, 200, rankingFixture(board, 1, rankingRows(1))), nil
-	})
+	board, _ := findRankingBoard("douban-realtime")
+	defer doubanSwapBaseURL(t, doubanRankingServer(t))()
+	d := &Downloader{cfg: Config{dataDir: t.TempDir()}}
+	d.loadRankingCache()
 	first, err := d.loadRankingPage(context.Background(), board, 1, false)
 	if err != nil {
 		t.Fatal(err)
@@ -137,5 +137,12 @@ func TestNativeCoverMetadataRejectsOtherDramaAndKeepsCurrentHost(t *testing.T) {
 	d := &Downloader{providerHosts: map[string]string{sourceHuangdou: "https://mirror.example.test"}}
 	if got := nativeCoverReferer(d, sourceHuangdou, "https://new-cover.example.test/synthetic.img"); got != "https://mirror.example.test/home" {
 		t.Fatal("cover referer ignored active source mirror", got)
+	}
+	// 豆瓣图片 CDN 校验 Referer 域：必须带站内 Referer，否则 403/418。
+	if got := nativeCoverReferer(&Downloader{}, sourceDouban, "https://img3.doubanio.com/p.jpg"); got != doubanReferer {
+		t.Fatal("douban cover referer lost", got)
+	}
+	if got := nativeCoverReferer(&Downloader{}, "", "https://img3.doubanio.com/view/photo/p1.jpg"); got != doubanReferer {
+		t.Fatal("doubanio host referer fallback lost", got)
 	}
 }

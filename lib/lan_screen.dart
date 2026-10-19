@@ -9,11 +9,12 @@ import 'lan_controller.dart';
 import 'local_store.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
-IconData lanDeviceIcon(String kind) => switch (kind) {
-  'tv' => Icons.tv_rounded,
-  'computer' => Icons.computer_rounded,
-  _ => Icons.smartphone_rounded,
+Widget lanDeviceIcon(String kind) => switch (kind) {
+  'tv' => AppIcon(AppIcons.tv),
+  'computer' => AppIcon(AppIcons.computer),
+  _ => AppIcon(AppIcons.smartphone),
 };
 
 Future<T?> _lanPanel<T>(
@@ -222,13 +223,13 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                             : (value) => _perform(() => link.setEnabled(value)),
                       ),
                       ListTile(
-                        leading: Icon(lanDeviceIcon(link.kind)),
+                        leading: lanDeviceIcon(link.kind),
                         title: Text(link.deviceName),
                         subtitle: Text('本机用户 · ' + link.store.profile.name),
                         trailing: IconButton(
                           tooltip: '修改设备名称',
                           onPressed: _busy ? null : _rename,
-                          icon: const Icon(Icons.edit_outlined),
+                          icon: AppIcon(AppIcons.edit),
                         ),
                       ),
                     ],
@@ -240,11 +241,9 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       ListTile(
-                        leading: Icon(
-                          remote == null
-                              ? Icons.devices_rounded
-                              : lanDeviceIcon(remote.peer.kind),
-                        ),
+                        leading: remote == null
+                            ? AppIcon(AppIcons.devices)
+                            : lanDeviceIcon(remote.peer.kind),
                         title: Text(
                           remote?.peer.name ?? link.connectionLabel,
                           maxLines: 2,
@@ -279,7 +278,7 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                         child: OutlinedButton.icon(
-                          icon: const Icon(Icons.devices_other_rounded),
+                          icon: AppIcon(AppIcons.devices),
                           label: Text(remote == null ? '选择设备' : '切换设备'),
                           onPressed: _busy || link.store.locked
                               ? null
@@ -352,11 +351,9 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                       Padding(
                         padding: const EdgeInsets.all(16),
                         child: FilledButton.icon(
-                          icon: Icon(
-                            link.syncing
-                                ? Icons.close_rounded
-                                : Icons.sync_rounded,
-                          ),
+                          icon: link.syncing
+                              ? AppIcon(AppIcons.close)
+                              : AppIcon(AppIcons.sync),
                           label: Text(link.syncing ? '取消本次同步' : '立即同步'),
                           onPressed: link.syncing
                               ? _cancelling
@@ -373,10 +370,10 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                 if (conflicts > 0)
                   Card(
                     child: ListTile(
-                      leading: const Icon(Icons.compare_arrows_rounded),
+                      leading: AppIcon(AppIcons.compareArrows),
                       title: Text('$conflicts 项记录待处理'),
                       subtitle: const Text('两端同时修改的内容已保留，选择要继续使用的记录'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                      trailing: AppIcon(AppIcons.chevronRight),
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute<void>(
@@ -386,10 +383,10 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                     ),
                   ),
                 ListTile(
-                  leading: const Icon(Icons.sync_alt_rounded),
+                  leading: AppIcon(AppIcons.syncAlt),
                   title: const Text('手动同步'),
                   subtitle: const Text('双向合并、覆盖对方或覆盖本机'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: AppIcon(AppIcons.chevronRight),
                   enabled: remote != null && controlsEnabled,
                   onTap: remote != null && controlsEnabled ? _manual : null,
                 ),
@@ -410,7 +407,7 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                   ),
                 if (link.local != null)
                   ExpansionTile(
-                    leading: const Icon(Icons.info_outline_rounded),
+                    leading: AppIcon(AppIcons.info),
                     title: const Text('本机地址与连接帮助'),
                     childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     children: [
@@ -422,7 +419,7 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
                           title: SelectableText(address),
                           trailing: IconButton(
                             tooltip: '复制地址',
-                            icon: const Icon(Icons.copy_rounded),
+                            icon: AppIcon(AppIcons.copy),
                             onPressed: () =>
                                 Clipboard.setData(ClipboardData(text: address)),
                           ),
@@ -577,12 +574,12 @@ class _LanDevicesState extends State<_LanDevices> {
                 IconButton(
                   tooltip: '重新搜索',
                   onPressed: _busy ? null : link.rescan,
-                  icon: const Icon(Icons.refresh_rounded),
+                  icon: AppIcon(AppIcons.refresh),
                 ),
                 IconButton(
                   tooltip: '关闭',
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
+                  icon: AppIcon(AppIcons.close),
                 ),
               ],
             ),
@@ -601,7 +598,7 @@ class _LanDevicesState extends State<_LanDevices> {
                     padding: const EdgeInsets.symmetric(vertical: 28),
                     child: Column(
                       children: [
-                        const Icon(Icons.wifi_find_rounded, size: 48),
+                        AppIcon(AppIcons.wifiFind, size: 48),
                         const SizedBox(height: 12),
                         Text(link.receiving ? '正在发现同一网络中的设备' : '正在开启设备互联'),
                         const SizedBox(height: 8),
@@ -617,7 +614,7 @@ class _LanDevicesState extends State<_LanDevices> {
                     child: ListTile(
                       autofocus: peers.length == 1,
                       minVerticalPadding: 16,
-                      leading: Icon(lanDeviceIcon(peer.kind)),
+                      leading: lanDeviceIcon(peer.kind),
                       title: Text(
                         peer.name,
                         maxLines: 2,
@@ -660,7 +657,7 @@ class _LanDevicesState extends State<_LanDevices> {
                   ),
                 TextButton.icon(
                   onPressed: () => setState(() => _manual = !_manual),
-                  icon: const Icon(Icons.keyboard_rounded),
+                  icon: AppIcon(AppIcons.keyboard),
                   label: const Text('输入地址连接'),
                 ),
                 if (_manual) ...[
@@ -786,7 +783,7 @@ class _LanManualState extends State<_LanManual> {
                   IconButton(
                     tooltip: '关闭',
                     onPressed: _busy ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
+                    icon: AppIcon(AppIcons.close),
                   ),
                 ],
               ),
@@ -806,11 +803,9 @@ class _LanManualState extends State<_LanManual> {
                         child: ListTile(
                           autofocus: mode == LanSyncMode.merge,
                           minVerticalPadding: 16,
-                          leading: Icon(
-                            _mode == mode
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                          ),
+                          leading: _mode == mode
+                              ? AppIcon(AppIcons.radioChecked)
+                              : AppIcon(AppIcons.radioUnchecked),
                           title: Text(mode.label),
                           subtitle: Text(switch (mode) {
                             LanSyncMode.merge => '本机 ↔ $name · 合并双方记录',
@@ -894,7 +889,7 @@ class _LanManualState extends State<_LanManual> {
               child: _busy || _cancelling
                   ? OutlinedButton.icon(
                       onPressed: _cancelling ? null : _cancel,
-                      icon: const Icon(Icons.close_rounded),
+                      icon: AppIcon(AppIcons.close),
                       label: Text(_cancelling ? '正在取消' : '取消本次同步'),
                     )
                   : FilledButton(
@@ -990,9 +985,7 @@ class _LanConflicts extends StatelessWidget {
                                 ),
                                 for (final candidate in field.value.values)
                                   ListTile(
-                                    leading: const Icon(
-                                      Icons.radio_button_unchecked_rounded,
-                                    ),
+                                    leading: AppIcon(AppIcons.radioUnchecked),
                                     title: Text(
                                       _value(field.key, candidate.value),
                                     ),
@@ -1046,11 +1039,9 @@ class LanPushButton extends StatelessWidget {
                 height: 22,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : Icon(
-                link.connection == null
-                    ? Icons.cast_rounded
-                    : Icons.cast_connected_rounded,
-              ),
+            : link.connection == null
+                ? AppIcon(AppIcons.cast)
+                : AppIcon(AppIcons.castConnected),
       ),
     );
   }
@@ -1158,12 +1149,9 @@ class _LanPushPanelState extends State<_LanPushPanel> {
               padding: const EdgeInsets.all(24),
               child: Column(
                 children: [
-                  Icon(
-                    _success
-                        ? Icons.cast_connected_rounded
-                        : Icons.cast_rounded,
-                    size: 64,
-                  ),
+                  _success
+                      ? AppIcon(AppIcons.castConnected, size: 64)
+                      : AppIcon(AppIcons.cast, size: 64),
                   const SizedBox(height: 24),
                   Text(
                     widget.snapshot().drama.title,

@@ -36,8 +36,9 @@ class LibraryFeatureRepository extends FixtureRepository {
   );
 
   LibraryFeatureRepository() {
-    // 新首页轮播会吃掉目录前 maxItems 部剧；垫 5 部把 first/second
-    // 顶进网格 tile（drama-actions 按钮只在网格 tile 上）。
+    // 默认变体下首页轮播回退吃掉目录前 5 部；垫 5 部把 first/second
+    // 顶进网格 tile（drama-actions 按钮只在网格 tile 上）。全源变体
+    // 轮播改拉其他站源（fixture 无数据即隐藏），网格展示全部条目。
     final pads = [
       for (var i = 1; i <= 5; i++)
         Drama(
@@ -132,6 +133,7 @@ class LibraryFeatureRepository extends FixtureRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) async {
     requests.add(source);

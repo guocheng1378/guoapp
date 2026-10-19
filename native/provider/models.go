@@ -64,6 +64,8 @@ type Drama struct {
 	Views             string             `json:"views,omitempty"`
 	Heat              string             `json:"heat,omitempty"`
 	OnlineDate        string             `json:"onlineDate,omitempty"`
+	Area              string             `json:"area,omitempty"`
+	Year              string             `json:"year,omitempty"`
 	Tags              []string           `json:"tags,omitempty"`
 	ReleaseStatus     string             `json:"releaseStatus,omitempty"`
 	SortMetadata      *SortMetadataState `json:"sortMetadata,omitempty"`

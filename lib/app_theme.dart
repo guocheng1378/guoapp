@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'glass.dart';
+import 'motion.dart';
 
 abstract final class AppTheme {
   static final light = _theme(Brightness.light);
@@ -77,6 +78,16 @@ abstract final class AppTheme {
       brightness: brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: background,
+      // 全局页面转场：淡入 + 微缩放（motion.dart 令牌）。
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: FadeScalePageTransitionsBuilder(),
+          TargetPlatform.iOS: FadeScalePageTransitionsBuilder(),
+          TargetPlatform.windows: FadeScalePageTransitionsBuilder(),
+          TargetPlatform.linux: FadeScalePageTransitionsBuilder(),
+          TargetPlatform.macOS: FadeScalePageTransitionsBuilder(),
+        },
+      ),
       // 顶栏透明沉浸化：与页面背景连成一体；核心滚动页用 SliverAppBar +
       // GlassSurface 让内容真正从顶栏后方穿过（透色玻璃）。
       appBarTheme: AppBarTheme(

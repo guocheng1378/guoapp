@@ -7,6 +7,7 @@ import 'glass_menu.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 Future<void> showDramaActions(
   BuildContext context, {
@@ -20,28 +21,28 @@ Future<void> showDramaActions(
 }) async {
   final epoch = store.profileEpoch;
   final following = store.following(drama.id);
-  final choices = <(String, String, IconData)>[
+  final choices = <(String, String, Widget)>[
     if (onContinue != null && store.watched(drama.id) != null)
-      ('continue', '继续观看', Icons.play_arrow_rounded),
-    ('favorite', following == null ? '加入追剧' : '取消追剧', Icons.bookmark_outline),
+      ('continue', '继续观看', AppIcon(AppIcons.play, size: 22)),
+    ('favorite', following == null ? '加入追剧' : '取消追剧', AppIcon(AppIcons.bookmark, size: 22)),
     for (final status in FollowStatus.values)
       (
         'status:${status.name}',
         '标记${status.label}',
         switch (status) {
-          FollowStatus.planned => Icons.bookmark_add_outlined,
-          FollowStatus.watching => Icons.play_circle_outline,
-          FollowStatus.watched => Icons.check_circle_outline,
+          FollowStatus.planned => AppIcon(AppIcons.bookmarkAdd, size: 22),
+          FollowStatus.watching => AppIcon(AppIcons.playCircle, size: 22),
+          FollowStatus.watched => AppIcon(AppIcons.checkCircle, size: 22),
         },
       ),
     if (following != null && following.hasUpdates)
-      ('read', '标记 ${following.updateLabel}已读', Icons.mark_email_read_outlined),
+      ('read', '标记 ${following.updateLabel}已读', AppIcon(AppIcons.emailRead, size: 22)),
     if (onDownload != null && store.canDownload)
-      ('download', '下载选集', Icons.download_outlined),
+      ('download', '下载选集', AppIcon(AppIcons.download, size: 22)),
     if (onSelect != null && store.canDownload)
-      ('select', '多选下载', Icons.checklist_rounded),
+      ('select', '多选下载', AppIcon(AppIcons.checklist, size: 22)),
     if (history && store.watched(drama.id) != null)
-      ('removeHistory', '删除这条观看记录', Icons.history_toggle_off),
+      ('removeHistory', '删除这条观看记录', AppIcon(AppIcons.historyToggle, size: 22)),
   ];
   final String? choice;
   final anchorContext = anchorKey?.currentContext;
@@ -73,11 +74,11 @@ Future<void> showDramaActions(
                 onPressed: () => Navigator.pop(context, entry.$2.$1),
                 child: Row(
                   children: [
-                    Icon(entry.$2.$3, size: 22),
+                    entry.$2.$3,
                     const SizedBox(width: 14),
                     Expanded(child: Text(entry.$2.$2)),
                     if (entry.$2.$1 == 'status:${following?.status.name}')
-                      const Icon(Icons.check_rounded, size: 20),
+                      AppIcon(AppIcons.check, size: 20),
                   ],
                 ),
               ),
@@ -166,7 +167,7 @@ class _DramaActionButtonState extends State<DramaActionButton> {
       key: ValueKey('drama-actions-${widget.drama.id}'),
       tooltip: '${widget.drama.title} · 更多操作',
       onPressed: _open,
-      icon: const Icon(Icons.more_horiz_rounded, size: 20),
+      icon: AppIcon(AppIcons.moreHoriz, size: 20),
       style: IconButton.styleFrom(
         backgroundColor: Colors.black.withValues(alpha: .64),
         foregroundColor: Colors.white,

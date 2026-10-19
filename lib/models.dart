@@ -5,6 +5,7 @@ import 'app_build.dart';
 enum SourceCategory {
   shortDrama,
   video,
+  adult,
 }
 
 class SourceSite {
@@ -15,9 +16,11 @@ class SourceSite {
   SourceCategory get category => _categories[id] ?? SourceCategory.shortDrama;
   bool get isShortDrama => category == SourceCategory.shortDrama;
   bool get isVideoSource => category == SourceCategory.video;
+  bool get isAdultSource => category == SourceCategory.adult;
 
   /// 黄果类成员：黄果系入口（AI/旧版/视频）+ 黄豆/野果/剧果。
-  /// 站源管理页独立成「黄果类」分区；受限名单即该类（受限的只有黄果类）。
+  /// 既是受限站源名单（默认关闭、开启要管理员密码，见 isRestricted），
+  /// 也是界面三分类里的「黄果类」分区口径。
   static const huangguoCategoryIds = <String>{
     'huangguo-video',
     'huangguoai',
@@ -28,6 +31,19 @@ class SourceSite {
   };
   bool get inHuangguoCategory => huangguoCategoryIds.contains(id);
 
+  /// 站源四分类口径：短剧类 / 视频类 / 黄果类 / 成人类。
+  /// 黄果类优先级高于内容类型——黄果系入口自成一类，不与短剧类、视频类混；
+  /// 界面分区、精选轮换、豆瓣选片的搜索目标、榜单归属、本地榜统计统一用它判定「同类」。
+  String get classKey => inHuangguoCategory ? 'huangguo' : category.name;
+
+  /// 四分类显示名（与首页站源菜单、站源管理页口径一致）。
+  static String classLabel(String classKey) => switch (classKey) {
+    'huangguo' => '黄果类',
+    'shortDrama' => '短剧类',
+    'adult' => '成人类',
+    _ => '视频类',
+  };
+
   bool? get shortPlayOverride => _shortPlay[id];
   bool get onlineSearch => id == 'hongguo' || pagedSearch;
   bool get pagedSearch => id == 'huangju' || duanjuPaged;
@@ -37,10 +53,13 @@ class SourceSite {
     '360zy',
     'modu',
     'dytt',
+    'zy155', 'yutu', 'fanhao', 'lsbzy', 'hsck', 'danaizi',
+    'jkun', 'lebo', 'senlin', 'doudou', 'didi', 'heiliao',
+    'taohua', 'souav',
   }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
-  // 黄果系入口（AI/旧版/视频）各自成组：主界面站源菜单与站源管理页
-  // 均单独显示各入口，站源管理页仅按黄果类区头归拢。
+  // 各入口（含黄果系 AI/旧版/视频）各自成组：主界面站源菜单与站源管理页
+  // 均单独显示各入口，界面上按内容类型的分类区头归拢。
   String get groupId => id;
   String get groupName => name;
   String get entryName => switch (id) {
@@ -78,8 +97,38 @@ class SourceSite {
     SourceSite('faguo', '168 影院', 'maccms · 影视采集'),
     SourceSite('wuguo', '五五', 'maccms · 短剧采集'),
   ];
+  // adultValues：成人采集源（maccms 接口），界面归「成人类」独立分区；
+  // 属受限名单（isRestricted），默认关闭、开启需管理员密码。
+  // 2026-10-19 探针剔除 7 个死源：maodou/naixx/shayu/jingpin（后端无响应）、
+  // lajiao/xiangjiao（整站超时）、xibao（TLS 证书无效）。
+  static const adultCategoryIds = <String>{
+    'zy155', 'yutu', 'fanhao', 'lsbzy', 'hsck', 'danaizi',
+    'jkun', 'lebo', 'senlin', 'doudou', 'didi', 'heiliao',
+    'taohua', 'souav', 'ckzy', 'aosika',
+  };
+  static const adultValues = [
+    SourceSite('zy155', '155', 'maccms · m3u8 · 可播放'),
+    SourceSite('yutu', '玉兔', 'maccms · m3u8 · 可播放'),
+    SourceSite('fanhao', '番号', 'maccms · m3u8 · 可播放'),
+    SourceSite('lsbzy', '老色逼', 'maccms · m3u8 · 可播放'),
+    SourceSite('hsck', '黄色仓库', 'maccms · 页面解析 · 可播放'),
+    SourceSite('danaizi', '大奶子', 'maccms · m3u8 · 可播放'),
+    SourceSite('jkun', 'jkun', 'maccms · m3u8 · 可播放'),
+    SourceSite('lebo', '乐播', 'maccms · m3u8 · 可播放'),
+    SourceSite('senlin', '森林', 'maccms · m3u8 · 可播放'),
+    SourceSite('doudou', '豆豆', 'maccms · m3u8 · 可播放（源站不稳）'),
+    SourceSite('didi', '滴滴', 'maccms · m3u8 · 可播放'),
+    SourceSite('heiliao', '黑料', 'maccms · m3u8 · 可播放'),
+    SourceSite('taohua', '桃花', 'maccms · m3u8 · 可播放'),
+    SourceSite('souav', 'souav', 'maccms · m3u8 · 可播放'),
+    SourceSite('ckzy', 'CK', 'maccms · m3u8 · 无搜索'),
+    SourceSite('aosika', '奥斯卡', 'maccms · m3u8 · 无搜索'),
+  ];
   // knownValues 只含当前版本提供的站源；allValues 额外保留已下线源（dsd、
   // huangguo-video），旧用户配置与备份仍可解析，但界面不再展示。
+  // douban 是榜单专用源：只提供排行榜数据，无目录/搜索/播放能力，
+  // 仅登记进 allValues 供 byId 解析分组名，不进 knownValues 站源菜单。
+  static const douban = SourceSite('douban', '豆瓣', '榜单 · 电影/剧集');
   static const knownValues = [
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
@@ -88,6 +137,7 @@ class SourceSite {
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
     ...duanjuValues,
     ...engineValues,
+    ...adultValues,
   ];
   static const allValues = [
     hongguo,
@@ -97,17 +147,35 @@ class SourceSite {
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
     dsd,
+    douban,
     ...duanjuValues,
     ...engineValues,
+    ...adultValues,
   ];
   static const values = allSourcesEnabled ? knownValues : [hongguo];
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
-  // 受限站源 = 黄果类成员（黄果系入口 + 黄豆/野果/剧果），默认关闭；
-  // 其余分类的站源一律默认开放。
-  static bool isRestricted(String id) => huangguoCategoryIds.contains(id);
-  static SourceSite byId(String id) =>
-      allValues.firstWhere((site) => site.id == id, orElse: () => hongguo);
+  /// 榜单专用源：不注册 provider、不进站源菜单（values/isAvailable 口径
+  /// 天然排除），只提供榜单参考数据。榜单链路（榜列表/榜条目/授权）按
+  /// 此放行，与 Go 侧 nativeSourceAvailable 的豆瓣特判同语义。
+  static bool isRankingOnly(String id) => id == douban.id;
+
+  /// 数据请求(封面/榜单等只读链路)的站源授权口径：榜单专用源（豆瓣）
+  /// 不注册 provider、不在站源菜单内，只提供榜单参考数据，因此直接放行；
+  /// 其余站源仍须落在当前变体白名单 [values] 里。
+  static bool authorized(String id) => isRankingOnly(id) || isAvailable(id);
+  // 受限站源 = 黄果类成员（黄果系入口 + 黄豆/野果/剧果）与成人类源，
+  // 默认关闭，开启需管理员密码；其余分类的站源一律默认开放。
+  static bool isRestricted(String id) =>
+      huangguoCategoryIds.contains(id) || adultCategoryIds.contains(id);
+  /// 按 id 查站源；未知或已彻底下线的 id 返回 null，不再静默回退红果，
+  /// 调用方按展示场景选择默认值或「未知源」。
+  static SourceSite? byId(String id) {
+    for (final site in allValues) {
+      if (site.id == id) return site;
+    }
+    return null;
+  }
 
   static const _categories = <String, SourceCategory>{
     'hongguo': SourceCategory.shortDrama,
@@ -121,14 +189,11 @@ class SourceSite {
     'yaguo': SourceCategory.shortDrama,
     'maoguo': SourceCategory.shortDrama,
     'fanguo': SourceCategory.shortDrama,
-    'guanguo': SourceCategory.shortDrama,
     'heguo': SourceCategory.shortDrama,
     'xingguo': SourceCategory.shortDrama,
     'huaguo': SourceCategory.shortDrama,
-    'niuguo': SourceCategory.shortDrama,
     'wangguo': SourceCategory.shortDrama,
-    'faguo': SourceCategory.shortDrama,
-    'piguo': SourceCategory.shortDrama,
+    'faguo': SourceCategory.video,
     'wuguo': SourceCategory.shortDrama,
     'yingshigongchang': SourceCategory.video,
     '360zy': SourceCategory.video,
@@ -140,6 +205,23 @@ class SourceSite {
     'wsyzy': SourceCategory.video,
     'sorani': SourceCategory.video,
     'dongpiandi': SourceCategory.video,
+    'douban': SourceCategory.video,
+    'zy155': SourceCategory.adult,
+    'yutu': SourceCategory.adult,
+    'fanhao': SourceCategory.adult,
+    'lsbzy': SourceCategory.adult,
+    'hsck': SourceCategory.adult,
+    'danaizi': SourceCategory.adult,
+    'jkun': SourceCategory.adult,
+    'lebo': SourceCategory.adult,
+    'senlin': SourceCategory.adult,
+    'doudou': SourceCategory.adult,
+    'didi': SourceCategory.adult,
+    'heiliao': SourceCategory.adult,
+    'taohua': SourceCategory.adult,
+    'souav': SourceCategory.adult,
+    'ckzy': SourceCategory.adult,
+    'aosika': SourceCategory.adult,
   };
 
   static const _shortPlay = <String, bool>{
@@ -158,6 +240,10 @@ class SourceSite {
     'hongniu': false,
     'niuniuzy': false,
     'wsyzy': false,
+    'zy155': false, 'yutu': false, 'fanhao': false, 'lsbzy': false,
+    'hsck': false, 'danaizi': false, 'jkun': false, 'lebo': false,
+    'senlin': false, 'doudou': false, 'didi': false, 'heiliao': false,
+    'taohua': false, 'souav': false, 'ckzy': false, 'aosika': false,
   };
 }
 
@@ -209,6 +295,9 @@ class Drama {
     this.heat = '',
     this.views = '',
     this.onlineDate = '',
+    this.area = '',
+    this.year = '',
+    this.score = '',
     this.tags = const [],
     this.releaseStatus = '',
   }) : vipStatus = vip;
@@ -225,6 +314,9 @@ class Drama {
   final String heat;
   final String views;
   final String onlineDate;
+  final String area;
+  final String year;
+  final String score;
   final List<String> tags;
   final String releaseStatus;
   String get releaseLabel => switch (releaseStatus) {
@@ -252,6 +344,9 @@ class Drama {
     heat: json['heat']?.toString() ?? '',
     views: json['views']?.toString() ?? '',
     onlineDate: json['onlineDate'] as String? ?? '',
+    area: json['area']?.toString() ?? '',
+    year: json['year']?.toString() ?? '',
+    score: json['score']?.toString() ?? '',
     tags: (json['tags'] as List? ?? const []).whereType<String>().toList(),
     releaseStatus: json['releaseStatus'] as String? ?? '',
   );
@@ -269,6 +364,9 @@ class Drama {
     'heat': heat,
     'views': views,
     'onlineDate': onlineDate,
+    'area': area,
+    'year': year,
+    'score': score,
     'tags': tags,
     'releaseStatus': releaseStatus,
   };
@@ -305,6 +403,9 @@ class Drama {
       heat: fresh.heat.isEmpty ? heat : fresh.heat,
       views: fresh.views.isEmpty ? views : fresh.views,
       onlineDate: fresh.onlineDate.isEmpty ? onlineDate : fresh.onlineDate,
+      area: fresh.area.isEmpty ? area : fresh.area,
+      year: fresh.year.isEmpty ? year : fresh.year,
+      score: fresh.score.isEmpty ? score : fresh.score,
       tags: fresh.tags.isEmpty ? tags : fresh.tags,
       releaseStatus:
           fresh.releaseStatus.isEmpty || fresh.releaseStatus == 'unknown'

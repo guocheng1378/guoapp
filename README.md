@@ -101,6 +101,7 @@
 - **站源插件化**：所有站源实现统一的 `Provider` 契约（目录 / 详情 / 搜索 / 媒体解析），注册进 `native/provider` 注册表，新增站源零侵入
 - **无服务端架构**：请求、解析、缓存、下载全部在本地完成，隐私数据不出设备
 - 详细的架构与站源接入文档见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- **想新增站源？** 五步接入指南（Spec 登记 → 能力实现 → 注册聚合 → 验收）见 [docs/SOURCE-GUIDE.md](docs/SOURCE-GUIDE.md)
 
 ## 🛠 从源码构建
 

@@ -8,6 +8,7 @@ import 'glass.dart';
 import 'playback_preferences.dart';
 import 'video_enhancement.dart';
 import 'video_enhancement_settings.dart';
+import 'app_icons.dart';
 
 enum PlayerMenuSection { episodes, speed, quality, settings }
 
@@ -95,7 +96,11 @@ class _PlayerMenuState extends State<PlayerMenu> {
         variant: GlassVariant.overlay,
         radius: GlassTokens.radiusSheet,
         topHighlight: true,
-        child: SizedBox(
+        // 玻璃底是带背景色的 DecoratedBox：列表控件需要直接的 Material 祖先
+        // 承载墨水效果，否则 ListTile 会触发框架断言。
+        child: Material(
+          type: MaterialType.transparency,
+          child: SizedBox(
         width: landscape ? math.min(440, size.width * .6) : 600,
         height: landscape ? size.height : size.height * .72,
         child: Column(
@@ -113,7 +118,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
                   IconButton(
                     tooltip: '关闭菜单',
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
+                    icon: AppIcon(AppIcons.close),
                   ),
                 ],
               ),
@@ -145,6 +150,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
             ),
           ],
         ),
+      ),
       ),
       ),
     );
@@ -262,7 +268,7 @@ class _PlayerMenuState extends State<PlayerMenu> {
             TextButton.icon(
               key: const ValueKey('player-danmaku-retry'),
               onPressed: _busy ? null : widget.onRetryDanmaku,
-              icon: const Icon(Icons.refresh_rounded),
+              icon: AppIcon(AppIcons.refresh),
               label: const Text('重试弹幕'),
             ),
           const SizedBox(height: 8),
@@ -301,11 +307,9 @@ class _PlayerMenuState extends State<PlayerMenu> {
           OutlinedButton.icon(
             key: const ValueKey('player-favorite'),
             onPressed: _busy ? null : () => _run(widget.onFavorite),
-            icon: Icon(
-              widget.favorite
-                  ? Icons.bookmark_rounded
-                  : Icons.bookmark_border_rounded,
-            ),
+            icon: widget.favorite
+                ? AppIcon(AppIcons.bookmark, filled: true)
+                : AppIcon(AppIcons.bookmark),
             label: Text(widget.favorite ? '取消追剧' : '加入追剧'),
           ),
           const SizedBox(height: 20),

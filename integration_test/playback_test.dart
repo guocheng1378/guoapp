@@ -45,6 +45,7 @@ class DeviceFixtureRepository extends AppRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) async => CatalogPage([drama]);
   @override

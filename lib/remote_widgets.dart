@@ -1,9 +1,13 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'search_input.dart';
 import 'app_layout.dart';
 import 'package:flutter/services.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 /// 遥控区域之间的方向越界出口：没有接管者时保持默认焦点遍历行为。
 KeyEventResult _remoteExit(VoidCallback? action, {bool handled = false}) {
@@ -144,7 +148,7 @@ class RemoteButton extends StatelessWidget {
   });
   final String label;
   final VoidCallback? onPressed;
-  final IconData? icon;
+  final Widget? icon;
   final bool selected;
   final bool autofocus;
   final FocusNode? focusNode;
@@ -163,7 +167,7 @@ class RemoteButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null) ...[Icon(icon, size: 22), const SizedBox(width: 8)],
+          if (icon != null) ...[icon!, const SizedBox(width: 8)],
           Text(
             label,
             style: TextStyle(
@@ -888,11 +892,7 @@ class RemoteEpisodeButton extends StatelessWidget {
           ),
           if (vip) ...[
             SizedBox(width: compact ? 2 : 4),
-            Icon(
-              Icons.workspace_premium_rounded,
-              color: Theme.of(context).colorScheme.tertiary,
-              size: compact ? 15 : 18,
-            ),
+            AppIcon(AppIcons.premium, size: compact ? 15 : 18, color: Theme.of(context).colorScheme.tertiary),
           ],
         ],
       ),
@@ -918,8 +918,13 @@ class TelevisionActionDialog extends StatelessWidget {
     content: SizedBox(
       width: 520,
       child: ConstrainedBox(
+        // 限高同时考虑屏高与绝对上限：电视横屏（屏高 ~1200px）下
+        // 0.6 屏高（720）+ 标题边距会顶破屏幕底缘，最后一项被切到
+        // 只剩一条缝（曾导致「手机/电脑」点不中、切不回手机模式）。
+        // 取 min(屏高*0.55, 520)：横屏 520、竖屏同样 520，整窗在屏内，
+        // 超长列表由内部滚动兜底。
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * .6,
+          maxHeight: math.min(MediaQuery.sizeOf(context).height * .55, 520),
         ),
         child: RemoteList(
           itemKeys: [for (var index = 0; index <= options.length; index++) '$index'],
@@ -930,7 +935,7 @@ class TelevisionActionDialog extends StatelessWidget {
             if (index == options.length) {
               return RemoteListTile(
                 title: '返回',
-                leading: const Icon(Icons.arrow_back_rounded, size: 26),
+                leading: AppIcon(AppIcons.arrowBack, size: 26),
                 focusNode: node,
                 onFocus: onFocus,
                 onPressed: () => Navigator.pop(context),
@@ -940,7 +945,10 @@ class TelevisionActionDialog extends StatelessWidget {
             return RemoteListTile(
               title: option.label,
               subtitle: option.description,
-              leading: Icon(option.icon, size: 26),
+              leading: option.icon ?? AppIcon(AppIcons.chevronRight, size: 26),
+              trailing: option.checked
+                  ? AppIcon(AppIcons.check, size: 26)
+                  : null,
               focusNode: node,
               onFocus: onFocus,
               onPressed: option.enabled
@@ -960,14 +968,19 @@ class TelevisionAction {
     required this.value,
     required this.label,
     this.description,
-    this.icon = Icons.chevron_right_rounded,
+    this.icon,
     this.enabled = true,
+    this.checked = false,
   });
   final String value;
   final String label;
   final String? description;
-  final IconData icon;
+  final Widget? icon;
   final bool enabled;
+
+  /// 当前选中档：对话框行尾渲染对勾，让用户确认自己在哪一档
+  /// （界面模式等「选了但界面没变」的场景尤其需要）。
+  final bool checked;
 }
 
 class TelevisionSearchDialog extends StatefulWidget {
@@ -1029,7 +1042,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                     for (final query in widget.recentSearches)
                       ActionChip(
                         label: Text(query),
-                        avatar: const Icon(Icons.history_rounded, size: 16),
+                        avatar: AppIcon(AppIcons.history, size: 16),
                         onPressed: () => Navigator.pop(context, query),
                       ),
                   ],

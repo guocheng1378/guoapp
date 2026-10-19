@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
+import 'app_icons.dart';
 
 class SearchInput extends StatefulWidget {
   const SearchInput({
@@ -163,7 +164,7 @@ class _SearchInputState extends State<SearchInput> {
         decoration: InputDecoration(
           hintText: widget.hint,
           filled: false,
-          prefixIcon: const Icon(Icons.search_rounded),
+          prefixIcon: AppIcon(AppIcons.search),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
             builder: (context, value, _) => Row(
@@ -172,7 +173,7 @@ class _SearchInputState extends State<SearchInput> {
                 if (value.text.isNotEmpty)
                   IconButton(
                     tooltip: '清空搜索',
-                    icon: const Icon(Icons.close_rounded),
+                    icon: AppIcon(AppIcons.close),
                     onPressed: () {
                       _cancel();
                       controller.clear();
@@ -181,7 +182,7 @@ class _SearchInputState extends State<SearchInput> {
                   ),
                 IconButton(
                   tooltip: '搜索',
-                  icon: const Icon(Icons.arrow_forward_rounded),
+                  icon: AppIcon(AppIcons.arrowForward),
                   onPressed: () => _submit(controller.text),
                 ),
               ],
@@ -209,7 +210,7 @@ class _SearchInputState extends State<SearchInput> {
                 width: MediaQuery.sizeOf(context).width,
                 height: 48,
                 child: ListTile(
-                  leading: const Icon(Icons.cloud_off_rounded, size: 18),
+                  leading: AppIcon(AppIcons.cloudOff, size: 18),
                   title: Text(
                     '搜索建议加载失败',
                     style: TextStyle(
@@ -246,7 +247,7 @@ class _SearchInputState extends State<SearchInput> {
                   key: ValueKey('search-suggestion-$index'),
                   selected:
                       AutocompleteHighlightedOption.of(context) == index,
-                  leading: const Icon(Icons.search, size: 18),
+                  leading: AppIcon(AppIcons.search, size: 18),
                   title: _highlight(values[index]),
                   onTap: () => selected(values[index]),
                 ),

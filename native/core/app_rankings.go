@@ -47,14 +47,48 @@ func (d *Downloader) loadRankingCache() {
 	}
 }
 
+// rankingWriteInterval 内的重复写盘合并为一次尾部落盘；写盘是全量 marshal
+// （上限 8MB），连续翻页每页都写是 O(n²) IO。首次写仍立即落盘，保住
+// 「拉到第一页即可重启恢复」的语义。
+var rankingWriteInterval = 2 * time.Second
+
+// writeRankingCacheLocked 请求落盘 rankings.json：距上次落盘超过间隔则立即
+// 写，否则只标脏并调度一次延后合并写。须持 cache.mu。
 func (d *Downloader) writeRankingCacheLocked() {
 	if d.cfg.dataDir == "" {
 		return
 	}
-	body, err := json.Marshal(d.rankings.pages)
-	if err == nil && len(body) <= 8<<20 {
-		_ = writeNativeCacheFile(filepath.Join(d.cfg.dataDir, "rankings.json"), body)
+	cache := &d.rankings
+	if elapsed := time.Since(cache.lastWrite); !cache.lastWrite.IsZero() && elapsed < rankingWriteInterval {
+		cache.dirty = true
+		if cache.writeTimer == nil {
+			cache.writeTimer = time.AfterFunc(rankingWriteInterval-elapsed, func() {
+				cache.mu.Lock()
+				defer cache.mu.Unlock()
+				cache.writeTimer = nil
+				if cache.dirty {
+					d.flushRankingCacheLocked()
+				}
+			})
+		}
+		return
 	}
+	d.flushRankingCacheLocked()
+}
+
+// flushRankingCacheLocked 同步全量落盘。落盘失败（Windows 上目标文件恰被
+// 读句柄占用时 os.Rename 会失败）时保留 dirty，由下一次写或尾写重试；
+// 只有成功落盘才推进 lastWrite/清 dirty。须持 cache.mu。
+func (d *Downloader) flushRankingCacheLocked() {
+	cache := &d.rankings
+	body, err := json.Marshal(cache.pages)
+	if err != nil || len(body) > 8<<20 {
+		return
+	}
+	if writeNativeCacheFile(filepath.Join(d.cfg.dataDir, "rankings.json"), body) != nil {
+		return
+	}
+	cache.lastWrite, cache.dirty = time.Now(), false
 }
 
 func (engine *nativeEngine) nativeRanking(ctx context.Context, input nativeInput) (any, error) {

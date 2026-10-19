@@ -10,18 +10,20 @@ void main() {
     routeCount: count,
   );
 
-  test('tries alternate routes before one fresh resolution, then stops', () {
+  test('tries alternate routes before fresh resolutions, then stops', () {
     final recovery = PlaybackRecovery();
     expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
     expect(recovery.next(route(1)), PlaybackRecoveryAction.alternative);
     expect(recovery.next(route(2)), PlaybackRecoveryAction.refresh);
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
     expect(recovery.next(route(0)), PlaybackRecoveryAction.stop);
     recovery.reset();
     expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
   });
 
-  test('one-route sources refresh once without endless retrying', () {
+  test('one-route sources refresh twice without endless retrying', () {
     final recovery = PlaybackRecovery();
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
@@ -29,13 +31,13 @@ void main() {
 
   test('many failing alternatives cannot exceed the automatic retry limit', () {
     final recovery = PlaybackRecovery();
-    for (var i = 0; i < 3; i++) {
+    for (var i = 0; i < 4; i++) {
       expect(
         recovery.next(route(i, count: 10)),
         PlaybackRecoveryAction.alternative,
       );
     }
-    expect(recovery.next(route(3, count: 10)), PlaybackRecoveryAction.stop);
+    expect(recovery.next(route(4, count: 10)), PlaybackRecoveryAction.stop);
   });
 
   test(

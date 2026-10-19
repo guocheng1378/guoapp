@@ -404,14 +404,15 @@ func (s *Source) cards(document *html.Node, base string) []provider.Drama {
 		ids[sourceID] = true
 		remark := cardRemark(card)
 		items = append(items, provider.Drama{
-			ID:           provider.DramaID(s.spec.ID, sourceID),
-			Source:       s.spec.ID,
-			SourceID:     sourceID,
-			Title:        title,
-			Cover:        cardCover(card, link),
-			Remark:       remark,
-			EpisodeCount: json.Number(strconv.Itoa(provider.EpisodeNumber(remark, 0))),
-			ChannelName:  provider.SourceName(s.spec.ID),
+			ID:            provider.DramaID(s.spec.ID, sourceID),
+			Source:        s.spec.ID,
+			SourceID:      sourceID,
+			Title:         title,
+			Cover:         cardCover(card, link),
+			Remark:        remark,
+			EpisodeCount:  json.Number(strconv.Itoa(provider.EpisodeNumber(remark, 0))),
+			ReleaseStatus: provider.ReleaseStatus(remark, 0, 0),
+			ChannelName:   provider.SourceName(s.spec.ID),
 		})
 	}
 	return items

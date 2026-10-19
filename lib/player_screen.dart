@@ -34,6 +34,8 @@ import 'lan_controller.dart';
 import 'lan_screen.dart';
 import 'video_enhancement.dart';
 import 'video_output_size.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({
@@ -82,7 +84,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   double _savedBrightness = 1;
   double _savedVolume = 100;
   Timer? _mediaMemoryTimer;
-  static const advanceCountdownSeconds = 3;
+  /// 播完一集到自动接下一集的等待秒数；0 = 播完立即连播，不显示倒计时。
+  static const advanceCountdownSeconds = 0;
   int _advanceSeconds = 0;
   Timer? _advanceTimer;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
@@ -729,10 +732,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() {});
   }
 
-  /// 一集播完：3 秒倒计时后自动接下一集，点提示或任何操作都能取消
+  /// 一集播完自动接下一集：等待秒数为 0 时立即连播（无提示 UI），
+  /// 正数时倒计时等待，点提示或任何操作都能取消。
   void _startAdvanceCountdown() {
     _advanceTimer?.cancel();
     if (!mounted || _closed) return;
+    if (advanceCountdownSeconds <= 0) {
+      unawaited(_play(_index + 1, showControlsOnReady: false));
+      return;
+    }
     setState(() => _advanceSeconds = advanceCountdownSeconds);
     _advanceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_closed || !mounted) {
@@ -1682,7 +1690,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                       IconButton(
                         tooltip: '旋转与全屏',
                         onPressed: _rotate,
-                        icon: const Icon(Icons.screen_rotation_alt_rounded),
+                        icon: AppIcon(AppIcons.screenRotate),
                       ),
                     ],
                   ),
@@ -1887,7 +1895,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                     secondaryAction: _localFailure && widget.allowOnlineFallback
                         ? TextButton.icon(
                             onPressed: _switchOnline,
-                            icon: const Icon(Icons.cloud_outlined),
+                            icon: AppIcon(AppIcons.cloud),
                             label: const Text('改为在线播放'),
                           )
                         : !_localFailure &&
@@ -1899,7 +1907,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                             drama: widget.detail.drama,
                           )
                         : null,
-                    icon: Icons.play_disabled_rounded,
+                    icon: AppIcon(AppIcons.playDisabled),
                   ),
                 ),
               // 移动端竖屏加载/出错时 PlayerControls 顶栏（_feedTopBar）因
@@ -1922,7 +1930,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                         IconButton(
                           tooltip: '退出全屏',
                           onPressed: _rotate,
-                          icon: const Icon(Icons.arrow_back_rounded),
+                          icon: AppIcon(AppIcons.arrowBack),
                         ),
                         const Spacer(),
                         TextButton(
@@ -2032,8 +2040,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       case SwipeAction.volume:
         final valuePct = (hud.value * 100).round().clamp(0, 100);
         final icon = hud.type == SwipeAction.brightness
-            ? Icons.light_mode_rounded
-            : valuePct == 0 ? Icons.volume_off_rounded : Icons.volume_up_rounded;
+            ? AppIcon(AppIcons.lightMode, color: Colors.white, size: 22)
+            : valuePct == 0
+            ? AppIcon(AppIcons.volumeOff, color: Colors.white, size: 22)
+            : AppIcon(AppIcons.volumeUp, color: Colors.white, size: 22);
         return Center(
           child: Container(
             width: 96,
@@ -2058,7 +2068,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(icon, color: Colors.white, size: 22),
+                    icon,
                     Text('$valuePct%',
                         style: const TextStyle(color: Colors.white, fontSize: 13)),
                   ],
@@ -2103,13 +2113,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  forward
-                      ? Icons.skip_next_rounded
-                      : Icons.skip_previous_rounded,
-                  color: Colors.white,
-                  size: 22,
-                ),
+                forward
+                    ? AppIcon(AppIcons.skipNext, color: Colors.white, size: 22)
+                    : AppIcon(AppIcons.skipPrevious, color: Colors.white, size: 22),
                 const SizedBox(width: 8),
                 Text(
                   hud.label ?? (forward ? '下一集' : '上一集'),
@@ -2132,7 +2138,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         child: IconButton(
           tooltip: '返回',
           onPressed: _back,
-          icon: const Icon(Icons.arrow_back_ios_new_rounded),
+          icon: AppIcon(AppIcons.arrowBack),
         ),
       ),
     );
@@ -2214,7 +2220,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final drama = widget.detail.drama;
     final colors = Theme.of(context).colorScheme;
     final meta = [
-      SourceSite.byId(drama.source).name,
+      SourceSite.byId(drama.source)?.name ?? '未知源',
       if (drama.episodes > 0) '共 ${drama.episodes} 集',
       if (drama.releaseStatus.isNotEmpty && drama.releaseStatus != 'unknown')
         drama.releaseLabel,
@@ -2340,16 +2346,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              state == null
-                  ? Icons.bookmark_add_outlined
-                  : Icons.bookmark_rounded,
-              size: 18,
-            ),
+            state == null
+                ? AppIcon(AppIcons.bookmarkAdd, size: 18)
+                : AppIcon(AppIcons.bookmark, filled: true, size: 18),
             const SizedBox(width: 6),
             Text(state?.label ?? '加入追剧'),
             const SizedBox(width: 2),
-            const Icon(Icons.expand_more_rounded, size: 16),
+            AppIcon(AppIcons.expandMore, size: 16),
           ],
         ),
       ),
@@ -2364,7 +2367,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         child: const StatusPanel(
           title: '下载不可用',
           message: '当前用户或当前环境未开放本地下载。',
-          icon: Icons.download_outlined,
+          icon: AppIcon(AppIcons.download),
         ),
       );
     }

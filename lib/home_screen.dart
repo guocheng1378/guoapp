@@ -1,13 +1,14 @@
 import 'dart:async';
-import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'activation/activation_flow.dart';
 import 'app_layout.dart';
 import 'about_card.dart';
 import 'app_bottom_navigation.dart';
 import 'core_bridge.dart';
+import 'folme.dart';
 import 'glass.dart';
 import 'glass_menu.dart';
 import 'catalog_filters.dart';
@@ -20,6 +21,7 @@ import 'rankings_screen.dart';
 import 'detail_screen.dart';
 import 'playback_launch_screen.dart';
 import 'downloads_screen.dart';
+import 'featured_catalog.dart';
 import 'local_store.dart';
 import 'lan_screen.dart';
 import 'models.dart';
@@ -35,6 +37,8 @@ import 'batch_downloads.dart';
 import 'drama_actions.dart';
 import 'library_updater.dart';
 import 'saved_library.dart';
+import 'app_icons.dart';
+import 'motion.dart';
 
 /// 手机/iOS 悬浮玻璃底栏的内容底部避让高度（栏高 68 + 浮动下边距 12 + 余量）。
 const _floatingNavInset = 96.0;
@@ -72,6 +76,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _cacheRefreshTimer;
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
+
+  // 回顶雾面钮（FogFab）：滚动方向点亮/熄灭，过渡由组件内弹簧完成。
+  double _fabPrevPixels = 0;
+  bool _fabShown = false;
+  bool _fabLit = false;
   bool _showRecommendations = false;
   bool _catalogLoadScheduled = false;
   final _filtersKey = GlobalKey<RemoteRowState>();
@@ -83,10 +92,18 @@ class _HomeScreenState extends State<HomeScreen> {
   final _sortMenuKey = GlobalKey(debugLabel: 'sort-menu-anchor');
   final _selectionFocus = FocusNode(debugLabel: 'tv-selection');
 
-  // 首页站源菜单按三分类组织（与站源管理页同口径）：
-  // 短剧类 / 视频类 / 黄果类，无「全部站源」聚合项；默认落在当前源所在类。
+  // 首页站源菜单按四分类组织（与站源管理页同口径）：
+  // 短剧类 / 视频类 / 黄果类 / 成人类，无「全部站源」聚合项；默认落在当前源所在类。
+  // 黄果类与成人类整组隐藏，仅在「关于」浮卡连点 5 次解锁后显示。
   List<SourceGroup> get _sourceCategories {
-    final sources = widget.store.sources;
+    final unlocked = widget.store.restrictedUnlocked;
+    final sources = widget.store.sources
+        .where(
+          (source) =>
+              unlocked ||
+              !(source.inHuangguoCategory || source.isAdultSource),
+        )
+        .toList();
     final huangguo = sources
         .where((source) => source.inHuangguoCategory)
         .toList();
@@ -95,25 +112,39 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
     final shortDrama = rest.where((source) => source.isShortDrama).toList();
     final video = rest.where((source) => source.isVideoSource).toList();
+    final adult = rest.where((source) => source.isAdultSource).toList();
     return [
       if (shortDrama.isNotEmpty) SourceGroup('cat-short', '短剧类', shortDrama),
       if (video.isNotEmpty) SourceGroup('cat-video', '视频类', video),
       if (huangguo.isNotEmpty)
         SourceGroup('cat-huangguo', '黄果类', huangguo),
+      if (adult.isNotEmpty) SourceGroup('cat-adult', '成人类', adult),
     ];
   }
 
-  // 首页始终加载当前选中源（单源），不在三分类间聚合。
+  // 首页浏览始终加载当前选中源（单源），不在分类间聚合；
+  // 搜索则按四分类圈定：当前源所在类的全部已启用站源一起搜
+  // （如在短剧类下搜「霸总」同时搜红果 + 其余短剧类站源）。
   SourceGroup get _group =>
       SourceGroup(_source.groupId, _source.groupName, [_source]);
-  bool get _onlineSearch => _group.sources.any((source) => source.onlineSearch);
+  SourceGroup get _searchGroup => SourceGroup(
+    'class-${_source.classKey}-search',
+    SourceSite.classLabel(_source.classKey),
+    widget.store.sources
+        .where((source) => source.classKey == _source.classKey)
+        .toList(),
+  );
+  bool get _onlineSearch =>
+      _searchGroup.sources.any((source) => source.onlineSearch);
+  // 搜索建议词库服务于短剧场景（词库来自红果），只在短剧类源下请求；
+  // 视频类站源不拿短剧建议词来提示。
   bool get _searchSuggestions =>
-      _group.sources.any((source) => source.searchSuggestions);
+      _group.sources.any((source) => source.isShortDrama);
   String get _searchHint {
     if (!_onlineSearch) {
       return '筛选本机已更新剧库';
     }
-    return _group.id == 'all' ? '搜索全部站源及本机剧库' : '搜索${_group.name}';
+    return '搜索${_searchGroup.name}';
   }
 
   String get _category => _categorySelections[_group.id] ?? '';
@@ -239,7 +270,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// 长按站源岛：弹出三分类选择菜单，点选一类即切到该类第一个源。
+  /// 长按站源岛：弹出分类选择菜单，点选一类即切到该类第一个源。
   Future<void> _pickSourceCategory() async {
     final categories = _sourceCategories;
     if (categories.length <= 1) return;
@@ -298,12 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     } else if (value == 'users') {
-      Navigator.push(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => ProfilesScreen(store: widget.store),
-        ),
-      );
+      _openUserManagement();
     } else if (value == 'display') {
       _chooseDisplayMode();
     } else if (value == 'about') {
@@ -316,11 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: AboutDialog(
               applicationName: appName,
               applicationVersion: AppLayout.versionOf(context),
-              applicationIcon: const Icon(
-                Icons.play_circle_filled_rounded,
-                size: 48,
-                color: Color(0xFFFF765F),
-              ),
+              applicationIcon: AppIcon(AppIcons.playCircleFilled, size: 48, color: Color(0xFFFF765F)),
               children: [
                 const Text('独立运行，打开即可浏览和播放。观看记录与追剧收藏保存在当前设备。'),
               ],
@@ -333,9 +355,37 @@ class _HomeScreenState extends State<HomeScreen> {
           anchorKey: _moreMenuKey,
           appName: appName,
           version: AppLayout.versionOf(context),
+          onActivate: () async {
+            // 5 连点 = 弹激活页；设备本已激活或本次激活成功，都解锁隐藏站源。
+            final wasActive = await activationActive();
+            final activated = await showActivationPage(context);
+            if (!mounted) return;
+            if (wasActive || activated) _unlockRestrictedSources();
+          },
         );
       }
     }
+  }
+
+  /// 用户管理入口：未激活设备先弹激活页，激活成功（或本已激活）才放行。
+  Future<void> _openUserManagement() async {
+    final activated =
+        await activationActive() || await showActivationPage(context);
+    if (!mounted || !activated) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => ProfilesScreen(store: widget.store),
+      ),
+    );
+  }
+
+  /// 解锁黄果类/成人类隐藏站源并提示。
+  void _unlockRestrictedSources() {
+    widget.store.setRestrictedUnlocked(true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已显示黄果类与成人类站源')),
+    );
   }
 
   /// 顶栏独立玻璃胶囊岛：手机端把标题/按钮各自包成悬浮岛，
@@ -343,13 +393,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _navPill(Widget child, {required bool glass}) {
     if (!glass) return child;
     return Padding(
-      padding: const EdgeInsets.only(left: 4),
+      // 颗间距 10px：四颗是独立胶囊岛（对齐小米主题商店顶栏图标钮），
+      // 之前 left:4 等于没有间隙，三颗贴死读作一坨。
+      padding: const EdgeInsets.only(left: 10),
       child: GlassSurface(
         radius: 24,
         topHighlight: true,
         // 统一滑动栏瓷面档：微透白瓷（默认 dark 0.08/light 0.72）
         // + 白描边，与分类胶囊同材质语言。
-        child: child,
+        // Folme 果冻按压：按下 0.96、松手弹簧弹回（轻过冲）。
+        child: FolmePress(child: child),
       ),
     );
   }
@@ -441,7 +494,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => RankingsScreen(
           repository: widget.repository,
           store: widget.store,
-          initialGroup: _group.id,
+          initialCategory: _source.classKey,
         ),
       ),
     );
@@ -467,7 +520,50 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _chooseDisplayMode() async {
-    // 与「设置与备份」同款玻璃胶囊菜单：独立胶囊列+勾选态，
+    // 电视模式：遥控可导航的选项对话框（与排序/about 同范式）。
+    // 不能走锚定 _moreMenuKey 的玻璃菜单——该 Key 只挂在手机模式的 ⋮
+    // 岛上，电视模式未挂载，锚点缺失时 showGlassMenu 静默返回、菜单
+    // 根本不弹（切到电视模式后曾因此无法切回手机模式）。
+    if (AppLayout.isTelevision(context)) {
+      final selection = await showDialog<String>(
+        context: context,
+        builder: (_) => TelevisionActionDialog(
+          title: '界面模式',
+          options: [
+            for (final mode in const {
+              'auto': '自动识别设备',
+              'television': '电视 / 遥控器',
+              'standard': '手机 / 电脑',
+            }.entries)
+              TelevisionAction(
+                value: mode.key,
+                label: mode.value,
+                description: switch (mode.key) {
+                  'auto' => '按设备自动选择手机或电视界面',
+                  'television' => '大屏布局 + 遥控器方向键导航',
+                  _ => '触屏布局 + 底部导航栏',
+                },
+                icon: switch (mode.key) {
+                  'auto' => AppIcon(AppIcons.devices),
+                  'television' => AppIcon(AppIcons.tv),
+                  _ => AppIcon(AppIcons.smartphone),
+                },
+                // 与手机端玻璃菜单同口径：当前档位打勾，
+                // 避免「选了但界面没变」时无法确认当前状态。
+                checked: mode.key == widget.store.displayMode,
+              ),
+          ],
+        ),
+      );
+      if (selection != null && mounted) {
+        await saveUserChange(
+          context,
+          () => widget.store.setDisplayMode(selection),
+        );
+      }
+      return;
+    }
+    // 手机模式：与「设置与备份」同款玻璃胶囊菜单：独立胶囊列+勾选态，
     // 无整块玻璃壳（GlassDialogShell 方块玻璃已废弃）。
     final selection = await showGlassMenu<String>(
       context: context,
@@ -528,7 +624,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onCatalogScroll);
-    _source = SourceSite.byId(widget.store.source);
+    _scroll.addListener(_onFabScroll);
+    _source = SourceSite.byId(widget.store.source) ?? SourceSite.hongguo;
     _browser = CatalogBrowser(widget.repository);
     _updater = LibraryUpdater(
       widget.repository,
@@ -558,6 +655,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _debounce?.cancel();
     _search.dispose();
     _scroll.removeListener(_onCatalogScroll);
+    _scroll.removeListener(_onFabScroll);
     _scroll.dispose();
     _appBarFocus.dispose();
     _selectionFocus.dispose();
@@ -591,6 +689,36 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// 回顶雾面钮：滚出首屏（>400px）浮现；上行点亮、下行熄灭，
+  /// 方向量带 ±4px 迟滞防抖，明暗过渡交给 FogFab 内部弹簧。
+  void _onFabScroll() {
+    if (!_scroll.hasClients) return;
+    final pixels = _scroll.position.pixels;
+    final delta = pixels - _fabPrevPixels;
+    _fabPrevPixels = pixels;
+    var lit = _fabLit;
+    if (delta < -4) {
+      lit = true;
+    } else if (delta > 4) {
+      lit = false;
+    }
+    final shown = pixels > 400;
+    if (shown == _fabShown && lit == _fabLit) return;
+    setState(() {
+      _fabShown = shown;
+      _fabLit = lit;
+    });
+  }
+
+  void _backToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: MotionDurations.hero,
+      curve: MotionCurves.standard,
+    );
+  }
+
   void _metadataChanged() {
     final drama = widget.repository.catalogUpdates.latest;
     if (!mounted || drama == null || !widget.store.allowsSource(drama.source)) {
@@ -615,8 +743,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_showRecommendations) return;
     if (more && (_loading || _loadingMore || !_hasMore)) return;
     final generation = ++_generation;
-    final group = _group;
     final query = _onlineSearch ? _search.text.trim() : '';
+    // 浏览（无关键词）走当前单源；有关键词即按当前分类全源搜索。
+    final group = query.isEmpty ? _group : _searchGroup;
     setState(() {
       _error = null;
       if (query.isNotEmpty) _categorySelections[group.id] = '';
@@ -644,10 +773,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
+      final view = widget.store.catalogView;
       final result = await _browser.load(
         group,
         category: _category,
         query: query,
+        sort: view.sort == CatalogSort.source ? '' : view.sort.name,
         more: more,
         useCache: useCache,
         force: force,
@@ -734,20 +865,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// 当前目录上有效的排序项（含源站服务端排序能力）。
+  Set<CatalogSort> _catalogSortSupport() {
+    final supported = catalogSortSupport(_items);
+    // 剧果「全部」页由源站排序（sort=hot/new），热度/上线日期不受客户端字段限制。
+    if (_group.sources.any((source) => source.id == 'huangju')) {
+      supported
+        ..add(CatalogSort.heat)
+        ..add(CatalogSort.date);
+    }
+    return supported;
+  }
+
   Future<void> _chooseCatalogView() async {
     // TV 保留底部弹层：遥控焦点导航可靠 + 「应用」确认步骤；
     // 手机改锚定 ≡ 岛的轻量筛选浮卡，点选即生效，不再占半屏大玻璃。
+    final supported = _catalogSortSupport();
+    // 地区/年份选项由当前已加载条目动态聚合；无该字段数据的源
+    // （短剧类/青空等）选项为空，面板对应节整体隐藏。
+    final options = catalogFilterOptions(_items);
     if (AppLayout.isTelevision(context)) {
       final selected = await chooseCatalogView(
         context,
         widget.store.catalogView,
+        supported: supported,
+        areaOptions: options.areas,
+        yearOptions: options.years,
       );
       if (selected != null && mounted) {
+        final previous = widget.store.catalogView;
         await saveUserChange(
           context,
           () => widget.store.setCatalogView(selected),
         );
         if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+        // 排序变化时重拉目录，让服务端排序（剧果 sort=hot/new）真正生效。
+        if (mounted && previous.sort != selected.sort) unawaited(_load());
       }
       return;
     }
@@ -755,12 +908,17 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       anchorKey: _sortMenuKey,
       current: widget.store.catalogView,
+      supported: supported,
+      areaOptions: options.areas,
+      yearOptions: options.years,
       onChanged: (view) async {
+        final previous = widget.store.catalogView;
         await saveUserChange(
           context,
           () => widget.store.setCatalogView(view),
         );
         if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+        if (mounted && previous.sort != view.sort) unawaited(_load());
       },
     );
   }
@@ -788,6 +946,22 @@ class _HomeScreenState extends State<HomeScreen> {
         store: widget.store,
       ),
     );
+  }
+
+  /// 轮播卡点击：豆瓣条目无播放链路，同名搜索进详情；其余照常直进播放。
+  void _openCarouselDrama(Drama drama) {
+    if (drama.source == SourceSite.douban.id) {
+      unawaited(
+        openDoubanReferral(
+          context,
+          repository: widget.repository,
+          store: widget.store,
+          drama: drama,
+        ),
+      );
+      return;
+    }
+    _openDrama(drama);
   }
 
   void _changeTab(int tab) => setState(() {
@@ -925,7 +1099,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _items.where((drama) {
         if (!widget.store.allowsSource(drama.source)) return false;
         if (_category.startsWith('local:') &&
-            categoryName(drama.category) != _category.substring(6)) {
+            !matchesLocalGenre(drama, _category.substring(6))) {
           return false;
         }
         if (_hideVip && drama.source == 'huangdou' && drama.vip) {
@@ -991,7 +1165,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Padding(
         padding: EdgeInsets.fromLTRB(padding, 4, padding, 4),
         child: Text(
-          SourceSite.byId(sourceId).name,
+          SourceSite.byId(sourceId)?.name ?? '未知源',
           style: theme.textTheme.titleSmall?.copyWith(
             fontWeight: FontWeight.w800,
             color: theme.colorScheme.primary,
@@ -1010,11 +1184,11 @@ class _HomeScreenState extends State<HomeScreen> {
         final desktop = constraints.maxWidth >= 840;
         // 悬浮玻璃底栏只在手机/iOS 出现；开启 extendBody 让内容透到玻璃后被模糊。
         final floatingNav = !desktop && !television;
-        final navEntries = <(int, IconData, String)>[
-          (0, Icons.explore_rounded, '发现'),
-          (1, Icons.bookmark_rounded, '追剧'),
-          (2, Icons.history_rounded, '最近观看'),
-          if (widget.store.canDownload) (3, Icons.download_rounded, '下载'),
+        final navEntries = <(int, Widget, String)>[
+          (0, AppIcon(AppIcons.explore), '发现'),
+          (1, AppIcon(AppIcons.bookmark, filled: true), '追剧'),
+          (2, AppIcon(AppIcons.history), '最近观看'),
+          if (widget.store.canDownload) (3, AppIcon(AppIcons.download), '下载'),
         ];
         final topInset = floatingNav
             ? MediaQuery.paddingOf(context).top + 56.0
@@ -1025,15 +1199,7 @@ class _HomeScreenState extends State<HomeScreen> {
           extendBodyBehindAppBar: floatingNav,
           appBar: AppBar(
             toolbarHeight: television ? 64 : null,
-            // 手机端顶栏：贴顶渐隐雾面回归，压低模糊与底色让穿透
-            // 内容大面积可辨；独立胶囊岛照常叠加其上。
             titleSpacing: floatingNav ? 8 : 12,
-            actionsPadding: floatingNav
-                ? const EdgeInsets.only(right: 8)
-                : null,
-            // 贴顶渐隐雾面属于玻璃浮层，受「玻璃效果」开关总控：
-            // 关闭后不渲染任何模糊层，顶栏完全穿透。
-            flexibleSpace: floatingNav ? const TopFog() : null,
             title: _selectionMode
                 ? _navPill(
                     glass: floatingNav,
@@ -1064,10 +1230,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     children: [
                                       Expanded(child: Text(source.name)),
                                       if (source.id == _source.id)
-                                        const Icon(
-                                          Icons.check_rounded,
-                                          size: 20,
-                                        ),
+                                        AppIcon(AppIcons.check, size: 20),
                                     ],
                                   ),
                                 ),
@@ -1089,7 +1252,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 if (_sourceCategories.expand((c) => c.sources).length > 1)
-                                  const Icon(Icons.expand_more_rounded),
+                                  AppIcon(AppIcons.expandMore),
                               ],
                             ),
                           ),
@@ -1129,7 +1292,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         ),
                                       ),
                                       if (_sourceCategories.expand((c) => c.sources).length > 1)
-                                        const Icon(Icons.expand_more_rounded),
+                                        AppIcon(AppIcons.expandMore),
                                     ],
                                   ),
                                 ),
@@ -1174,7 +1337,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       key: const ValueKey('follow-lan-sync'),
                       tooltip: '追剧同步',
                       onPressed: () => openLanSync(context),
-                      icon: const Icon(Icons.sync_rounded),
+                      icon: AppIcon(AppIcons.sync),
                     ),
                   ),
                 if (_tab == 0) ...[
@@ -1194,7 +1357,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 widget.store.catalogView.release.isNotEmpty
                             ? Theme.of(context).colorScheme.primary
                             : null,
-                        icon: const Icon(Icons.sort_rounded),
+                        icon: AppIcon(AppIcons.sort),
                       ),
                     ),
                   _navPill(
@@ -1202,11 +1365,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     IconButton(
                       key: const ValueKey('toggle-search'),
                       tooltip: _searchVisible ? '收起搜索' : '搜索',
-                      icon: Icon(
-                        _searchVisible
-                            ? Icons.search_off_rounded
-                            : Icons.search_rounded,
-                      ),
+                      icon: _searchVisible
+                          ? AppIcon(AppIcons.searchOff)
+                          : AppIcon(AppIcons.search),
                       onPressed: _toggleSearch,
                     ),
                   ),
@@ -1247,7 +1408,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           onPressed: () => _showMoreMenu(
                             narrow: constraints.maxWidth < 400,
                           ),
-                          icon: const Icon(Icons.more_vert_rounded),
+                          icon: AppIcon(AppIcons.moreVert),
                         ),
                       ),
               ],
@@ -1301,23 +1462,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     groupAlignment: -.8,
                     destinations: [
                       NavigationRailDestination(
-                        icon: Icon(Icons.explore_outlined),
-                        selectedIcon: Icon(Icons.explore),
+                        icon: AppIcon(AppIcons.explore),
+                        selectedIcon: AppIcon(AppIcons.explore),
                         label: Text('发现'),
                       ),
                       NavigationRailDestination(
-                        icon: Icon(Icons.bookmark_border_rounded),
-                        selectedIcon: Icon(Icons.bookmark_rounded),
+                        icon: AppIcon(AppIcons.bookmark),
+                        selectedIcon: AppIcon(AppIcons.bookmark, filled: true),
                         label: Text('追剧'),
                       ),
                       NavigationRailDestination(
-                        icon: Icon(Icons.history_rounded),
+                        icon: AppIcon(AppIcons.history),
                         label: Text('最近观看'),
                       ),
                       if (widget.store.canDownload)
                         NavigationRailDestination(
-                          icon: Icon(Icons.download_outlined),
-                          selectedIcon: Icon(Icons.download_rounded),
+                          icon: AppIcon(AppIcons.download),
+                          selectedIcon: AppIcon(AppIcons.download),
                           label: Text('下载'),
                         ),
                     ],
@@ -1376,23 +1537,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   onDestinationSelected: _changeTab,
                   destinations: [
                     NavigationDestination(
-                      icon: Icon(Icons.explore_outlined),
-                      selectedIcon: Icon(Icons.explore),
+                      icon: AppIcon(AppIcons.explore),
+                      selectedIcon: AppIcon(AppIcons.explore),
                       label: '发现',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.bookmark_border_rounded),
-                      selectedIcon: Icon(Icons.bookmark_rounded),
+                      icon: AppIcon(AppIcons.bookmark),
+                      selectedIcon: AppIcon(AppIcons.bookmark, filled: true),
                       label: '追剧',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.history_rounded),
+                      icon: AppIcon(AppIcons.history),
                       label: '最近观看',
                     ),
                     if (widget.store.canDownload)
                       NavigationDestination(
-                        icon: Icon(Icons.download_outlined),
-                        selectedIcon: Icon(Icons.download_rounded),
+                        icon: AppIcon(AppIcons.download),
+                        selectedIcon: AppIcon(AppIcons.download),
                         label: '下载',
                       ),
                   ],
@@ -1463,10 +1624,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           Padding(
                             padding: const EdgeInsets.only(right: 8),
                             child: ActionChip(
-                              avatar: const Icon(
-                                Icons.history_rounded,
-                                size: 16,
-                              ),
+                              avatar: AppIcon(AppIcons.history, size: 16),
                               label: Text(query),
                               onPressed: () => _submitSearch(query),
                             ),
@@ -1479,7 +1637,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   tooltip: '清空最近搜索',
                   onPressed: () =>
                       saveUserChange(context, widget.store.clearRecentSearches),
-                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                  icon: AppIcon(AppIcons.delete, size: 20),
                 ),
               ],
             ),
@@ -1532,7 +1690,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: const Text('站源诊断'),
                             )
                           : null,
-                      icon: Icons.wifi_off_rounded,
+                      icon: AppIcon(AppIcons.wifiOff),
                     )
                   : items.isEmpty
                   ? StatusPanel(
@@ -1569,7 +1727,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : _hasMore
                                     ? RemoteButton(
                                         label: '加载更多',
-                                        icon: Icons.expand_more,
+                                        icon: AppIcon(AppIcons.expandMore),
                                         onPressed: () => _load(more: true),
                                       )
                                     : const Text('已经看到这里的全部剧集'),
@@ -1612,7 +1770,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   sliver: SliverGrid(
                                     gridDelegate: gridDelegate,
                                     delegate: SliverChildBuilderDelegate(
-                                      (_, index) => _catalogTile(items[index]),
+                                      (_, index) =>
+        StaggeredListItem(index: index, child: _catalogTile(items[index])),
                                       childCount: items.length,
                                     ),
                                   ),
@@ -1648,9 +1807,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         : _hasMore
                                         ? OutlinedButton.icon(
                                             onPressed: () => _load(more: true),
-                                            icon: const Icon(
-                                              Icons.expand_more_rounded,
-                                            ),
+                                            icon: AppIcon(AppIcons.expandMore),
                                             label: const Text('加载更多'),
                                           )
                                         : Text(
@@ -1684,8 +1841,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _catalogFloating(double topInset, {required bool selectionInBody}) {
     final items = _visible;
     final searchGroups = _searchGroups;
-    // 轮播消费排序后的前几条：网格跳过这些条目，避免动图与下方剧图重复。
-    final carouselIds = !_searchVisible && items.isNotEmpty
+    // 轮播已改为「豆瓣选片 + 当前源条目补位」（见 HomeCarousel）：补位
+    // 卡就是当前源条目，网格恒排除轮播前几条，避免动图与下方剧图重复；
+    // 豆瓣命中来自其他同类站源，与网格本就无交集。搜索/分类视图不排除
+    // ——那两种状态下轮播不挂载，网格显示全量。
+    final carouselIds =
+        !_searchVisible && _category.isEmpty && items.isNotEmpty
         ? items.take(HomeCarousel.maxItems).map((drama) => drama.id).toSet()
         : const <String>{};
     final gridItems = carouselIds.isEmpty
@@ -1697,15 +1858,20 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       children: [
         Expanded(
-          child: GestureDetector(
-            onHorizontalDragEnd: _swipeCategory,
-            child: RefreshIndicator(
-              onRefresh: () {
-                            // 下拉触发刷新时给一次中档震动（主题同款手感）。
-                            HapticFeedback.mediumImpact();
-                            return _refreshCatalog();
-                          },
-              child: LayoutBuilder(
+          child: Stack(
+            children: [
+              GestureDetector(
+                onHorizontalDragEnd: _swipeCategory,
+                child: FogRefresh(
+                  // 胶囊停在分类条之下：顶栏+吸顶分类条总高再留 6px 间隙，
+                  // 刷新胶囊的雾面矩形不罩到分类胶囊（MIUI 同款位置）。
+                  displacement: topInset + _filtersExtent + 6,
+                  onRefresh: () {
+                    // 下拉触发刷新时给一次中档震动（主题同款手感）。
+                    HapticFeedback.mediumImpact();
+                    return _refreshCatalog();
+                  },
+                  child: LayoutBuilder(
                 builder: (context, constraints) {
                   final padding = constraints.maxWidth < 600 ? 16.0 : 24.0;
                   final navInset = constraints.maxWidth >= 840
@@ -1767,10 +1933,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               right: 8,
                                             ),
                                             child: ActionChip(
-                                              avatar: const Icon(
-                                                Icons.history_rounded,
-                                                size: 16,
-                                              ),
+                                              avatar: AppIcon(AppIcons.history, size: 16),
                                               label: Text(query),
                                               onPressed: () =>
                                                   _submitSearch(query),
@@ -1786,10 +1949,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     context,
                                     widget.store.clearRecentSearches,
                                   ),
-                                  icon: const Icon(
-                                    Icons.delete_outline_rounded,
-                                    size: 20,
-                                  ),
+                                  icon: AppIcon(AppIcons.delete, size: 20),
                                 ),
                               ],
                             ),
@@ -1811,15 +1971,21 @@ class _HomeScreenState extends State<HomeScreen> {
                           // 搜索岛已避让顶栏，筛选岛紧随其后。
                           child: _catalogFilters(),
                         ),
-                      if (!_searchVisible && items.isNotEmpty)
+                      // 轮播只在「全部」分类出现；选择具体分类/题材后
+                      // 隐藏，把首屏留给筛选结果。
+                      if (!_searchVisible &&
+                          _category.isEmpty &&
+                          items.isNotEmpty)
                         SliverToBoxAdapter(
                           child: Padding(
                             // 轮播与下方剧卡流的间距。
                             padding: const EdgeInsets.only(bottom: 14),
                             child: HomeCarousel(
-                              items: items,
+                              store: widget.store,
                               repository: widget.repository,
-                              onOpen: _openDrama,
+                              onOpen: _openCarouselDrama,
+                              fallbackItems: items,
+                              anchor: _source,
                             ),
                           ),
                         ),
@@ -1853,7 +2019,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: const Text('站源诊断'),
                                   )
                                 : null,
-                            icon: Icons.wifi_off_rounded,
+                            icon: AppIcon(AppIcons.wifiOff),
                           ),
                         )
                       else if (items.isEmpty)
@@ -1884,7 +2050,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           sliver: SliverGrid(
                             gridDelegate: gridDelegate,
                             delegate: SliverChildBuilderDelegate(
-                              (_, index) => _catalogTile(gridItems[index]),
+                              // Folme 进场：滚入视口 y=30→0 + alpha 0→1，30ms 错峰。
+                              (_, index) => StaggeredListItem(
+                                index: index,
+                                child: _catalogTile(gridItems[index]),
+                              ),
                               childCount: gridItems.length,
                             ),
                           ),
@@ -1902,7 +2072,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             sliver: SliverGrid(
                               gridDelegate: gridDelegate,
                               delegate: SliverChildBuilderDelegate(
-                                (_, index) => _catalogTile(entry.value[index]),
+                                (_, index) => StaggeredListItem(
+        index: index,
+        child: _catalogTile(entry.value[index]),
+      ),
                                 childCount: entry.value.length,
                               ),
                             ),
@@ -1917,9 +2090,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : _hasMore
                                 ? OutlinedButton.icon(
                                     onPressed: () => _load(more: true),
-                                    icon: const Icon(
-                                      Icons.expand_more_rounded,
-                                    ),
+                                    icon: AppIcon(AppIcons.expandMore),
                                     label: const Text('加载更多'),
                                   )
                                 : Text(
@@ -1938,7 +2109,28 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 },
               ),
-            ),
+                ),
+              ),
+              // 回顶雾面钮：滚出首屏浮现，内容上行点亮（Folme 弹簧三参数联动）。
+              if (!_selectionMode)
+                Positioned(
+                  right: 18,
+                  bottom: 24 + _floatingNavInset,
+                  child: AnimatedScale(
+                    scale: _fabShown ? 1 : 0.4,
+                    duration: MotionDurations.micro,
+                    curve: MotionCurves.press,
+                    child: AnimatedOpacity(
+                      opacity: _fabShown ? 1 : 0,
+                      duration: MotionDurations.micro,
+                      child: IgnorePointer(
+                        ignoring: !_fabShown,
+                        child: FogFab(lit: _fabLit, onTap: _backToTop),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         if (_selectionMode && selectionInBody)
@@ -1951,10 +2143,9 @@ class _HomeScreenState extends State<HomeScreen> {
   double get _filtersExtent =>
       CatalogFilters.barHeight(context, extra: 12);
 
-  /// 吸顶分类条：不做整条底板/雾面，分类胶囊本身是独立瓷面小岛，
-  /// 剧照直接从胶囊间隙与条后穿过，保持「一枚枚胶囊浮在内容上」的形态。
-  /// 雾面只覆盖状态栏+顶栏（flexibleSpace 的 TopFog），按需求不渲染到
-  /// 左右横滑条——条后是原始滚动内容，胶囊浮在上面。
+  /// 吸顶分类条：不做整条底板/雾面，分类胶囊本身是独立瓷面小岛
+  /// （带 Folme 果冻按压），剧照直接从胶囊间隙与条后穿过，保持
+  /// 「一枚枚胶囊浮在内容上」的形态。顶栏不再挂贴顶雾面层。
   /// 分类条构造（TV 列表/搜索岛/吸顶条三处共用）：差异仅在电视焦点
   /// 出口回调，由 [televisionFocus] 开关。
   Widget _catalogFilters({bool televisionFocus = false}) {

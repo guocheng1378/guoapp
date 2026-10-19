@@ -8,6 +8,7 @@ import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'source_status.dart';
+import 'app_icons.dart';
 
 String sourceTimestamp(DateTime? value) {
   if (value == null) return '尚无记录';
@@ -40,6 +41,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
   final _pending = <String>{};
   final _revisions = <String, int>{};
   final _expandedHealth = <String>{};
+  final _expandedCategories = <String>{};
   Timer? _timer;
   bool _polling = false;
   bool _bulk = false;
@@ -48,6 +50,12 @@ class _SourcesScreenState extends State<SourcesScreen> {
   @override
   void initState() {
     super.initState();
+    // 从剧卡「站源诊断」进入时自动展开目标站源所在分类，其余分类默认收起。
+    final initial = widget.initialSource;
+    if (initial != null) {
+      final site = SourceSite.byId(initial);
+      if (site != null) _expandedCategories.add(_categoryIdOf(site));
+    }
     unawaited(_refresh());
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _ticks++;
@@ -74,7 +82,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final epoch = widget.store.profileEpoch;
     try {
       await Future.wait([
-        for (final source in widget.store.permittedSources)
+        for (final source in widget.store.permittedSources.where(
+          (source) =>
+              widget.store.restrictedUnlocked ||
+              !(source.inHuangguoCategory || source.isAdultSource),
+        ))
           (() async {
             final revision = _revisions[source.id] ?? 0;
             try {
@@ -199,7 +211,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
   /// 一键开启/关闭当前用户可见的全部站源：一次验证密码、一次提交。
   Future<void> _setAll(bool enabled) async {
     if (_bulk) return;
-    final sources = widget.store.permittedSources;
+    final sources = widget.store.permittedSources
+        .where(
+          (source) =>
+              widget.store.restrictedUnlocked ||
+              !(source.inHuangguoCategory || source.isAdultSource),
+        )
+        .toList();
     if (sources.isEmpty) return;
     setState(() {
       _bulk = true;
@@ -257,7 +275,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
     builder: (context, _) {
+      final unlocked = widget.store.restrictedUnlocked;
       final sources = widget.store.permittedSources
+        .where(
+          (source) =>
+              unlocked ||
+              !(source.inHuangguoCategory || source.isAdultSource),
+        )
+        .toList()
         ..sort((a, b) {
           final aFirst = a.id == widget.initialSource ? 0 : 1;
           final bFirst = b.id == widget.initialSource ? 0 : 1;
@@ -278,13 +303,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
                 key: const ValueKey('sources-enable-all'),
                 tooltip: '一键开启全部（受限站源需要管理员密码）',
                 onPressed: _bulk ? null : () => _setAll(true),
-                icon: const Icon(Icons.done_all_rounded),
+                icon: AppIcon(AppIcons.doneAll),
               ),
               IconButton(
                 key: const ValueKey('sources-disable-all'),
                 tooltip: '一键关闭全部',
                 onPressed: _bulk ? null : () => _setAll(false),
-                icon: const Icon(Icons.remove_done_rounded),
+                icon: AppIcon(AppIcons.removeDone),
               ),
             ],
           ],
@@ -321,9 +346,20 @@ class _SourcesScreenState extends State<SourcesScreen> {
     },
   );
 
+  /// 站源归属的分类 id（与 _categorizedSources 的分区一致）。
+  String _categoryIdOf(SourceSite site) {
+    if (site.inHuangguoCategory) return 'huangguo';
+    if (site.isAdultSource) return 'adult';
+    if (site.isShortDrama) return 'short';
+    return 'video';
+  }
+
   List<Widget> _categorizedSources(List<SourceSite> sources) {
-    // 三分类：短剧类 / 视频类 / 黄果类。黄果类成员（黄果系入口 + 黄豆/野果/
-    // 剧果）抽出独立成区，受限名单即黄果类；黄果系各入口平铺独立卡片。
+    // 四分类：短剧类 / 视频类 / 黄果类 / 成人类。每组默认收起，点区头展开，
+    // 避免几十个源卡把页面拉得过长；黄果类成员（黄果系入口 + 黄豆/野果/剧果）
+    // 抽出独立成区；成人类源默认关闭、开启需管理员密码。
+    // 黄果类与成人类整组隐藏，仅在「关于」浮卡连点 5 次解锁后显示
+    // （调用方已按 restrictedUnlocked 过滤入参）。
     final huangguo = sources
         .where((site) => site.inHuangguoCategory)
         .toList();
@@ -332,47 +368,93 @@ class _SourcesScreenState extends State<SourcesScreen> {
         .toList();
     final shortDrama = rest.where((site) => site.isShortDrama).toList();
     final video = rest.where((site) => site.isVideoSource).toList();
+    final adult = rest.where((site) => site.isAdultSource).toList();
     return [
-      if (shortDrama.isNotEmpty) ...[
-        _categoryHeader(
-          '短剧类',
-          shortDrama.length,
-          Icons.smart_display_outlined,
-          '竖屏短剧',
+      if (shortDrama.isNotEmpty)
+        _categorySection(
+          id: 'short',
+          title: '短剧类',
+          count: shortDrama.length,
+          icon: AppIcon(AppIcons.smartDisplay, size: 20),
+          subtitle: '竖屏短剧',
+          sources: shortDrama,
         ),
-        ..._sourceGroupsOf(shortDrama),
-      ],
-      if (video.isNotEmpty) ...[
-        _categoryHeader(
-          '视频类',
-          video.length,
-          Icons.movie_outlined,
-          '横版播放 · 多线路与清晰度',
+      if (video.isNotEmpty)
+        _categorySection(
+          id: 'video',
+          title: '视频类',
+          count: video.length,
+          icon: AppIcon(AppIcons.movie, size: 20),
+          subtitle: '横版播放 · 多线路与清晰度',
+          sources: video,
         ),
-        ..._sourceGroupsOf(video),
-      ],
-      if (huangguo.isNotEmpty) ...[
-        _categoryHeader(
-          '黄果类',
-          huangguo.length,
-          Icons.hub_outlined,
-          '黄果系入口 · 精选与热门短剧',
+      if (huangguo.isNotEmpty)
+        _categorySection(
+          id: 'huangguo',
+          title: '黄果类',
+          count: huangguo.length,
+          icon: AppIcon(AppIcons.hub, size: 20),
+          subtitle: '黄果系入口 · 精选与热门短剧',
+          sources: huangguo,
         ),
-        ..._sourceGroupsOf(huangguo),
-      ],
+      if (adult.isNotEmpty)
+        _categorySection(
+          id: 'adult',
+          title: '成人类',
+          count: adult.length,
+          icon: AppIcon(AppIcons.lock, size: 20),
+          subtitle: '默认关闭 · 开启需管理员密码',
+          sources: adult,
+        ),
     ];
+  }
+
+  Widget _categorySection({
+    required String id,
+    required String title,
+    required int count,
+    required Widget icon,
+    required String subtitle,
+    required List<SourceSite> sources,
+  }) {
+    final expanded = _expandedCategories.contains(id);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          key: ValueKey('category-toggle-$id'),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expandedCategories.remove(id);
+            } else {
+              _expandedCategories.add(id);
+            }
+          }),
+          borderRadius: BorderRadius.circular(8),
+          child: _categoryHeader(
+            title,
+            count,
+            icon,
+            subtitle,
+            expanded: expanded,
+          ),
+        ),
+        if (expanded) ..._sourceGroupsOf(sources),
+      ],
+    );
   }
 
   Widget _categoryHeader(
     String title,
     int count,
-    IconData icon,
-    String subtitle,
-  ) => Padding(
+    Widget icon,
+    String subtitle, {
+    required bool expanded,
+  }) => Padding(
     padding: const EdgeInsets.only(top: 4, bottom: 12),
     child: Row(
       children: [
-        Icon(icon, size: 20),
+        icon,
         const SizedBox(width: 8),
         Text(title, style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(width: 8),
@@ -385,6 +467,10 @@ class _SourcesScreenState extends State<SourcesScreen> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
+        const SizedBox(width: 8),
+        expanded
+            ? AppIcon(AppIcons.expandLess)
+            : AppIcon(AppIcons.expandMore),
       ],
     ),
   );
@@ -413,7 +499,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final admin = widget.store.profile.admin;
     final header = Row(
       children: [
-        const Icon(Icons.dns_outlined),
+        AppIcon(AppIcons.dns),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
@@ -480,13 +566,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
                 FilledButton.icon(
                   key: ValueKey('update-${source.id}'),
                   onPressed: enabled ? () => _run(source, 'update') : null,
-                  icon: const Icon(Icons.sync_rounded),
+                  icon: AppIcon(AppIcons.sync),
                   label: const Text('更新'),
                 ),
                 OutlinedButton.icon(
                   key: ValueKey('check-${source.id}'),
                   onPressed: enabled ? () => _run(source, 'check') : null,
-                  icon: const Icon(Icons.network_check),
+                  icon: AppIcon(AppIcons.networkCheck),
                   label: const Text('检测连接与播放'),
                 ),
                 if (status?.running == true)
@@ -568,7 +654,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                           !busy && widget.repository.supportsSourceManagement
                           ? () => _run(source, 'retrySave')
                           : null,
-                      icon: const Icon(Icons.save_outlined),
+                      icon: AppIcon(AppIcons.save),
                       label: const Text('重试保存'),
                     ),
                   ],
@@ -616,11 +702,9 @@ class _SourcesScreenState extends State<SourcesScreen> {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              Icon(
-                                healthExpanded
-                                    ? Icons.expand_less_rounded
-                                    : Icons.expand_more_rounded,
-                              ),
+                              healthExpanded
+                                  ? AppIcon(AppIcons.expandLess)
+                                  : AppIcon(AppIcons.expandMore),
                             ],
                           ),
                         ),
@@ -630,7 +714,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
                   IconButton(
                     tooltip: '复制诊断信息',
                     onPressed: () => _copy(source, status!),
-                    icon: const Icon(Icons.copy_rounded),
+                    icon: AppIcon(AppIcons.copy),
                   ),
                 ],
               ),
@@ -642,15 +726,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          step.state == 'ok'
-                              ? Icons.check_circle_outline
-                              : Icons.error_outline,
-                          size: 20,
-                          color: step.state == 'ok'
-                              ? colors.primary
-                              : colors.error,
-                        ),
+                        step.state == 'ok'
+                            ? AppIcon(AppIcons.checkCircle,
+                                size: 20, color: colors.primary)
+                            : AppIcon(AppIcons.error,
+                                size: 20, color: colors.error),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Column(
@@ -704,7 +784,7 @@ class SourceDiagnosticsButton extends StatelessWidget {
         ),
       ),
     ),
-    icon: const Icon(Icons.network_check),
+    icon: AppIcon(AppIcons.networkCheck),
     label: const Text('站源诊断'),
   );
 }

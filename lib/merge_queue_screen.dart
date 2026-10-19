@@ -9,6 +9,7 @@ import 'media_library.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class MergeQueueScreen extends StatefulWidget {
   const MergeQueueScreen({
@@ -178,7 +179,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
             IconButton(
               tooltip: '添加多部剧',
               onPressed: _adding || !_allowed ? null : _add,
-              icon: const Icon(Icons.add_rounded),
+              icon: AppIcon(AppIcons.add),
             ),
           ],
         ),
@@ -202,7 +203,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
                             message: '选择多部剧加入队列，依次合并已下载的连续分集。',
                             secondaryAction: FilledButton.icon(
                               onPressed: _adding ? null : _add,
-                              icon: const Icon(Icons.add_rounded),
+                              icon: AppIcon(AppIcons.add),
                               label: const Text('添加剧集'),
                             ),
                           )
@@ -255,9 +256,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
                                             TextButton.icon(
                                               onPressed: () =>
                                                   _control(job, 'pause'),
-                                              icon: const Icon(
-                                                Icons.pause_rounded,
-                                              ),
+                                              icon: AppIcon(AppIcons.pause),
                                               label: const Text('暂停'),
                                             ),
                                           if (job.state == 'paused' ||
@@ -265,9 +264,7 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
                                             TextButton.icon(
                                               onPressed: () =>
                                                   _control(job, 'resume'),
-                                              icon: const Icon(
-                                                Icons.play_arrow_rounded,
-                                              ),
+                                              icon: AppIcon(AppIcons.play),
                                               label: Text(
                                                 job.state == 'failed'
                                                     ? '重试'

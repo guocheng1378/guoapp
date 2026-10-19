@@ -12,6 +12,13 @@ import (
 
 var coverMetaTag = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
 
+// rankingSourceID：站源条目 ID 白名单（原 provider_rankings_parse.go，榜单
+// 重建后由封面/详情元数据校验继续使用）。
+var rankingSourceID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
+
+// rankingJSONLD：页面内 JSON-LD script 块提取（黄果系详情元数据解析沿用）。
+var rankingJSONLD = regexp.MustCompile(`(?is)<script\b[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
+
 func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) (string, error) {
 	source, id, valid := splitProviderDramaID(drama.ID)
 	if !valid {

@@ -140,7 +140,7 @@ func soraniDramaFromMap(row map[string]any) (Drama, error) {
 		Title: truncate(title, 256), Name: truncate(title, 256),
 		Desc: truncate(description, 12000), Intro: truncate(description, 12000),
 		Cover: cover, CoverURL: cover,
-		TotalEpisode: episodes, EpisodeCount: episodes,
+		TotalEpisode: episodes, EpisodeCount: json.Number(strconv.Itoa(episodes)),
 		Category: category, ChannelName: duanjuSourceName(sourceSorani),
 		Tags: tags, Score: score,
 	}, nil

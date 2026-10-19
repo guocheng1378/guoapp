@@ -10,6 +10,7 @@ import 'local_store.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class BatchDownloadScreen extends StatefulWidget {
   const BatchDownloadScreen({
@@ -232,7 +233,7 @@ class _BatchDownloadScreenState extends State<BatchDownloadScreen> {
                                             _batch.pendingEpisodes == 0
                                         ? null
                                         : _batch.submit,
-                                    icon: const Icon(Icons.download_rounded),
+                                    icon: AppIcon(AppIcons.download),
                                     label: Text(
                                       '${_batch.settingsLocked ? '继续添加' : '加入下载'} · ${_batch.pendingEpisodes} 集',
                                     ),

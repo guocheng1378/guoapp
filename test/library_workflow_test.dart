@@ -36,7 +36,7 @@ void main() {
         onCatalogChanged: changed.add,
       );
       addTearDown(updater.dispose);
-      final sources = [SourceSite.byId('hongguo')];
+      final sources = [SourceSite.byId('hongguo')!];
       final pending = updater.update(sources);
       await updater.update(sources);
       expect(repository.starts, ['hongguo:update']);
@@ -119,7 +119,7 @@ void main() {
     () async {
       final repository = LibraryFeatureRepository();
       final browser = CatalogBrowser(repository);
-      final group = SourceGroup('hongguo', '红果', [SourceSite.byId('hongguo')]);
+      final group = SourceGroup('hongguo', '红果', [SourceSite.byId('hongguo')!]);
       repository.cachedPages['hongguo'] = CatalogPage(
         [first],
         page: 7,

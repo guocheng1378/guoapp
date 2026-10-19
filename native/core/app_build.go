@@ -15,6 +15,10 @@ func init() {
 
 func nativeSourceAvailable(source string) bool {
 	syncBuildVariant()
+	if source == sourceDouban {
+		// 豆瓣是榜单专用源（不注册 provider，无目录/详情/播放），任何变体均可用。
+		return true
+	}
 	return provider.Available(source)
 }
 
@@ -26,6 +30,11 @@ func syncBuildVariant() {
 
 func nativeDramaAvailable(drama nativeDrama) bool {
 	source, _, valid := splitProviderDramaID(drama.ID)
+	if !valid && nativeSourceAvailable(drama.Source) && !provider.KnownSource(drama.Source) {
+		// 榜单专用源（豆瓣）不注册 provider，条目 ID 反解必然失败；
+		// 封面等条目级只读操作按显式 Source 采信（同 nativeNormalize 语义）。
+		return true
+	}
 	return valid && nativeSourceAvailable(source) &&
 		(drama.Source == "" || canonicalProviderSource(drama.Source) == source)
 }

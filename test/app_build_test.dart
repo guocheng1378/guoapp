@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:duanju_app/app_build.dart';
 import 'package:duanju_app/core_bridge.dart';
 import 'package:duanju_app/local_profiles.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,6 +48,8 @@ void main() {
       ];
       SharedPreferences.setMockInitialValues({
         'source': 'huangdou',
+        // 黄豆为受限源，默认关；此用例考察「开关开着时」的收藏与历史语义。
+        'sourceSwitches': jsonEncode({'huangdou': true}),
         'favorites': jsonEncode([red.toJson(), other.toJson()]),
         'history': jsonEncode(history),
       });
@@ -94,6 +98,8 @@ void main() {
         ]),
         'activeProfile': 'viewer',
         'profile.viewer.source': 'huangdou',
+        // 黄豆为受限源，默认关；恢复用户后开关需保持开启才能保留其权限语义。
+        'sourceSwitches': jsonEncode({'huangdou': true}),
       });
       final store = LocalStore(await SharedPreferences.getInstance());
       expect(store.profile.id, 'viewer');
@@ -139,10 +145,28 @@ void main() {
   test(
     'background requests reject unavailable sources before native I/O',
     () async {
+      // 「当前版本不包含此站源」的判定要读核心 allSources 戳，即拒绝路径
+      // 本身依赖核心可加载。无 duanju_core.dll 的环境（CI 无 Windows 构建
+      // 产物）整条 native 路径不可用，本用例无从考察，直接跳过。
+      if (Platform.isWindows) {
+        final coreDll = File(
+          '${File(Platform.resolvedExecutable).parent.path}\\duanju_core.dll',
+        );
+        if (!coreDll.existsSync()) {
+          debugPrint('skip: 未找到 ${coreDll.path}，跳过 native 拒绝路径用例');
+          return;
+        }
+      }
       final repository = NativeRepository(background: true);
+      // 豆瓣是榜单专用源：只读链路（榜单/封面）按 SourceSite.authorized
+      // 放行，不属于「当前版本不包含此站源」的拒绝集合。
       final denied = [
         ...SourceSite.allValues
-            .where((source) => !SourceSite.isAvailable(source.id))
+            .where(
+              (source) =>
+                  !SourceSite.isAvailable(source.id) &&
+                  !SourceSite.isRankingOnly(source.id),
+            )
             .map((source) => source.id),
         'unknown',
       ];
@@ -178,4 +202,18 @@ void main() {
       }
     },
   );
+
+  test('ranking-only source stays authorized for read-only requests', () {
+    // 回归：「豆瓣榜单没图」。豆瓣不注册 provider、不进站源菜单，
+    // isAvailable 恒 false；曾经 _authorize 无条件按 isAvailable 拒绝，
+    // 导致榜单条目 cover 请求恒抛「当前版本不包含此站源」，榜单与首页
+    // 轮播的豆瓣卡全部落到失败态（只显示重试图标）。
+    expect(SourceSite.isAvailable('douban'), isFalse);
+    expect(SourceSite.isRankingOnly('douban'), isTrue);
+    expect(SourceSite.authorized('douban'), isTrue);
+    // 其余非白名单源（含已下线的 DSD）仍按变体拦截。
+    expect(SourceSite.authorized('dsd'), isFalse);
+    expect(SourceSite.authorized('unknown'), isFalse);
+    expect(SourceSite.authorized('hongguo'), isTrue);
+  });
 }

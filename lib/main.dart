@@ -21,6 +21,7 @@ import 'package_smoke.dart';
 import 'lan_controller.dart';
 import 'player_screen.dart';
 import 'video_enhancement_assets.dart';
+import 'app_icons.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -262,15 +263,15 @@ class DuanjuApp extends StatelessWidget {
       );
     },
     home: store != null
-        ? store!.locked
-              ? ProfilesScreen(store: store!, locked: true)
-              : HomeScreen(
-                  key: ValueKey(
-                    'profile-${store!.profile.id}-${store!.profileEpoch}',
-                  ),
-                  repository: repository,
-                  store: store!,
-                )
+        ? (store!.locked
+            ? ProfilesScreen(store: store!, locked: true)
+            : HomeScreen(
+                key: ValueKey(
+                  'profile-${store!.profile.id}-${store!.profileEpoch}',
+                ),
+                repository: repository,
+                store: store!,
+              ))
         : Scaffold(
             body: Center(
               child: Padding(
@@ -278,11 +279,7 @@ class DuanjuApp extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
-                      Icons.play_circle_fill_rounded,
-                      color: Color(0xFFFF765F),
-                      size: 72,
-                    ),
+                    AppIcon(AppIcons.playCircleFilled, size: 72, color: Color(0xFFFF765F)),
                     const SizedBox(height: 24),
                     Text(
                       bootstrapError ?? '正在打开$appName',

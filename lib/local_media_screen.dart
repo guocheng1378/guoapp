@@ -13,6 +13,7 @@ import 'player_screen.dart';
 import 'remote_widgets.dart';
 import 'settings_screen.dart';
 import 'merge_queue_screen.dart';
+import 'app_icons.dart';
 
 class LocalMediaScreen extends StatefulWidget {
   const LocalMediaScreen({
@@ -213,7 +214,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
             IconButton(
               tooltip: '刷新',
               onPressed: library.busy ? null : _refresh,
-              icon: const Icon(Icons.refresh),
+              icon: AppIcon(AppIcons.refresh),
             ),
           ],
         ),
@@ -240,7 +241,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
                     onPressed: library.busy && !_merged
                         ? null
                         : () => _create(_merged),
-                    icon: Icon(_merged ? Icons.merge : Icons.output),
+                    icon: _merged ? AppIcon(AppIcons.merge) : AppIcon(AppIcons.output),
                     label: Text(_merged ? '合并已下载分集' : '导出已下载分集'),
                   ),
                 ],
@@ -292,7 +293,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
                                 '${library.root}${Platform.pathSeparator}exports',
                           ),
                         ),
-                        icon: const Icon(Icons.copy),
+                        icon: AppIcon(AppIcons.copy),
                         label: const Text('复制 Emby 媒体目录'),
                       ),
                   ],
@@ -342,14 +343,14 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
                                     onPressed: library.busy
                                         ? null
                                         : () => _exportMerged(item),
-                                    icon: const Icon(Icons.output_rounded),
+                                    icon: AppIcon(AppIcons.output),
                                     label: const Text('导出到 Emby 特别篇'),
                                   ),
                                 Row(
                                   children: [
                                     TextButton.icon(
                                       onPressed: () => _play(item),
-                                      icon: const Icon(Icons.play_arrow),
+                                      icon: AppIcon(AppIcons.play),
                                       label: Text(
                                         item.merged &&
                                                 item.episodes.length ==
@@ -366,14 +367,14 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
                                           text: library.fileFor(item),
                                         ),
                                       ),
-                                      icon: const Icon(Icons.copy),
+                                      icon: AppIcon(AppIcons.copy),
                                     ),
                                     IconButton(
                                       tooltip: '删除成品',
                                       onPressed: library.busy
                                           ? null
                                           : () => _remove(item),
-                                      icon: const Icon(Icons.delete_outline),
+                                      icon: AppIcon(AppIcons.delete),
                                     ),
                                   ],
                                 ),
@@ -415,12 +416,14 @@ class _LocalFileRepository extends AppRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) => parent.catalog(
     source,
     page: page,
     query: query,
     category: category,
+    sort: sort,
     force: force,
   );
   @override

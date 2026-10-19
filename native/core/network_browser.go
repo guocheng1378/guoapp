@@ -57,6 +57,25 @@ func browserTransportHosts() map[string]bool {
 	return hosts
 }
 
+// browserTransportSuffixes：按域名后缀强制走浏览器指纹的主机。豆瓣图床
+// （img1-9.doubanio.com，腾讯 EdgeOne）开了 Bot 管理——Go 原生 crypto/tls
+// 指纹（JA3）会被判定为爬虫，返回 ~1KB 的 EO_Bot_Ssid JS 挑战页而非海报
+// （榜单封面因此全占位）；Chrome 指纹放行。榜单 API（m.douban.com）不在
+// 此列，原生指纹即可。
+var browserTransportSuffixes = []string{".doubanio.com"}
+
+func browserTransportMatchesHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	for _, suffix := range browserTransportSuffixes {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (transport *huangguoBrowserTransport) matches(request *http.Request) bool {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		return false
@@ -64,7 +83,10 @@ func (transport *huangguoBrowserTransport) matches(request *http.Request) bool {
 	if request.URL.Scheme != "http" && request.URL.Scheme != "https" {
 		return false
 	}
-	return transport.hosts[strings.ToLower(request.URL.Host)] || transport.hosts[strings.ToLower(request.URL.Hostname())]
+	if transport.hosts[strings.ToLower(request.URL.Host)] || transport.hosts[strings.ToLower(request.URL.Hostname())] {
+		return true
+	}
+	return browserTransportMatchesHost(strings.ToLower(request.URL.Hostname()))
 }
 
 func (transport *huangguoBrowserTransport) createClient(proxy string) (browserHTTPClient, error) {

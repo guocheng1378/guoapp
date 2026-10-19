@@ -17,6 +17,7 @@ type nativePlaybackChoice struct {
 	qualities     []int
 	streamSession string
 	created       time.Time
+	refresher     func(context.Context) (providerMedia, error)
 }
 
 func nativePlaybackChoices(media providerMedia, quality int) nativePlaybackChoice {
@@ -94,7 +95,11 @@ func (engine *nativeEngine) nativeOpenPlayback(ctx context.Context, choice nativ
 		if err != nil {
 			return nativePlan{}, err
 		}
-		plan.URL, choice.streamSession = stream.nativeOpen(media)
+		address, token, err := stream.nativeOpen(media, choice.refresher)
+		if err != nil {
+			return nativePlan{}, err
+		}
+		plan.URL, choice.streamSession = address, token
 	}
 	choice.created = time.Now()
 	engine.mu.Lock()
@@ -109,14 +114,21 @@ func (engine *nativeEngine) nativeOpenPlayback(ctx context.Context, choice nativ
 		}
 	}
 	if len(engine.playbacks) >= 8 {
-		oldest := ""
+		// 边看边下载等场景会持续新建播放会话，逐出必须优先让路给正在
+		// 播放的一条：按流会话最近被播放器读取的时间比较，会话已消失
+		// 的视为完全空闲最先逐出，避免把正在观看的会话挤出导致断链。
+		victim, victimUsed := "", time.Time{}
 		for token, old := range engine.playbacks {
-			if oldest == "" || old.created.Before(engine.playbacks[oldest].created) {
-				oldest = token
+			used := time.Time{}
+			if idle := engine.stream.nativeLastUsed(old.streamSession); !idle.IsZero() {
+				used = idle
+			}
+			if victim == "" || used.Before(victimUsed) {
+				victim, victimUsed = token, used
 			}
 		}
-		expired = append(expired, engine.playbacks[oldest].streamSession)
-		delete(engine.playbacks, oldest)
+		expired = append(expired, engine.playbacks[victim].streamSession)
+		delete(engine.playbacks, victim)
 	}
 	engine.playbacks[plan.Session] = choice
 	stream := engine.stream

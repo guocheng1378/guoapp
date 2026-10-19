@@ -52,7 +52,7 @@ REQUIRED_FILES = {
     'native/go.mod', 'native/go.sum', 'native/bridge/main.go',
     'android/app/build.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties',
     'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt',
-    '.github/workflows/build.yml', 'scripts/build_native.py',
+    '.github/workflows/test.yml', 'scripts/build_native.py',
 }
 
 

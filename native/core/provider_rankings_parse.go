@@ -11,8 +11,9 @@ import (
 )
 
 var rankingScriptTags = regexp.MustCompile(`(?is)<script\b[^>]*>`)
-var rankingJSONLD = regexp.MustCompile(`(?is)<script\b[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
-var rankingSourceID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
+
+// rankingJSONLD / rankingSourceID 现定义在 app_cover_metadata.go（站源榜与
+// 封面/详情元数据校验共用），此处不再重复声明。
 var errHongguoRankingIncomplete = errors.New("红果榜单数据尚未完整返回，请稍后重试")
 var errHongguoRankingFormat = errors.New("红果榜单格式或分页已变化，请稍后重试")
 

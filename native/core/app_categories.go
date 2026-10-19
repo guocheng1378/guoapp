@@ -20,12 +20,26 @@ var nativeAICategories = []nativeCategory{
 	{ID: "chigua", Name: "黄果吃瓜"},
 }
 
-func nativeCatalogKey(source, category string) string {
-	source = canonicalProviderSource(source)
-	if category = strings.TrimSpace(category); category != "" {
-		return source + "|" + category
+// normalizeNativeSort 归一化客户端排序枚举名（heat/views/date）。
+// 仅白名单内的值参与缓存键与服务端请求，空串与其他值一律视为源站顺序。
+func normalizeNativeSort(sort string) string {
+	switch sort = strings.ToLower(strings.TrimSpace(sort)); sort {
+	case "heat", "views", "date":
+		return sort
 	}
-	return source
+	return ""
+}
+
+func nativeCatalogKey(source, category, sort string) string {
+	source = canonicalProviderSource(source)
+	key := source
+	if category = strings.TrimSpace(category); category != "" {
+		key += "|" + category
+	}
+	if sort != "" {
+		key += "|sort:" + sort
+	}
+	return key
 }
 
 func validNativeCategory(source, category string) bool {

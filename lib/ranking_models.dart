@@ -11,31 +11,13 @@ class RankingBoard {
   final String source;
   final String name;
   final String description;
-  String get groupId => SourceSite.byId(source).groupId;
-  static String sourceForID(String id) => switch (id) {
-    'hongguo-hot' ||
-    'hongguo-real' ||
-    'hongguo-comic' ||
-    'hongguo-ai' => 'hongguo',
-    'huangdou-all' ||
-    'huangdou-mogai' ||
-    'huangdou-search' ||
-    'huangdou-favorite' ||
-    'huangdou-finish' => 'huangdou',
-    'huangguo-hot' ||
-    'huangguo-recommend' ||
-    'huangguo-potential' => 'huangguoai',
-    'huangju-hot' || 'huangju-new' => 'huangju',
-    'yeguo-recommend' => 'yeguo',
-    'dongpiandi-hot' ||
-    'dongpiandi-short-drama' ||
-    'dongpiandi-series' ||
-    'dongpiandi-movie' ||
-    'dongpiandi-anime' ||
-    'dongpiandi-variety' => 'dongpiandi',
-    'yingshigongchang-new' => 'yingshigongchang',
-    _ => '',
-  };
+  String get groupId => SourceSite.byId(source)?.groupId ?? source;
+  /// 榜单 id 统一为 `<source>-<后缀>`（如 hongguo-hot、douban-top250），
+  /// 解析首段为站源；未知前缀返回空串（由调用方按不可用站源拒绝）。
+  static String sourceForID(String id) {
+    final head = id.split('-').first;
+    return SourceSite.byId(head)?.id ?? '';
+  }
   factory RankingBoard.fromJson(Map<String, dynamic> json) => RankingBoard(
     id: json['id'] as String? ?? '',
     source:

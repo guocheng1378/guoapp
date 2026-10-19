@@ -12,6 +12,7 @@ import 'video_enhancement_preferences.dart';
 import 'video_enhancement_settings.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class TelevisionControls extends StatefulWidget {
   const TelevisionControls({
@@ -299,7 +300,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                       RemoteButton(
                         key: const ValueKey('tv-player-back'),
                         label: '返回',
-                        icon: Icons.arrow_back_rounded,
+                        icon: AppIcon(AppIcons.arrowBack),
                         onPressed: widget.onBack,
                       ),
                       const SizedBox(width: 16),
@@ -380,15 +381,15 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                             RemoteButton(
                               key: const ValueKey('tv-previous'),
                               label: '上一集',
-                              icon: Icons.skip_previous_rounded,
+                              icon: AppIcon(AppIcons.skipPrevious),
                               onPressed: widget.onPrevious,
                             ),
                             RemoteButton(
                               key: const ValueKey('tv-play-pause'),
                               label: state.playing ? '暂停' : '播放',
                               icon: state.playing
-                                  ? Icons.pause_rounded
-                                  : Icons.play_arrow_rounded,
+                                  ? AppIcon(AppIcons.pause)
+                                  : AppIcon(AppIcons.play),
                               focusNode: _play,
                               onPressed: () {
                                 widget.onTogglePlayback();
@@ -398,13 +399,13 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                             RemoteButton(
                               key: const ValueKey('tv-next'),
                               label: '下一集',
-                              icon: Icons.skip_next_rounded,
+                              icon: AppIcon(AppIcons.skipNext),
                               onPressed: widget.onNext,
                             ),
                             RemoteButton(
                               key: const ValueKey('tv-episodes'),
                               label: '选集',
-                              icon: Icons.grid_view_rounded,
+                              icon: AppIcon(AppIcons.gridView),
                               focusNode: _episodes,
                               onPressed: () =>
                                   _openPanel(widget.onEpisodes, _episodes),
@@ -424,7 +425,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                                     label: enhancement.comparing
                                         ? '恢复增强'
                                         : '原画对比',
-                                    icon: Icons.compare_rounded,
+                                    icon: AppIcon(AppIcons.compare),
                                     onPressed: () {
                                       unawaited(enhancement.toggleCompare());
                                       _focus(_play);
@@ -436,7 +437,7 @@ class _TelevisionControlsState extends State<TelevisionControls> {
                             RemoteButton(
                               key: const ValueKey('tv-settings'),
                               label: '播放设置',
-                              icon: Icons.tune_rounded,
+                              icon: AppIcon(AppIcons.tune),
                               focusNode: _settings,
                               onPressed: () =>
                                   _openPanel(widget.onSettings, _settings),
@@ -665,8 +666,8 @@ class TelevisionSettingsDialog extends StatelessWidget {
             RemoteButton(
               label: favorite ? '取消追剧' : '加入追剧',
               icon: favorite
-                  ? Icons.bookmark_rounded
-                  : Icons.bookmark_border_rounded,
+                  ? AppIcon(AppIcons.bookmark, filled: true)
+                  : AppIcon(AppIcons.bookmark),
               onPressed: () {
                 onFavorite();
                 Navigator.pop(context);

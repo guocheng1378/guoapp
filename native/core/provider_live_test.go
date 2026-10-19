@@ -21,23 +21,14 @@ func TestLiveProviderCatalogRankingDetailAndPlaybackSmoke(t *testing.T) {
 	defer cancel()
 	for _, scenario := range []struct {
 		source string
-		board  string
 	}{
-		{source: sourceHuangju, board: "huangju-hot"},
-		{source: sourceYeguo, board: "yeguo-recommend"},
+		{source: sourceHuangju},
+		{source: sourceYeguo},
 	} {
 		t.Run(scenario.source, func(t *testing.T) {
 			dramas, more, err := fetchLiveCatalogPage(ctx, engine.downloader, scenario.source)
 			if err != nil || len(dramas) == 0 {
 				t.Fatalf("catalog failed: count=%d more=%t err=%v", len(dramas), more, err)
-			}
-			board, found := findRankingBoard(scenario.board)
-			if !found {
-				t.Fatal("ranking board missing")
-			}
-			ranking, err := engine.downloader.loadRankingPage(ctx, board, 1, true)
-			if err != nil || len(ranking.Items) == 0 {
-				t.Fatalf("ranking failed: count=%d err=%v", len(ranking.Items), err)
 			}
 			var lastErr error
 			for index, drama := range dramas {
@@ -76,13 +67,27 @@ func TestLiveProviderCatalogRankingDetailAndPlaybackSmoke(t *testing.T) {
 					if !strings.HasPrefix(plan.URL, "http://127.0.0.1:") || plan.RouteCount < 1 {
 						t.Fatalf("playback plan did not use local stream route: %+v", plan)
 					}
-					t.Logf("%s live smoke ok: catalog=%d ranking=%d detail=%s chapters=%d routes=%d quality=%d", scenario.source, len(dramas), len(ranking.Items), raw.ID, len(chapters), plan.RouteCount, plan.Quality)
+					t.Logf("%s live smoke ok: catalog=%d detail=%s chapters=%d routes=%d quality=%d", scenario.source, len(dramas), raw.ID, len(chapters), plan.RouteCount, plan.Quality)
 					return
 				}
 			}
 			t.Fatalf("could not resolve a playable %s episode; last error: %v", scenario.source, lastErr)
 		})
 	}
+	t.Run("douban", func(t *testing.T) {
+		board, found := findRankingBoard("douban-top250")
+		if !found {
+			t.Fatal("ranking board missing")
+		}
+		ranking, err := engine.downloader.loadRankingPage(ctx, board, 1, true)
+		if err != nil || len(ranking.Items) == 0 {
+			t.Fatalf("douban live ranking failed: count=%d err=%v", len(ranking.Items), err)
+		}
+		if ranking.Items[0].Drama.Source != sourceDouban {
+			t.Fatalf("douban ranking item has wrong source: %s", ranking.Items[0].Drama.Source)
+		}
+		t.Logf("douban live smoke ok: board=%s items=%d rank1=%s", board.ID, len(ranking.Items), ranking.Items[0].Drama.DisplayTitle())
+	})
 }
 
 func fetchLiveCatalogPage(ctx context.Context, d *Downloader, source string) ([]Drama, bool, error) {

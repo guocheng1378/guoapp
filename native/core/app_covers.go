@@ -83,6 +83,15 @@ func newNativeCoverCache(directory string, downloader *Downloader) *nativeCoverC
 }
 
 func nativeCoverReferer(downloader *Downloader, source, address string) string {
+	// 豆瓣图片 CDN 校验 Referer 域：非 douban 域 Referer 一律 403（无
+	// Referer 反而放行）。榜单条目封面必须带豆瓣站内 Referer 才能下载。
+	if source == sourceDouban {
+		return doubanReferer
+	}
+	if parsed, err := url.Parse(address); err == nil &&
+		strings.HasSuffix(strings.ToLower(parsed.Hostname()), "doubanio.com") {
+		return doubanReferer
+	}
 	if source == sourceCloudFront {
 		if parsed, err := url.Parse(address); err == nil && (strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".zdmhyg.cn") || strings.EqualFold(parsed.Hostname(), "pic.tuafjz.cn")) {
 			return downloader.providerBaseURL(sourceHuangguoAI) + "/"

@@ -3,13 +3,14 @@ import 'models.dart';
 enum PlaybackRecoveryAction { alternative, refresh, stop }
 
 class PlaybackRecovery {
-  static const maxAttempts = 3;
+  static const maxAttempts = 4;
+  static const maxRefreshes = 2;
   int _attempts = 0;
-  bool _refreshed = false;
+  int _refreshes = 0;
 
   void reset() {
     _attempts = 0;
-    _refreshed = false;
+    _refreshes = 0;
   }
 
   PlaybackRecoveryAction next(PlaybackPlan plan) {
@@ -20,9 +21,9 @@ class PlaybackRecovery {
       _attempts++;
       return PlaybackRecoveryAction.alternative;
     }
-    if (!_refreshed) {
+    if (_refreshes < maxRefreshes) {
       _attempts++;
-      _refreshed = true;
+      _refreshes++;
       return PlaybackRecoveryAction.refresh;
     }
     return PlaybackRecoveryAction.stop;

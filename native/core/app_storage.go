@@ -141,16 +141,17 @@ func (engine *nativeEngine) moveDownloads(ctx context.Context, parent string) er
 		manager.mu.Unlock()
 		return nil
 	}
-	relative, _ := filepath.Rel(manager.root, target)
-	inverse, _ := filepath.Rel(target, manager.root)
-	if (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))) ||
-		(inverse != ".." && !strings.HasPrefix(inverse, ".."+string(os.PathSeparator))) {
+	relative, relErr := filepath.Rel(manager.root, target)
+	inverse, inverseErr := filepath.Rel(target, manager.root)
+	contained := (relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))) ||
+		(inverseErr == nil && inverse != ".." && !strings.HasPrefix(inverse, ".."+string(os.PathSeparator)))
+	if contained {
 		manager.mu.Unlock()
 		return errors.New("新目录不能与原下载目录互相包含")
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		manager.mu.Unlock()
-		return errors.New("目标中已有应用下载目录，请选择空目录，避免覆盖文件")
+		return errors.New("目标中已有应用下载目录；若是上次迁移中断留下的残缺目录，可删除后重试，或改选其他空目录")
 	}
 	manager.moving = true
 	for id, job := range manager.jobs {

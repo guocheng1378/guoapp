@@ -11,10 +11,38 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
+
+// lanURLHost 把 IPv6 zone 分隔符的裸 % 转成 RFC 6874 要求的 %25（幂等，已转义的保持不变）。
+// zone 里的非 ASCII（如 Windows 中文网卡名「以太网」）必须保持裸 UTF-8：
+// url.URL{Host}.String() 会把它们再转义成 %E4%BB…，而 url.Parse 的 encodeZone
+// 规则恰恰拒绝 zone 里转义的非 ASCII 字节（报 invalid URL escape "%E4"）——
+// 标准库的构造与解析不对称，所以调用方要用手工拼接的端点串，不能走 URL{}.String()。
+func lanURLHost(address string) string {
+	if !strings.Contains(address, "%") {
+		return address
+	}
+	var builder strings.Builder
+	builder.Grow(len(address) + 8)
+	for i := 0; i < len(address); {
+		switch c := address[i]; {
+		case c == ' ':
+			// zone 里的空格（Windows 网卡名如「本地连接 2」）必须转义，
+			// url.Parse 的 host 检查拒绝裸空格；encodeZone 对 %20 有豁免。
+			builder.WriteString("%20")
+			i++
+		case c == '%' && !(i+2 < len(address) && address[i+1] == '2' && address[i+2] == '5'):
+			builder.WriteString("%25")
+			i++
+		default:
+			builder.WriteByte(c)
+			i++
+		}
+	}
+	return builder.String()
+}
 
 func (link *nativeLANServer) request(parent context.Context, input nativeLANInput, probe bool) (any, error) {
 	address, err := nativeLANAddress(input.Address)
@@ -104,8 +132,10 @@ func (link *nativeLANServer) request(parent context.Context, input nativeLANInpu
 	if len(body) == 0 {
 		body = json.RawMessage("{}")
 	}
-	target := url.URL{Scheme: "https", Host: address, Path: "/zgj/v1/" + input.Path}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
+	// 手工拼端点：url.URL{Host}.String() 会把 zone 里的中文转义成 %E4…，
+	// url.Parse 随即拒绝该形式（encodeZone 只认 %25 与裸 UTF-8），两端矛盾。
+	endpoint := "https://" + lanURLHost(address) + "/zgj/v1/" + input.Path
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

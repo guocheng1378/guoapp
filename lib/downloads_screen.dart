@@ -15,6 +15,7 @@ import 'player_screen.dart';
 import 'remote_widgets.dart';
 import 'settings_screen.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({
@@ -154,7 +155,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           child: AlertDialog(
             title: Text(completed > 0 ? '删除所选视频？' : '取消所选下载？'),
             content: Text(
-              '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择“清理任务，保留视频”。',
+              '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择"清理任务，保留视频"。',
             ),
             actions: [
               TextButton(
@@ -382,7 +383,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         onPressed: _busy
             ? null
             : () => _select(collections.expand((c) => c.jobs)),
-        icon: const Icon(Icons.select_all_rounded),
+        icon: AppIcon(AppIcons.selectAll),
       ),
       IconButton(
         tooltip: '退出多选',
@@ -393,7 +394,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 _selected.clear();
                 _retryCommand = null;
               }),
-        icon: const Icon(Icons.close_rounded),
+        icon: AppIcon(AppIcons.close),
       ),
     ] else ...[
       IconButton(
@@ -401,13 +402,13 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         onPressed: _filters,
         icon: Badge(
           isLabelVisible: _filter != 'all' || _release.isNotEmpty,
-          child: const Icon(Icons.filter_list_rounded),
+          child: AppIcon(AppIcons.filter),
         ),
       ),
       IconButton(
         tooltip: '多选下载任务',
         onPressed: () => setState(() => _selecting = true),
-        icon: const Icon(Icons.checklist_rounded),
+        icon: AppIcon(AppIcons.checklist),
       ),
       IconButton(
         key: const ValueKey('download-local-media'),
@@ -421,7 +422,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             ),
           ),
         ),
-        icon: const Icon(Icons.video_library_outlined),
+        icon: AppIcon(AppIcons.videoLibrary),
       ),
     ],
     PopupMenuButton<String>(
@@ -461,7 +462,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     : null,
                 onChanged: _busy ? null : (_) => _select(collection.jobs),
               )
-            : Icon(expanded ? Icons.folder_open_rounded : Icons.folder_rounded),
+            : expanded ? AppIcon(AppIcons.folderOpen) : AppIcon(AppIcons.folder),
         title: Text(
           collection.drama.title,
           maxLines: 2,
@@ -521,13 +522,11 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     value: _selected.contains(job.id),
                     onChanged: _busy ? null : (_) => _select([job]),
                   )
-                : Icon(
-                    job.completed
-                        ? Icons.offline_pin_outlined
-                        : job.state == 'failed'
-                        ? Icons.error_outline
-                        : Icons.downloading_rounded,
-                  ),
+                : job.completed
+                    ? AppIcon(AppIcons.offlinePin)
+                    : job.state == 'failed'
+                    ? AppIcon(AppIcons.error)
+                    : AppIcon(AppIcons.downloading),
             title: Text(
               '第 ${job.episode.number} 集${job.episode.vip ? ' · VIP' : ''}',
             ),
@@ -658,25 +657,25 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             value: 'pause',
             label: '全部暂停',
             description: '暂停所有进行中的下载任务',
-            icon: Icons.pause_rounded,
+            icon: AppIcon(AppIcons.pause),
           ),
           TelevisionAction(
             value: 'resume',
             label: '全部继续',
             description: '继续或重试可恢复的任务',
-            icon: Icons.play_arrow_rounded,
+            icon: AppIcon(AppIcons.play),
           ),
           TelevisionAction(
             value: 'archive',
             label: '清理已完成任务',
             description: '从任务列表移除，保留已下载视频',
-            icon: Icons.archive_rounded,
+            icon: AppIcon(AppIcons.archive),
           ),
           TelevisionAction(
             value: 'refresh',
             label: '刷新记录',
             description: '重新读取本机下载记录',
-            icon: Icons.refresh_rounded,
+            icon: AppIcon(AppIcons.refresh),
           ),
         ],
       ),
@@ -699,41 +698,41 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             value: 'update',
             label: '更新本剧',
             description: '补充新增与缺失的分集',
-            icon: Icons.cloud_download_rounded,
+            icon: AppIcon(AppIcons.cloudDownload),
             enabled: !_updater.busy,
           ),
           const TelevisionAction(
             value: 'select',
             label: '选择本合集',
             description: '把整部剧加入多选',
-            icon: Icons.checklist_rounded,
+            icon: AppIcon(AppIcons.checklist),
           ),
           const TelevisionAction(
             value: 'pause',
             label: '暂停本合集',
-            icon: Icons.pause_rounded,
+            icon: AppIcon(AppIcons.pause),
           ),
           const TelevisionAction(
             value: 'resume',
             label: '继续 / 重试本合集',
-            icon: Icons.play_arrow_rounded,
+            icon: AppIcon(AppIcons.play),
           ),
           const TelevisionAction(
             value: 'archive',
             label: '清理已完成任务',
             description: '保留视频，从任务列表移除',
-            icon: Icons.archive_rounded,
+            icon: AppIcon(AppIcons.archive),
           ),
           if (_filter == 'archived')
             const TelevisionAction(
               value: 'restore',
               label: '恢复到任务列表',
-              icon: Icons.unarchive_rounded,
+              icon: AppIcon(AppIcons.unarchive),
             ),
           const TelevisionAction(
             value: 'remove',
             label: '取消任务并删除视频',
-            icon: Icons.delete_outline_rounded,
+            icon: AppIcon(AppIcons.delete),
           ),
         ],
       ),
@@ -752,36 +751,36 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     final value = await showDialog<String>(
       context: context,
       builder: (_) => TelevisionActionDialog(
-        title: '第 ${job.episode.number} 集',
+        title: '${job.drama.title} · 第 ${job.episode.number} 集',
         options: [
           if (job.completed)
             const TelevisionAction(
               value: 'play',
               label: '本地播放',
-              icon: Icons.play_circle_outline_rounded,
+              icon: AppIcon(AppIcons.playCircle),
             ),
           if (job.active)
             const TelevisionAction(
               value: 'pause',
               label: '暂停',
-              icon: Icons.pause_rounded,
+              icon: AppIcon(AppIcons.pause),
             ),
           if (job.resumable)
             const TelevisionAction(
               value: 'resume',
               label: '继续 / 重试',
-              icon: Icons.play_arrow_rounded,
+              icon: AppIcon(AppIcons.play),
             ),
           if (job.completed)
             TelevisionAction(
               value: job.archived ? 'restore' : 'archive',
               label: job.archived ? '恢复任务' : '清理任务，保留视频',
-              icon: Icons.archive_rounded,
+              icon: AppIcon(AppIcons.archive),
             ),
           TelevisionAction(
             value: 'remove',
             label: job.completed ? '删除视频' : '取消下载',
-            icon: Icons.delete_outline_rounded,
+            icon: AppIcon(AppIcons.delete),
           ),
         ],
       ),
@@ -795,30 +794,30 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   Widget _televisionToolbar(List<DownloadCollection> collections) {
-    final actions = <(String, String, IconData, VoidCallback?)>[
+    final actions = <(String, String, Widget, VoidCallback?)>[
       (
         'search',
         _search.text.isEmpty ? '搜索' : '搜索：${_search.text}',
-        Icons.search_rounded,
+        AppIcon(AppIcons.search),
         _televisionSearch,
       ),
       (
         'filter',
         _filter == 'all' && _release.isEmpty ? '筛选' : '筛选：已设置',
-        Icons.filter_list_rounded,
+        AppIcon(AppIcons.filter),
         _filters,
       ),
       if (_selecting) ...[
         (
           'select-all',
           '全选',
-          Icons.select_all_rounded,
+          AppIcon(AppIcons.selectAll),
           _busy ? null : () => _select(collections.expand((c) => c.jobs)),
         ),
         (
           'exit-select',
           '退出多选',
-          Icons.close_rounded,
+          AppIcon(AppIcons.close),
           _busy
               ? null
               : () => setState(() {
@@ -831,13 +830,13 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         (
           'select',
           '多选',
-          Icons.checklist_rounded,
+          AppIcon(AppIcons.checklist),
           _busy ? null : () => setState(() => _selecting = true),
         ),
         (
           'local',
           '本地媒体',
-          Icons.video_library_outlined,
+          AppIcon(AppIcons.videoLibrary),
           () => Navigator.push(
             context,
             MaterialPageRoute<void>(
@@ -848,9 +847,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             ),
           ),
         ),
-        ('queue', '队列操作', Icons.tune_rounded, _busy ? null : _queueActions),
+        ('queue', '队列操作', AppIcon(AppIcons.tune), _busy ? null : _queueActions),
       ],
-      ('refresh', '刷新', Icons.refresh_rounded, _refresh),
+      ('refresh', '刷新', AppIcon(AppIcons.refresh), _refresh),
     ];
     return RemoteRow(
       key: _toolbarKey,
@@ -869,50 +868,50 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   Widget _televisionBatchBar() {
-    final actions = <(String, String, IconData, VoidCallback?)>[
+    final actions = <(String, String, Widget, VoidCallback?)>[
       if (_busy)
         (
           'stop',
           '停止批量操作',
-          Icons.stop_rounded,
+          AppIcon(AppIcons.stop),
           () => setState(() => _stopBatch = true),
         )
       else ...[
         (
           'pause',
           '暂停',
-          Icons.pause_rounded,
+          AppIcon(AppIcons.pause),
           _selected.isEmpty ? null : () => _batch('pause', _selectedJobs),
         ),
         (
           'resume',
           '继续',
-          Icons.play_arrow_rounded,
+          AppIcon(AppIcons.play),
           _selected.isEmpty ? null : () => _batch('resume', _selectedJobs),
         ),
         (
           'archive',
           '保留视频',
-          Icons.archive_rounded,
+          AppIcon(AppIcons.archive),
           _selected.isEmpty ? null : () => _batch('archive', _selectedJobs),
         ),
         (
           'remove',
           '删除',
-          Icons.delete_outline_rounded,
+          AppIcon(AppIcons.delete),
           _selected.isEmpty ? null : () => _batch('remove', _selectedJobs),
         ),
         if (_retryCommand != null)
           (
             'retry',
             '重试失败项',
-            Icons.refresh_rounded,
+            AppIcon(AppIcons.refresh),
             () => _batch(_retryCommand!, _selectedJobs),
           ),
         (
           'exit-select',
           '退出多选',
-          Icons.close_rounded,
+          AppIcon(AppIcons.close),
           () => setState(() {
             _selecting = false;
             _selected.clear();
@@ -955,6 +954,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         .length;
     final expanded = _expanded.contains(collection.drama.id);
     return RemoteListTile(
+      key: ValueKey('download-collection-${collection.drama.id}'),
       title: collection.drama.title,
       subtitle:
           '${_selecting ? '$count/${collection.jobs.length} 集已选 · ' : ''}'
@@ -962,16 +962,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           '${collection.active > 0 ? ' · ${collection.active} 项进行中' : ''}'
           '${collection.failed > 0 ? ' · ${collection.failed} 项失败' : ''}'
           '${expanded ? ' · 已展开' : ' · 按确认展开分集'}',
-      leading: Icon(
-        expanded ? Icons.folder_open_rounded : Icons.folder_rounded,
-        size: 28,
-      ),
-      trailing: Icon(
-        _selecting && count == collection.jobs.length
-            ? Icons.check_circle_rounded
-            : Icons.chevron_right_rounded,
-        size: 24,
-      ),
+      leading: expanded
+          ? AppIcon(AppIcons.folderOpen, size: 28)
+          : AppIcon(AppIcons.folder, size: 28),
+      trailing: _selecting && count == collection.jobs.length
+          ? AppIcon(AppIcons.checkCircleFilled, size: 24)
+          : AppIcon(AppIcons.chevronRight, size: 24),
       focusNode: focusNode,
       onFocus: onFocus,
       onPressed: () {
@@ -995,24 +991,21 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }) {
     final selected = _selected.contains(job.id);
     return RemoteListTile(
+      key: ValueKey('download-task-${job.id}'),
       title: '第 ${job.episode.number} 集${job.episode.vip ? ' · VIP' : ''}',
       subtitle:
           '${_selecting ? '${selected ? '已选' : '未选'} · ' : ''}'
           '${job.archived ? '已保留视频' : job.stateLabel} · ${storageSize(job.bytes)}'
           '${job.actualQuality > 0 ? ' · ${job.actualQuality}P' : ''}'
           '${job.active ? ' · ${(job.progress * 100).round()}%' : ''}',
-      leading: Icon(
-        job.completed
-            ? Icons.offline_pin_outlined
-            : job.state == 'failed'
-            ? Icons.error_outline
-            : Icons.downloading_rounded,
-        size: 28,
-      ),
-      trailing: Icon(
-        selected ? Icons.check_circle_rounded : Icons.chevron_right_rounded,
-        size: 24,
-      ),
+      leading: job.completed
+          ? AppIcon(AppIcons.offlinePin, size: 28)
+          : job.state == 'failed'
+          ? AppIcon(AppIcons.error, size: 28)
+          : AppIcon(AppIcons.downloading, size: 28),
+      trailing: selected
+          ? AppIcon(AppIcons.checkCircleFilled, size: 24)
+          : AppIcon(AppIcons.chevronRight, size: 24),
       focusNode: focusNode,
       onFocus: onFocus,
       onPressed: _busy
@@ -1074,13 +1067,13 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: '搜索剧名、站源或分类',
-                prefixIcon: const Icon(Icons.search_rounded),
+                prefixIcon: AppIcon(AppIcons.search),
                 suffixIcon: _search.text.isEmpty
                     ? null
                     : IconButton(
                         tooltip: '清空搜索',
                         onPressed: () => setState(_search.clear),
-                        icon: const Icon(Icons.close_rounded),
+                        icon: AppIcon(AppIcons.close),
                       ),
               ),
             ),
@@ -1129,7 +1122,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ? StatusPanel(
                   title: _jobs.isEmpty ? '还没有下载任务' : '暂无符合条件的任务',
                   message: '在剧集详情选择下载，或调整筛选查看已保留的视频。',
-                  icon: Icons.download_outlined,
+                  icon: AppIcon(AppIcons.download),
                 )
               : television
               ? RemoteList(
@@ -1166,10 +1159,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         _CollectionMenu menu => RemoteListTile(
                           title: '合集操作',
                           subtitle: '更新本剧、选择、暂停、继续、清理或删除整部剧',
-                          leading: const Icon(
-                            Icons.more_horiz_rounded,
-                            size: 26,
-                          ),
+                          leading: AppIcon(AppIcons.moreHoriz, size: 26),
                           focusNode: node,
                           onFocus: onFocus,
                           onPressed: () => _collectionActions(menu.collection),

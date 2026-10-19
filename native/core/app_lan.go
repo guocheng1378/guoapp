@@ -177,6 +177,13 @@ func nativeLANPrivate(host string) bool {
 	return ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLoopback())
 }
 
+// nativeLANShareableAddress 判断地址能否放入提供给对端的连接列表：
+// IPv6 链路本地地址必须携带本机 zone（网卡名/索引），zone 跨设备无效，
+// 对端拨号会得到无效 scope（connect: invalid argument），因此不能共享。
+func nativeLANShareableAddress(host net.IP) bool {
+	return host.To4() != nil || !host.IsLinkLocalUnicast()
+}
+
 func nativeLANAddress(address string) (string, error) {
 	host, port, err := net.SplitHostPort(address)
 	number, parseErr := strconv.Atoi(port)
@@ -194,7 +201,7 @@ func nativeLANFingerprint(cert *x509.Certificate) string {
 func nativeLANValidateConfig(config nativeLANConfig) error {
 	if strings.TrimSpace(config.Name) == "" || len(config.Name) > 240 ||
 		len(config.User) > 240 || !nativeLANID.MatchString(config.Account) ||
-		len(config.Sources) > 32 ||
+		len(config.Sources) > 128 ||
 		(config.Kind != "phone" && config.Kind != "computer" && config.Kind != "tv") {
 		return errors.New("设备互联配置无效")
 	}
@@ -281,11 +288,10 @@ func (link *nativeLANServer) info(private bool) map[string]any {
 			if err != nil || !nativeLANPrivate(host.String()) || host.IsLoopback() {
 				continue
 			}
-			text := host.String()
-			if host.IsLinkLocalUnicast() && host.To4() == nil {
-				text += "%" + network.Name
+			if !nativeLANShareableAddress(host) {
+				continue
 			}
-			addresses = append(addresses, net.JoinHostPort(text, strconv.Itoa(port)))
+			addresses = append(addresses, net.JoinHostPort(host.String(), strconv.Itoa(port)))
 		}
 	}
 	result := map[string]any{

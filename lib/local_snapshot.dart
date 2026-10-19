@@ -33,6 +33,7 @@ class LocalSnapshot {
     'autoExport',
     'exportPosters',
     'forceLogin',
+    'restrictedUnlocked',
     'sourceSwitches',
   };
   final SharedPreferences preferences;
@@ -78,6 +79,7 @@ class LocalSnapshot {
         'autoExport',
         'exportPosters',
         'forceLogin',
+        'restrictedUnlocked',
       }.contains(entry.key.split('.').last);
       if (!owns(entry.key) ||
           (boolean ? entry.value is! bool : entry.value is! String)) {

@@ -20,6 +20,43 @@ func TestNativeMetadataPreservesIdentityAndCover(t *testing.T) {
 	}
 }
 
+// 目录筛选（地区/年份/评分）依赖这三项穿过 nativeNormalize 落到 Dart 可读的 JSON key。
+func TestNativeNormalizeAreaYearScore(t *testing.T) {
+	drama := nativeNormalize(Drama{ID: "ss360:1", Title: "筛选测试", Area: "内地", Year: "2026", Score: "8.5"})
+	if drama.Area != "内地" || drama.Year != "2026" || drama.Score != "8.5" {
+		t.Fatalf("area/year/score were dropped in normalization: %+v", drama)
+	}
+	data, err := json.Marshal(drama)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"area":"内地"`, `"year":"2026"`, `"score":"8.5"`} {
+		if !strings.Contains(string(data), key) {
+			t.Fatalf("json key mismatch for %s: %s", key, data)
+		}
+	}
+}
+
+func TestNativeNormalizeEpisodesTrustLevels(t *testing.T) {
+	cases := []struct {
+		name  string
+		drama Drama
+		want  int
+	}{
+		{"正规字段信任", Drama{ID: "hongguo:1", TotalEpisode: 24, EpisodeCount: 20}, 24},
+		{"弱字段播放量不入账", Drama{ID: "legacy:1", Total: 52000}, 0},
+		{"弱字段播放量让位正规字段", Drama{ID: "legacy:2", TotalEpisode: 24, Total: 52000}, 24},
+		{"弱字段真集数兜底", Drama{ID: "legacy:3", Total: 30}, 30},
+		{"弱字段超上限丢弃", Drama{ID: "legacy:4", ChapterCount: 1200}, 0},
+		{"正规字段超上限丢弃", Drama{ID: "legacy:5", Episodes: 200000}, 0},
+	}
+	for _, tc := range cases {
+		if got := nativeNormalize(tc.drama).Episodes; got != tc.want {
+			t.Fatalf("%s: episodes=%d want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestNativeBoundaryRejectsInvalidInput(t *testing.T) {
 	for _, input := range []string{"{", strings.Repeat("x", 1<<20+1)} {
 		var result map[string]any
@@ -78,7 +115,7 @@ func TestNativeHLSReadsNestedPlaylistKeyAndRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stream.server.Close()
-	address, token := stream.nativeOpen(providerMedia{URL: upstream.URL + "/master.m3u8",
+	address, token, _ := stream.nativeOpen(providerMedia{URL: upstream.URL + "/master.m3u8",
 		Referer: "https://example.test/watch", HLSKey: []byte("0123456789abcdef")})
 	defer stream.nativeRelease(token)
 	read := func(address string) string {

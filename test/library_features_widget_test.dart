@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:duanju_app/batch_download_screen.dart';
 import 'package:duanju_app/detail_screen.dart';
 import 'package:duanju_app/follow_state.dart';
+import 'package:duanju_app/folme.dart';
 import 'package:duanju_app/home_screen.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
@@ -263,10 +264,8 @@ void main() {
       await tester.pumpAndSettle();
       final before = repository.requests.length;
       // 刷新入口为内容区下拉刷新（菜单条目已移除）。widget test 的手势
-      // 链路触发不了 RefreshIndicator，改用公开 API show() 驱动同一链路。
-      tester
-          .state<RefreshIndicatorState>(find.byType(RefreshIndicator).first)
-          .show();
+      // 链路触发不了刷新胶囊，改用公开 API show() 驱动同一链路。
+      tester.state<FogRefreshState>(find.byType(FogRefresh).first).show();
       await tester.pump();
       // startSourceJob 异步链需要额外一帧才落账。
       await tester.pump(const Duration(milliseconds: 400));
@@ -324,6 +323,13 @@ void main() {
       await tester.tap(find.text('多选下载'));
       await tester.pumpAndSettle();
       // 菜单进入多选时 first 已被选中，这里再点 second 凑满 2 部。
+      // 全源变体下轮播不再吃掉网格条目，second 落在首屏外，且多选态
+      // 底部导航已换成选择栏：先把网格往上滚，让它完整露出再点。
+      await tester.drag(
+        find.byType(Scrollable).first,
+        const Offset(0, -280),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(ValueKey(second.id)));
       await tester.pump();
       expect(find.text('已选 2 部'), findsOneWidget);

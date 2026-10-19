@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用图标前景：瓷白底上并排双竖卡（右浅粉卡靠上、左主色渐变卡靠下带白点），
+     寓意多剧集/多源，居中于自适应图标 66dp 安全区 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 右卡：浅粉（primaryContainer） -->
+    <path
+        android:fillColor="#FFE0D8"
+        android:pathData="M65,30 h8 a7,7 0 0 1 7,7 v28 a7,7 0 0 1 -7,7 h-8 a7,7 0 0 1 -7,-7 v-28 a7,7 0 0 1 7,-7 Z" />
+    <!-- 左卡：主色渐变 -->
+    <path android:pathData="M35,36 h8 a7,7 0 0 1 7,7 v28 a7,7 0 0 1 -7,7 h-8 a7,7 0 0 1 -7,-7 v-28 a7,7 0 0 1 7,-7 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="46"
+                android:endY="74"
+                android:startX="32"
+                android:startY="40"
+                android:startColor="#FF765F"
+                android:endColor="#A53323"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+    <!-- 白色圆点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39,53 a4,4 0 1,1 -0.01,0 Z" />
+</vector>

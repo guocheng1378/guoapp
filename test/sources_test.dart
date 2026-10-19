@@ -100,6 +100,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('category-toggle-short')));
+      await tester.pumpAndSettle();
       final update = find.byKey(const ValueKey('update-hongguo'));
       await tester.tap(update);
       await tester.pump();
@@ -155,6 +157,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(repository.statusRequests, ['hongguo']);
+      // 分类默认收起，先展开短剧类再断言红果卡片在树里。
+      await tester.tap(find.byKey(const ValueKey('category-toggle-short')));
+      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('source-hongguo')), findsOneWidget);
       for (final source in SourceSite.knownValues.skip(1)) {
         expect(find.byKey(ValueKey('source-${source.id}')), findsNothing);
@@ -199,6 +204,8 @@ void main() {
             home: SourcesScreen(repository: repository, store: store),
           ),
         );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('category-toggle-short')));
         await tester.pumpAndSettle();
         final toggle = find.byKey(const ValueKey('health-toggle-hongguo'));
         final sample = find.text('检测剧集：合成检测剧集');
@@ -312,6 +319,8 @@ void main() {
           home: SourcesScreen(repository: repository, store: store),
         ),
       );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('category-toggle-short')));
       await tester.pumpAndSettle();
       expect(find.textContaining('检测未通过'), findsOneWidget);
       expect(find.textContaining('HTTP 403'), findsNothing);

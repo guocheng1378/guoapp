@@ -1,5 +1,12 @@
 package core
 
+// 榜单数据源双轨（2026-10-19 恢复站源榜）：
+//   - 豆瓣官方主题合集（rexxar v2，抓取在 provider_rankings_douban.go），
+//     榜单 ID 前缀 douban-* 同时是 Dart 端 ranking_models.sourceForID 的解析依据；
+//   - 站源目录榜（红果/黄豆/黄果AI/剧果/野果/真果·鉴/影视工厂），由
+//     fetchRankingPage 按源分发（红果 HTML 流式解析，其余复用目录页抓取）。
+// Dart 端按站源四分类（短剧/视频/黄果/成人）归属展示，改动 ID/归属需两端同步。
+
 import (
 	"context"
 	"errors"
@@ -17,11 +24,35 @@ type rankingBoard struct {
 	Source      string `json:"source"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	path        string
+	// path：站源目录榜的分类路径（豆瓣榜不使用）。
+	path string
+	// upstreamKey：豆瓣 subject_collection 合集 ID（movie_top250 等），
+	// 或红果/黄豆榜的站点 tab 键。
 	upstreamKey string
+	// ttl：0 用默认 rankingCacheTTL。日更/周更榜可拉长。
+	ttl time.Duration
 }
 
+// 豆瓣官方榜单（2026-10-19 逐个实测可用，名称取自接口返回）：
+//
+//	电影：实时热门电影 / 一周口碑电影榜 / 豆瓣Top250 / 影院热映 / 近期热门电影
+//	剧集：近期热门剧集 / 近期热门国产剧 / 近期热门美剧 / 近期热门日剧 / 近期热门韩剧
+//	综艺：近期热门国内综艺 / 近期热门国外综艺
 var rankingBoards = []rankingBoard{
+	// —— 豆瓣官方合集 ——
+	{ID: "douban-realtime", Name: "实时热门电影", Source: sourceDouban, upstreamKey: "movie_real_time_hotest"},
+	{ID: "douban-weekly", Name: "一周口碑电影榜", Source: sourceDouban, upstreamKey: "movie_weekly_best", ttl: time.Hour},
+	{ID: "douban-top250", Name: "豆瓣Top250", Source: sourceDouban, upstreamKey: "movie_top250", ttl: 12 * time.Hour},
+	{ID: "douban-showing", Name: "影院热映", Source: sourceDouban, upstreamKey: "movie_showing", ttl: time.Hour},
+	{ID: "douban-latest", Name: "近期热门电影", Source: sourceDouban, upstreamKey: "movie_latest", ttl: time.Hour},
+	{ID: "douban-tv-hot", Name: "近期热门剧集", Source: sourceDouban, upstreamKey: "tv_hot"},
+	{ID: "douban-tv-domestic", Name: "近期热门国产剧", Source: sourceDouban, upstreamKey: "tv_domestic", ttl: time.Hour},
+	{ID: "douban-tv-american", Name: "近期热门美剧", Source: sourceDouban, upstreamKey: "tv_american", ttl: 6 * time.Hour},
+	{ID: "douban-tv-japanese", Name: "近期热门日剧", Source: sourceDouban, upstreamKey: "tv_japanese", ttl: 6 * time.Hour},
+	{ID: "douban-tv-korean", Name: "近期热门韩剧", Source: sourceDouban, upstreamKey: "tv_korean", ttl: 6 * time.Hour},
+	{ID: "douban-show-domestic", Name: "近期热门国内综艺", Source: sourceDouban, upstreamKey: "show_domestic", ttl: time.Hour},
+	{ID: "douban-show-foreign", Name: "近期热门国外综艺", Source: sourceDouban, upstreamKey: "show_foreign", ttl: 6 * time.Hour},
+	// —— 站源目录榜 ——
 	{ID: "hongguo-hot", Source: sourceHongguo, Name: "总热播榜", Description: "红果观看、互动等综合热度；每日更新。", path: "hot-drama", upstreamKey: "hongguo"},
 	{ID: "hongguo-real", Source: sourceHongguo, Name: "真人剧榜", Description: "红果真人剧热播榜；每日更新。", path: "hot-real-drama", upstreamKey: "real"},
 	{ID: "hongguo-comic", Source: sourceHongguo, Name: "漫剧榜", Description: "红果漫剧热播榜；每日更新。", path: "hot-comic-drama", upstreamKey: "comic"},
@@ -46,36 +77,6 @@ var rankingBoards = []rankingBoard{
 	{ID: "yingshigongchang-new", Source: sourceYingshigongchang, Name: "最近更新榜", Description: "影视工厂最新收录与更新，按源站返回顺序展示。"},
 }
 
-type rankingItem struct {
-	Rank   int    `json:"rank"`
-	Drama  Drama  `json:"drama"`
-	Metric string `json:"metric,omitempty"`
-}
-
-type rankingPage struct {
-	BoardID     string        `json:"boardId"`
-	Page        int           `json:"page"`
-	Items       []rankingItem `json:"items"`
-	HasMore     bool          `json:"hasMore"`
-	TotalPages  int           `json:"totalPages,omitempty"`
-	UpdatedText string        `json:"updatedText,omitempty"`
-	FetchedAt   time.Time     `json:"fetchedAt"`
-	Stale       bool          `json:"stale,omitempty"`
-	Warning     string        `json:"warning,omitempty"`
-}
-
-type rankingCall struct {
-	done chan struct{}
-	page rankingPage
-	err  error
-}
-
-type rankingCache struct {
-	mu      sync.Mutex
-	pages   map[string]rankingPage
-	pending map[string]*rankingCall
-}
-
 func findRankingBoard(id string) (rankingBoard, bool) {
 	for _, board := range rankingBoards {
 		if board.ID == id {
@@ -85,11 +86,7 @@ func findRankingBoard(id string) (rankingBoard, bool) {
 	return rankingBoard{}, false
 }
 
-func cloneRankingPage(page rankingPage) rankingPage {
-	page.Items = append([]rankingItem{}, page.Items...)
-	return page
-}
-
+// singlePageRankingBoard：黄果 AI 站点榜单为整页静态内容，无分页。
 func singlePageRankingBoard(board rankingBoard) bool {
 	return board.Source == sourceHuangguoAI
 }
@@ -102,72 +99,134 @@ func rankingDramaWithoutImages(drama Drama) Drama {
 	return drama
 }
 
-func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, page int, refresh bool) (rankingPage, error) {
+type rankingPage struct {
+	BoardID     string        `json:"boardId"`
+	Page        int           `json:"page"`
+	Items       []rankingItem `json:"items"`
+	HasMore     bool          `json:"hasMore"`
+	TotalPages  int           `json:"totalPages"`
+	UpdatedText string        `json:"updatedText,omitempty"`
+	FetchedAt   time.Time     `json:"fetchedAt"`
+	Stale       bool          `json:"stale,omitempty"`
+	Warning     string        `json:"warning,omitempty"`
+}
+
+type rankingItem struct {
+	Rank   int    `json:"rank"`
+	Metric string `json:"metric,omitempty"`
+	Drama  Drama  `json:"drama"`
+}
+
+func cloneRankingPage(value rankingPage) rankingPage {
+	result := value
+	result.Items = append([]rankingItem(nil), value.Items...)
+	return result
+}
+
+type rankingCall struct {
+	done chan struct{}
+	page rankingPage
+	err  error
+}
+
+// rankingCache：内存页缓存 + 在途请求去重 + 落盘状态。mu 保护全部字段。
+type rankingCache struct {
+	mu         sync.Mutex
+	pages      map[string]rankingPage
+	pending    map[string]*rankingCall
+	lastWrite  time.Time
+	dirty      bool
+	writeTimer *time.Timer
+}
+
+// loadRankingPage：TTL 内走内存缓存，在途请求去重，网络失败回退过期缓存
+// （重启后磁盘页已由 loadRankingCache 灌回内存，同一条兜底路径生效）。
+func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, page int, force bool) (rankingPage, error) {
+	ttl := rankingCacheTTL
+	if board.ttl > 0 {
+		ttl = board.ttl
+	}
 	key := board.ID + ":" + strconv.Itoa(page)
-	cache := &d.rankings
-	cache.mu.Lock()
-	if cache.pages == nil {
-		cache.pages = map[string]rankingPage{}
-		cache.pending = map[string]*rankingCall{}
+
+	d.rankings.mu.Lock()
+	entry, cached := d.rankings.pages[key]
+	if cached && !force && time.Since(entry.FetchedAt) < ttl {
+		d.rankings.mu.Unlock()
+		return cloneRankingPage(entry), nil
 	}
-	cached, exists := cache.pages[key]
-	if exists && !refresh && time.Since(cached.FetchedAt) >= 0 && time.Since(cached.FetchedAt) < rankingCacheTTL {
-		cache.mu.Unlock()
-		return cloneRankingPage(cached), nil
+	var stale rankingPage
+	if cached {
+		stale = cloneRankingPage(entry)
 	}
-	if pending := cache.pending[key]; pending != nil {
-		cache.mu.Unlock()
+	if call := d.rankings.pending[key]; call != nil && !force {
+		d.rankings.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return rankingPage{}, ctx.Err()
-		case <-pending.done:
-			if (errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded)) && ctx.Err() == nil {
-				return d.loadRankingPage(ctx, board, page, refresh)
+		case <-call.done:
+			// 领头请求因本调用方取消而失败时，自己重试一次。
+			if (errors.Is(call.err, context.Canceled) || errors.Is(call.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+				return d.loadRankingPage(ctx, board, page, false)
 			}
-			return cloneRankingPage(pending.page), pending.err
+			if call.err != nil {
+				return rankingPage{}, call.err
+			}
+			return cloneRankingPage(call.page), nil
 		}
 	}
-	pending := &rankingCall{done: make(chan struct{})}
-	cache.pending[key] = pending
-	cache.mu.Unlock()
+	call := &rankingCall{done: make(chan struct{})}
+	d.rankings.pending[key] = call
+	d.rankings.mu.Unlock()
 
 	result, err := d.fetchRankingPage(ctx, board, page)
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	d.rankings.mu.Lock()
 	if err == nil {
-		result.BoardID, result.Page, result.FetchedAt = board.ID, page, time.Now()
-		if refresh && page == 1 {
-			for cachedKey, old := range cache.pages {
+		result.BoardID = board.ID
+		result.Page = page
+		result.FetchedAt = time.Now()
+		// 强刷第 1 页时清掉同榜其余缓存页，后续翻页重新拉取。
+		if force && page == 1 {
+			for cachedKey, old := range d.rankings.pages {
 				if old.BoardID == board.ID {
-					delete(cache.pages, cachedKey)
+					delete(d.rankings.pages, cachedKey)
 				}
 			}
 		}
-		if len(cache.pages) >= 128 {
+		// 缓存页上限 128，超出时淘汰最旧一页，防长驻膨胀。
+		if len(d.rankings.pages) >= 128 {
 			oldestKey, oldest := "", time.Now()
-			for cachedKey, old := range cache.pages {
+			for cachedKey, old := range d.rankings.pages {
 				if old.FetchedAt.Before(oldest) {
 					oldestKey, oldest = cachedKey, old.FetchedAt
 				}
 			}
-			delete(cache.pages, oldestKey)
+			delete(d.rankings.pages, oldestKey)
 		}
-		cache.pages[key] = cloneRankingPage(result)
+		d.rankings.pages[key] = result
 		d.writeRankingCacheLocked()
-	} else if exists && ctx.Err() == nil && time.Since(cached.FetchedAt) >= 0 && time.Since(cached.FetchedAt) < 24*time.Hour {
-		result = cloneRankingPage(cached)
-		result.Stale = true
-		result.Warning = "站点暂不可用，显示上次取得的榜单，请稍后刷新。"
-		err = nil
 	}
-	pending.page, pending.err = cloneRankingPage(result), err
-	delete(cache.pending, key)
-	close(pending.done)
-	return result, err
+	call.page, call.err = result, err
+	delete(d.rankings.pending, key)
+	close(call.done)
+	d.rankings.mu.Unlock()
+
+	if err != nil {
+		if len(stale.Items) > 0 {
+			stale.BoardID, stale.Page = board.ID, page
+			stale.Stale = true
+			stale.Warning = "站点暂不可用，正在显示上次取得的榜单，请稍后刷新。"
+			return stale, nil
+		}
+		return rankingPage{}, err
+	}
+	return cloneRankingPage(result), nil
 }
 
+// fetchRankingPage：按榜单站源分发。豆瓣走官方合集抓取，站源榜各有链路。
 func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, page int) (rankingPage, error) {
 	switch board.Source {
+	case sourceDouban:
+		return d.fetchDoubanRankingPage(ctx, board, page)
 	case sourceHongguo:
 		return d.fetchHongguoRankingPage(ctx, board, page)
 	case sourceHuangdou:
@@ -194,6 +253,7 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 	}
 }
 
+// fetchCatalogRankingPage：目录型站源榜直接复用目录抓取，按源站返回顺序出榜。
 func (d *Downloader) fetchCatalogRankingPage(ctx context.Context, board rankingBoard, page int) (rankingPage, error) {
 	if singlePageRankingBoard(board) && page != 1 {
 		return rankingPage{}, errors.New("该榜单只有一页")
@@ -220,7 +280,7 @@ func (d *Downloader) fetchCatalogRankingPage(ctx context.Context, board rankingB
 	case sourceYeguo:
 		items, more, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
 	case sourceYingshigongchang:
-		items, more, err = d.fetchDuanjuCatalogPage(ctx, sourceYingshigongchang, page, "")
+		items, more, err = d.fetchDuanjuCatalogPage(ctx, sourceYingshigongchang, page, "", "")
 	case sourceDongpiandi:
 		items, more, err = d.fetchDongpiandiCatalogPage(ctx, page, category, "")
 	}

@@ -122,6 +122,18 @@ class MainActivity : FlutterActivity() {
             .also { channel ->
                 channel.setMethodCallHandler { call, result ->
                     when (call.method) {
+                        "androidId" -> {
+                            val id = runCatching {
+                                Settings.Secure.getString(
+                                    contentResolver,
+                                    Settings.Secure.ANDROID_ID
+                                )
+                            }.getOrNull()
+                            result.success(id)
+                        }
+                        "openQQ" -> result.success(
+                            openQQInApp(call.argument<String>("uin").orEmpty())
+                        )
                         "deviceInfo" -> {
                             val version = packageManager.getPackageInfo(packageName, 0).versionName
                             result.success(mapOf("television" to isTelevisionDevice(), "version" to version))
@@ -207,6 +219,23 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+    }
+
+    // 拉起 QQ：先资料卡（含“加好友”按钮），失败再试临时会话聊天；未安装返回 false。
+    private fun openQQInApp(uin: String): Boolean {
+        if (uin.isEmpty()) return false
+        val schemes = listOf(
+            "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=$uin",
+            "mqqwpa://im/chat?chat_type=wpa&uin=$uin&version=1&src_type=web"
+        )
+        for (scheme in schemes) {
+            val launched = runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(scheme)))
+                true
+            }.getOrElse { false }
+            if (launched) return true
+        }
+        return false
     }
 
     private fun pictureInPictureSupported(): Boolean {

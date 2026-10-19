@@ -67,7 +67,7 @@ func TestEveryRegisteredSourceOwnsIdentity(t *testing.T) {
 		if spec.Name == "" || spec.Base == "" {
 			t.Fatalf("source %q misses name or base", spec.ID)
 		}
-		if spec.Category != CategoryShortDrama && spec.Category != CategoryVideo {
+		if spec.Category != CategoryShortDrama && spec.Category != CategoryVideo && spec.Category != CategoryAdult {
 			t.Fatalf("source %q has no content category", spec.ID)
 		}
 		if spec.Family != FamilyDuanju && spec.Family != FamilyHuangguo {

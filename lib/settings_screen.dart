@@ -6,8 +6,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core_bridge.dart';
+import 'activation/activation_flow.dart';
+import 'activation/license.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
 import 'app_theme.dart';
@@ -20,6 +23,7 @@ import 'sources_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'lan_screen.dart';
+import 'app_icons.dart';
 
 String storageSize(int bytes) {
   if (bytes < 0) return '暂不可用';
@@ -46,6 +50,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _listKey = GlobalKey<RemoteListState>();
   bool _busy = false;
   String? _message;
+  ActivationRecord? _activationRecord;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadActivation());
+  }
+
+  Future<void> _loadActivation() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _activationRecord = ActivationStore(prefs).load();
+      });
+    } on Object {
+      // 激活信息读取失败不影响设置页其余功能
+    }
+  }
+
+  Future<void> _openActivation() async {
+    // 记录由 showActivationPage 落盘（激活页自身不持久化）。
+    await showActivationPage(
+      context,
+      onActivated: (record) {
+        if (mounted) setState(() => _activationRecord = record);
+      },
+    );
+    unawaited(_loadActivation());
+  }
+
+  /// 用户管理入口：未激活设备先弹激活页，激活成功（或本已激活）才放行。
+  Future<void> _openUserManagement() async {
+    final activated =
+        await activationActive() || await showActivationPage(context);
+    if (!mounted || !activated) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => ProfilesScreen(store: widget.store),
+      ),
+    );
+    unawaited(_loadActivation());
+  }
+
+  String get _activationSubtitle {
+    final record = _activationRecord;
+    if (record == null) return '未激活 · 输入授权码使用';
+    if (record.isPermanent) return '永久授权';
+    final remaining = record.remainingDays(DateTime.now());
+    return '剩余 $remaining 天 · 到期后续费';
+  }
 
   Future<void> _chooseTheme() async {
     if (AppLayout.isTelevision(context)) {
@@ -59,7 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 value: mode,
                 label: AppTheme.label(mode),
                 description: mode == 'system' ? '随设备的深色模式自动切换' : null,
-                icon: Icons.brightness_6_rounded,
+                icon: AppIcon(AppIcons.brightness),
               ),
           ],
         ),
@@ -146,7 +202,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       value: 'restore',
                       label: '恢复这套备份',
                       description: summary,
-                      icon: Icons.restore_rounded,
+                      icon: AppIcon(AppIcons.restore),
                     ),
                   ],
                 ),
@@ -202,11 +258,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     () => widget.store.setExportPosters(!widget.store.exportPosters),
   );
 
-  List<({String id, IconData icon, String title, String subtitle, VoidCallback? onPressed})>
+  List<({String id, Widget icon, String title, String subtitle, VoidCallback? onPressed})>
   _televisionEntries() => [
     (
+      id: 'activation',
+      icon: AppIcon(AppIcons.checkCircle),
+      title: '激活状态',
+      subtitle: _activationSubtitle,
+      onPressed: _openActivation,
+    ),
+    (
       id: 'lan',
-      icon: Icons.devices_rounded,
+      icon: AppIcon(AppIcons.devices),
       title: '设备互联',
       subtitle: '局域网自动同步追剧与推送播放',
       onPressed: () => openLanSync(context),
@@ -214,7 +277,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (widget.repository.supportsSourceManagement)
       (
         id: 'sources',
-        icon: Icons.dns_outlined,
+        icon: AppIcon(AppIcons.dns),
         title: '站源管理',
         subtitle: '独立更新、连接与播放检测',
         onPressed: () => Navigator.push(
@@ -229,14 +292,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     (
       id: 'theme',
-      icon: Icons.palette_outlined,
+      icon: AppIcon(AppIcons.palette),
       title: '外观主题',
       subtitle: AppTheme.label(widget.store.themeMode),
       onPressed: _chooseTheme,
     ),
     (
       id: 'glass-effect',
-      icon: Icons.blur_on_rounded,
+      icon: AppIcon(AppIcons.blur),
       title: '玻璃效果',
       subtitle: GlassPreferences.enabled.value
           ? '已开启：瓷面浮层质感'
@@ -248,20 +311,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ),
     (
       id: 'profiles',
-      icon: Icons.people_outline,
+      icon: AppIcon(AppIcons.people),
       title: '用户管理',
       subtitle: '当前：${widget.store.profile.name}',
-      onPressed: () => Navigator.push(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => ProfilesScreen(store: widget.store),
-        ),
-      ),
+      onPressed: _openUserManagement,
     ),
     if (widget.store.canDownload)
       (
         id: 'download-preferences',
-        icon: Icons.download_outlined,
+        icon: AppIcon(AppIcons.download),
         title: '下载偏好',
         subtitle: widget.store.downloadPreferences.qualityLabel,
         onPressed: () => Navigator.push(
@@ -274,7 +332,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (widget.store.canDownload)
       (
         id: 'storage',
-        icon: Icons.folder_outlined,
+        icon: AppIcon(AppIcons.folder),
         title: '下载目录与空间',
         subtitle: '查看存储用量、迁移已下载文件',
         onPressed: () => Navigator.push(
@@ -290,7 +348,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (widget.store.profile.admin) ...[
       (
         id: 'resources',
-        icon: Icons.settings_ethernet_rounded,
+        icon: AppIcon(AppIcons.settingsEthernet),
         title: '网络与资源',
         subtitle: '代理、目录请求间隔、下载并发与站源目录',
         onPressed: () => Navigator.push(
@@ -305,7 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       (
         id: 'auto-export',
-        icon: Icons.movie_filter_outlined,
+        icon: AppIcon(AppIcons.movieFilter),
         title: '自动导出 Emby',
         subtitle: widget.store.autoExport
             ? '已开启 · 在 exports 目录生成视频与海报元数据'
@@ -314,7 +372,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       (
         id: 'export-posters',
-        icon: Icons.image_outlined,
+        icon: AppIcon(AppIcons.image),
         title: '导出海报文件',
         subtitle: widget.store.exportPosters
             ? '已开启 · 同时写入海报文件'
@@ -323,14 +381,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       (
         id: 'backup',
-        icon: Icons.backup_outlined,
+        icon: AppIcon(AppIcons.backup),
         title: '导出配置备份',
         subtitle: '包含本地用户、追剧、历史和设置，不含视频文件',
         onPressed: _busy ? null : () => _backup(false),
       ),
       (
         id: 'restore',
-        icon: Icons.restore,
+        icon: AppIcon(AppIcons.restore),
         title: '恢复配置备份',
         subtitle: '从备份文件恢复用户与设置',
         onPressed: _busy ? null : () => _backup(true),
@@ -362,7 +420,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       itemBuilder: (_, index, node, onFocus) => RemoteListTile(
                         title: entries[index].title,
                         subtitle: entries[index].subtitle,
-                        leading: Icon(entries[index].icon, size: 26),
+                        leading: entries[index].icon,
                         focusNode: node,
                         onFocus: onFocus,
                         onPressed: entries[index].onPressed,
@@ -374,19 +432,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               ListTile(
+                key: const ValueKey('activation-setting'),
+                leading: AppIcon(AppIcons.checkCircle),
+                title: const Text('激活状态'),
+                subtitle: Text(_activationSubtitle),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: _openActivation,
+              ),
+              ListTile(
                 key: const ValueKey('lan-settings'),
-                leading: const Icon(Icons.devices_rounded),
+                leading: AppIcon(AppIcons.devices),
                 title: const Text('设备互联'),
                 subtitle: const Text('局域网自动同步追剧与推送播放'),
-                trailing: const Icon(Icons.chevron_right_rounded),
+                trailing: AppIcon(AppIcons.chevronRight),
                 onTap: () => openLanSync(context),
               ),
               if (widget.repository.supportsSourceManagement)
                 ListTile(
-                  leading: const Icon(Icons.dns_outlined),
+                  leading: AppIcon(AppIcons.dns),
                   title: const Text('站源管理'),
                   subtitle: const Text('独立更新、连接与播放检测'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: AppIcon(AppIcons.chevronRight),
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
@@ -399,10 +465,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ListTile(
                 key: const ValueKey('theme-setting'),
-                leading: const Icon(Icons.palette_outlined),
+                leading: AppIcon(AppIcons.palette),
                 title: const Text('外观主题'),
                 subtitle: Text(AppTheme.label(widget.store.themeMode)),
-                trailing: const Icon(Icons.chevron_right_rounded),
+                trailing: AppIcon(AppIcons.chevronRight),
                 onTap: _chooseTheme,
               ),
               ValueListenableBuilder<bool>(
@@ -411,28 +477,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   key: const ValueKey('glass-setting'),
                   value: glass,
                   title: const Text('玻璃效果'),
-                  subtitle: const Text('瓷面浮层质感；低端设备可关闭以提升流畅度'),
+                  // 副标题反映当前开关状态（与电视端 _televisionEntries 同口径）：
+                  // 静态文案曾让用户无法从设置页判断雾面为何消失。
+                  subtitle: Text(
+                    glass ? '已开启：瓷面浮层质感' : '已关闭：不透明浮层（低端设备更流畅）',
+                  ),
                   onChanged: (value) =>
                       saveUserChange(context, () => GlassPreferences.setEnabled(value)),
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.people_outline),
+                leading: AppIcon(AppIcons.people),
                 title: const Text('用户管理'),
                 subtitle: Text('当前：${widget.store.profile.name}'),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) => ProfilesScreen(store: widget.store),
-                  ),
-                ),
+                onTap: _openUserManagement,
               ),
               if (widget.store.canDownload)
                 ListTile(
-                  leading: const Icon(Icons.download_outlined),
+                  leading: AppIcon(AppIcons.download),
                   title: const Text('下载偏好'),
                   subtitle: Text(widget.store.downloadPreferences.qualityLabel),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: AppIcon(AppIcons.chevronRight),
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
@@ -443,7 +508,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               if (widget.store.canDownload)
                 ListTile(
-                  leading: const Icon(Icons.folder_outlined),
+                  leading: AppIcon(AppIcons.folder),
                   title: const Text('下载目录与空间'),
                   subtitle: const Text('查看存储用量、迁移已下载文件'),
                   onTap: () => Navigator.push(
@@ -458,10 +523,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               if (widget.store.profile.admin) ...[
                 ListTile(
-                  leading: const Icon(Icons.settings_ethernet_rounded),
+                  leading: AppIcon(AppIcons.settingsEthernet),
                   title: const Text('网络与资源'),
                   subtitle: const Text('代理、目录请求间隔、下载并发与站源目录'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: AppIcon(AppIcons.chevronRight),
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
@@ -505,13 +570,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.backup_outlined),
+                  leading: AppIcon(AppIcons.backup),
                   title: const Text('导出配置备份'),
                   subtitle: const Text('包含本地用户、追剧、历史和设置，不含视频文件'),
                   onTap: _busy ? null : () => _backup(false),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.restore),
+                  leading: AppIcon(AppIcons.restore),
                   title: const Text('恢复配置备份'),
                   onTap: _busy ? null : () => _backup(true),
                 ),
@@ -674,7 +739,7 @@ class _StorageScreenState extends State<StorageScreen> {
                   onPressed: () => Clipboard.setData(
                     ClipboardData(text: _info!['directory'] as String? ?? ''),
                   ),
-                  icon: const Icon(Icons.copy),
+                  icon: AppIcon(AppIcons.copy),
                   label: const Text('复制路径'),
                 ),
                 const SizedBox(height: 20),
@@ -694,7 +759,7 @@ class _StorageScreenState extends State<StorageScreen> {
               if (widget.store.profile.admin)
                 FilledButton.icon(
                   onPressed: _busy ? null : _move,
-                  icon: const Icon(Icons.drive_file_move_outline),
+                  icon: AppIcon(AppIcons.fileMove),
                   label: const Text('更改并迁移目录'),
                 ),
               TextButton(

@@ -100,16 +100,18 @@ void main() {
       final repository = RouteRepository()..broken = true;
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
-      for (var i = 0; i < 5; i++) {
+      // maxAttempts=4 + maxRefreshes=2：完整耗尽需 5 次失败
+      // （alternative→refresh→alternative→refresh），窗口放宽到 7 秒防贴边漂移。
+      for (var i = 0; i < 7; i++) {
         await tester.pump(const Duration(seconds: 1));
         await settleOperations(tester);
       }
-      expect(repository.primaryCalls, 2);
+      expect(repository.primaryCalls, 3);
       expect(repository.fallbackCalls, 2);
       expect(find.text('暂时无法播放'), findsOneWidget);
       expect(repository.active, isEmpty);
       await tester.pump(const Duration(seconds: 25));
-      expect(repository.primaryCalls + repository.fallbackCalls, 4);
+      expect(repository.primaryCalls + repository.fallbackCalls, 5);
       repository.broken = false;
       await tester.tap(find.text('重试播放'));
       await settleOperations(tester);

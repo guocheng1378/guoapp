@@ -11,6 +11,7 @@ import 'models.dart';
 import 'app_build.dart';
 import 'app_layout.dart';
 import 'remote_widgets.dart';
+import 'app_icons.dart';
 
 class ProfilesScreen extends StatefulWidget {
   const ProfilesScreen({super.key, required this.store, this.locked = false});
@@ -147,7 +148,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
     if (profile.admin) return '管理员 · 全部权限';
     final sources = profile.sources
         .where(SourceSite.isAvailable)
-        .map((id) => SourceSite.byId(id).name)
+        .map((id) => SourceSite.byId(id)?.name ?? '未知源')
         .join(' / ');
     return '${sources.isEmpty ? '未开放站源' : sources} · ${profile.download ? '可下载' : '仅在线观看'}';
   }
@@ -173,7 +174,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                 const SizedBox(height: 12),
                 FilledButton.icon(
                   onPressed: _busy ? null : () => _recover(),
-                  icon: const Icon(Icons.restore_rounded),
+                  icon: AppIcon(AppIcons.restore),
                   label: const Text('从备份恢复'),
                 ),
                 OutlinedButton(
@@ -230,11 +231,9 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                       : <LocalProfile>[])
                 Card(
                   child: ListTile(
-                    leading: Icon(
-                      profile.admin
-                          ? Icons.admin_panel_settings_outlined
-                          : Icons.person_outline,
-                    ),
+                    leading: profile.admin
+                        ? AppIcon(AppIcons.admin)
+                        : AppIcon(AppIcons.person),
                     title: Text(profile.name),
                     subtitle: Text(_permissionsLabel(profile)),
                     onTap: _busy ? null : () => _switch(profile),
@@ -242,20 +241,18 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                         ? IconButton(
                             tooltip: '编辑用户',
                             onPressed: _busy ? null : () => _edit(profile),
-                            icon: const Icon(Icons.edit_outlined),
+                            icon: AppIcon(AppIcons.edit),
                           )
-                        : Icon(
-                            profile.protected
-                                ? Icons.lock_outline
-                                : Icons.chevron_right,
-                          ),
+                        : profile.protected
+                            ? AppIcon(AppIcons.lock)
+                            : AppIcon(AppIcons.chevronRight),
                   ),
                 ),
               if (!widget.store.locked && widget.store.profile.admin) ...[
                 const SizedBox(height: 16),
                 FilledButton.icon(
                   onPressed: _busy ? null : () => _edit(),
-                  icon: const Icon(Icons.person_add_outlined),
+                  icon: AppIcon(AppIcons.personAdd),
                   label: const Text('添加用户'),
                 ),
               ],
@@ -265,7 +262,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                     Navigator.of(context).popUntil((route) => route.isFirst);
                     widget.store.lock();
                   },
-                  icon: const Icon(Icons.lock_outline),
+                  icon: AppIcon(AppIcons.lock),
                   label: const Text('锁定当前用户'),
                 ),
             ],

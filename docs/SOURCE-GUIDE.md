@@ -89,12 +89,13 @@ flowchart LR
 |---|---|---|---|
 | `Cataloguer` | `Categories(ctx, host) ([]CatalogCategory, error)` | 打开源的目录页时取分类 | 目录页报「该站源暂未提供分类」 |
 | | `CatalogPage(ctx, host, page, category, query) ([]Drama, bool, error)` | 目录翻页；返回值第二项为 hasMore | 目录页报「该站源暂未接入目录」 |
+| `CatalogSorter`（可选） | `CatalogPageSorted(ctx, host, page, category, sort) ([]Drama, bool, error)` | 客户端选了热度/最新等排序且源站支持时，代替 `CatalogPage` 发起带排序参数的请求（sort ∈ heat/views/date） | 回退 `CatalogPage` + 客户端本地排序 |
 | `Detailer` | `Detail(ctx, host, sourceID) (Drama, []Chapter, error)` | 进入剧详情、开始播放/下载前取集数 | 详情页报「该站源暂未接入详情」 |
 | `Searcher` | `Search(ctx, host, query) ([]Drama, error)` | 聚合搜索（需 `Spec.Searcher=true` 才会被调用） | 该源不参与聚合搜索 |
 | `Prober` | `Probe(ctx, host) (string, error)` | 源健康探测 | 跳过探测 |
 | `MediaResolver` | `ResolveMedia(ctx, host, task Task) (Media, error)` | 播放/下载前把集数二次解析为可播直链（详见 §4.3） | 直接使用 `Chapter.VideoURL` |
 
-最小可用源 = `Cataloguer + Detailer`；搜索聚合再加 `Searcher`；直链需要解密/跳转的站再补 `MediaResolver`。
+最小可用源 = `Cataloguer + Detailer`；搜索聚合再加 `Searcher`；直链需要解密/跳转的站再补 `MediaResolver`；源站接口原生支持按热度/最新排序时再实现 `CatalogSorter`，让「热度」排序真正作用在全量数据上（而非客户端已加载的分页片段）。同时注意：`Drama.Heat`（热度文本，如 `12.3万次播放`）、`Views`（播放量文本）、`OnlineDate`（`2006-01-02` 系格式）、`ReleaseStatus`（`finished`/`ongoing`，可由集数或「已完结」类备注推断，见 `provider.ReleaseStatus`）四个字段填得越全，客户端排序与完结筛选就越准——字段缺失时对应排序项会在 UI 置灰禁用，避免假排序。
 
 ### 2.3 Host：唯一的网络出口
 

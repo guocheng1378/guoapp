@@ -20,11 +20,20 @@ func (d *Downloader) fetchDuanjuCategories(ctx context.Context, source string) (
 	return cataloguer.Categories(ctx, d.host())
 }
 
-func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, page int, category string) ([]Drama, bool, error) {
+func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, page int, category, sort string) ([]Drama, bool, error) {
 	source = canonicalProviderSource(source)
 	cataloguer, ok := duanjuSourceFor(d, source).(provider.Cataloguer)
 	if !ok {
 		return nil, false, errors.New("该站源暂未接入目录")
+	}
+	// 服务端排序：源实现 CatalogSorter 且 sort 有效时下传，否则回退源站顺序
+	//（客户端 sortCatalog 兜底排序不受影响）。
+	switch sort = strings.TrimSpace(sort); sort {
+	case "", "source":
+	default:
+		if sorted, sorted_ok := cataloguer.(provider.CatalogSorter); sorted_ok {
+			return sorted.CatalogPageSorted(ctx, d.host(), page, category, sort)
+		}
 	}
 	return cataloguer.CatalogPage(ctx, d.host(), page, category, "")
 }
@@ -139,7 +148,7 @@ func (d *Downloader) resolveDuanjuWebPage(ctx context.Context, source, pageURL, 
 
 func (d *Downloader) duanjuSourceProbe(ctx context.Context, source string) (string, error) {
 	source = canonicalProviderSource(source)
-	items, _, err := d.fetchDuanjuCatalogPage(ctx, source, 1, "")
+	items, _, err := d.fetchDuanjuCatalogPage(ctx, source, 1, "", "")
 	if err != nil {
 		return "", err
 	}

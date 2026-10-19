@@ -7,6 +7,8 @@ import 'core_bridge.dart';
 import 'app_layout.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
+import 'app_icons.dart';
+import 'motion.dart';
 
 Future<void> saveUserChange(
   BuildContext context,
@@ -81,7 +83,7 @@ class _RefreshActionState extends State<RefreshAction>
           : null,
       icon: RotationTransition(
         turns: _rotation,
-        child: const Icon(Icons.refresh_rounded),
+        child: AppIcon(AppIcons.refresh),
       ),
     ),
   );
@@ -111,11 +113,7 @@ class DramaCover extends StatelessWidget {
         ),
       ),
       child: Center(
-        child: Icon(
-          Icons.movie_creation_outlined,
-          size: 40,
-          color: colors.onSurfaceVariant,
-        ),
+        child: AppIcon(AppIcons.movie, size: 40, color: colors.onSurfaceVariant),
       ),
     );
     return ClipRRect(
@@ -290,10 +288,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       child: IconButton(
         tooltip: '重试海报',
         onPressed: () => _retry(path),
-        icon: Icon(
-          Icons.refresh_rounded,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+        icon: AppIcon(AppIcons.refresh, color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -412,13 +407,10 @@ class DramaTile extends StatelessWidget {
                     backgroundColor: selected!
                         ? Theme.of(context).colorScheme.primary
                         : Colors.black.withValues(alpha: .64),
-                    child: Icon(
-                      selected! ? Icons.check_rounded : Icons.circle_outlined,
-                      size: 22,
-                      color: selected!
-                          ? Theme.of(context).colorScheme.onPrimary
-                          : Colors.white,
-                    ),
+                    child: selected!
+                        ? AppIcon(AppIcons.check,
+                            size: 22, color: Theme.of(context).colorScheme.onPrimary)
+                        : AppIcon(AppIcons.radioUnchecked, size: 22, color: Colors.white),
                   ),
                 ),
             ],
@@ -485,7 +477,7 @@ class DramaTile extends StatelessWidget {
         onLongPress: onLongPress ?? onMore,
         onSecondaryTap: onMore,
         borderRadius: BorderRadius.circular(14),
-        child: content,
+        child: PressableScale(child: content),
       ),
     );
   }
@@ -497,14 +489,14 @@ class StatusPanel extends StatelessWidget {
     required this.title,
     this.message = '',
     this.onRetry,
-    this.icon = Icons.movie_filter_outlined,
+    this.icon,
     this.action = '重试',
     this.secondaryAction,
   });
   final String title;
   final String message;
   final VoidCallback? onRetry;
-  final IconData icon;
+  final Widget? icon;
   final String action;
   final Widget? secondaryAction;
   @override
@@ -514,7 +506,7 @@ class StatusPanel extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 56, color: Theme.of(context).colorScheme.primary),
+          icon ?? AppIcon(AppIcons.movieFilter, size: 56, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 20),
           Text(
             title,
@@ -536,7 +528,7 @@ class StatusPanel extends StatelessWidget {
             FilledButton.icon(
               autofocus: AppLayout.isTelevision(context),
               onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
+              icon: AppIcon(AppIcons.refresh),
               label: Text(action),
             ),
           ],

@@ -1,0 +1,72 @@
+# 测试门禁：分文件实测红名单以 scripts/test_matrix.py 为准（动态扫描
+# test/*_test.dart，文件增删自动适配）。测试文件清单自动随 test/ 目录
+# 演进，无需在此登记。当前实测红名单为空 → 零豁免：本 workflow 不使用
+# continue-on-error。个别依赖构建产物（如 duanju_core.dll）的用例在
+# 无产物环境自带 skip 守卫，skip 不计入红名单。
+# 若未来出现失败：先本地 `python scripts/test_matrix.py --only <file>` 复现，
+# 属产品 bug 修产品、用例过时改用例；确属环境依赖且不可修的，才允许给对应
+# step 显式加 continue-on-error: true，并紧邻注释写明原因与复核日期。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 版本与本地工具链一致（go1.27.2）：native/core、native/provider、
+      # native/sources 三包的测试是剔除/接入站源改动的主门禁。
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.2
+          cache-dependency-path: native/go.sum
+      - name: Go test (native)
+        run: go test ./...
+        working-directory: native
+        shell: bash
+
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+        shell: bash
+      # analyze 默认仅对 error 级问题非零退出，info/warning 不阻断门禁。
+      - name: Analyze
+        run: flutter analyze
+        shell: bash
+
+  test:
+    runs-on: windows-latest
+    strategy:
+      # 不因一个变体红而掐断另一变体的日志，便于一次拿全红名单。
+      fail-fast: false
+      matrix:
+        include:
+          - variant: default
+            args: --variant default
+          - variant: all_sources
+            args: --variant all
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+        shell: bash
+      - name: Test matrix (per-file, red list gate)
+        run: python scripts/test_matrix.py ${{ matrix.args }}
+        shell: bash

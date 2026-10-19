@@ -1,69 +1,44 @@
-import 'catalog_sort.dart';
 import 'models.dart';
 import 'ranking_models.dart';
 
-/// 榜单页的跨源本地榜，对齐云追「日榜 / 排期表」两个周期项。
+/// 跨源本地榜：不请求任何榜单接口，用各站源目录页已有的
+/// heat / views / onlineDate 字段在本地聚合，离线也能看。
 ///
-/// 与站源榜不同，这里不调用 `AppRepository.rankings`，而是用各站源目录页
-/// 已经返回的 [Drama.heat] / [Drama.views] / [Drama.onlineDate] 在本地聚合，
-/// 因此零新增站源依赖、零 Go 侧改动。
-const String localHeatBoardId = 'local-heat';
-const String localScheduleBoardId = 'local-schedule';
+/// 目录页里 heat/views 常见三种形态：纯数字、`12.3万`、`1.2亿`，
+/// 统一解析成数值再比较；onlineDate 宽松解析出年月日做排期分组。
 
 enum LocalBoardKind { heat, schedule }
 
+/// 一个本地榜的元信息；id 用 `local-` 前缀，与站源榜单 id
+/// （`<站源>-<后缀>`）天然不冲突——站源名解析不出 `local`。
 class LocalBoard {
-  const LocalBoard(this.id, this.name, this.description);
-
+  const LocalBoard(this.id, this.name, this.description, this.kind);
   final String id;
   final String name;
   final String description;
-
-  LocalBoardKind get kind =>
-      id == localScheduleBoardId ? LocalBoardKind.schedule : LocalBoardKind.heat;
+  final LocalBoardKind kind;
 }
 
 const List<LocalBoard> localBoards = [
-  LocalBoard(localHeatBoardId, '实时热度', '按各站热度归一化排序'),
-  LocalBoard(localScheduleBoardId, '排期表', '按上线日期分组的新剧与追更'),
+  LocalBoard(
+    'local-heat',
+    '实时热度',
+    '聚合各站源目录的热度与播放量',
+    LocalBoardKind.heat,
+  ),
+  LocalBoard(
+    'local-schedule',
+    '更新排期',
+    '按各站源标注的上线日期分组',
+    LocalBoardKind.schedule,
+  ),
 ];
 
-bool isLocalBoardId(String id) =>
-    id == localHeatBoardId || id == localScheduleBoardId;
+bool isLocalBoardId(String id) => localBoards.any((board) => board.id == id);
 
-/// 解析 [Drama.onlineDate]。
-///
-/// Go 侧 `providerReleaseDate` 已把各源归一为 `YYYY-MM-DD`（见
-/// `provider_sources_parity_test.go` 对野果 `2026-09-23` 的断言），这里额外
-/// 容忍 `YYYY/M/D` 与带时间部分；无法解析时返回 null 而不是猜。
-DateTime? parseOnlineDate(String value) {
-  final text = value.trim();
-  if (text.isEmpty) return null;
-  final match = RegExp(r'^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})').firstMatch(text);
-  if (match == null) return null;
-  final year = int.tryParse(match[1]!);
-  final month = int.tryParse(match[2]!);
-  final day = int.tryParse(match[3]!);
-  if (year == null || month == null || day == null) return null;
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  final date = DateTime(year, month, day);
-  // DateTime 会把 2 月 31 日规范化到 3 月，需要回验。
-  if (date.month != month || date.day != day) return null;
-  return date;
-}
-
-/// 热度指标原文：优先 `heat`，其次 `views`（对应云追的 `hot_type`）。
-String? heatMetric(Drama drama) {
-  for (final value in [drama.heat, drama.views]) {
-    final text = value.trim();
-    if (text.isNotEmpty) return text;
-  }
-  return null;
-}
-
-/// 归一化热度数值，用于跨源排序；无法解析返回 null。
-double? heatValue(Drama drama) =>
-    catalogMetric(drama.heat) ?? catalogMetric(drama.views);
+/// `[分类]`，对齐云追 `text_topic_tag_count`。
+String categoryTagLabel(Drama drama) =>
+    drama.category.isEmpty ? '' : '[${drama.category}]';
 
 /// 「共 N 部」，对齐云追 `text_topic_count`。
 String episodeCountLabel(Drama drama) =>
@@ -73,149 +48,151 @@ String episodeCountLabel(Drama drama) =>
 String updateLabel(Drama drama) =>
     drama.episodes > 0 ? '更新至 ${drama.episodes} 集' : '';
 
-/// 分类标签 `[分类]`，对齐云追 `text_topic_tag_count`。
-String categoryTagLabel(Drama drama) =>
-    drama.category.isEmpty ? '' : '[${drama.category}]';
+/// 榜单指标文案直接透传（豆瓣等榜单的 metric 已由内核生成）。
+String rankingMetricLabel(RankingItem item) => item.metric.trim();
 
-/// 把归一化后的热度数值写成「万/亿」单位，避免裸数字出现在界面上。
-String formatHeatValue(double value) {
-  if (value >= 100000000) return '${(value / 100000000).toStringAsFixed(1)}亿';
-  if (value >= 10000) return '${(value / 10000).toStringAsFixed(1)}万';
-  return value.round().toString();
+/// 把 `3.2万` / `1.2亿` / `12345` 统一解析为可比较的数值。
+double _countValue(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return 0;
+  final match = RegExp(r'([\d.]+)').firstMatch(text);
+  if (match == null) return 0;
+  final number = double.tryParse(match.group(1) ?? '') ?? 0;
+  if (text.contains('亿')) return number * 100000000;
+  if (text.contains('万')) return number * 10000;
+  return number;
 }
 
-/// 指标原文是裸数字（各源给的是播放量整数值）还是已格式化的文本。
-bool isBareNumber(String text) {
-  final cleaned = text.replaceAll(',', '').replaceAll(' ', '').trim();
-  if (cleaned.isEmpty) return false;
-  return double.tryParse(cleaned) != null;
+/// 热度/播放量取大者；两者都缺失返回 0（不进热度榜）。
+double _heatValue(Drama drama) {
+  final heat = _countValue(drama.heat);
+  final views = _countValue(drama.views);
+  return heat >= views ? heat : views;
 }
 
-/// 条目指标文案：站源给的优先，缺失时用热度/播放量兜底，再兜底为集数。
-///
-/// 站源榜的 `metric` 通常已是「9200万 热度」这类成品文案，直接透传；
-/// 本地榜拿到的是播放量整数值（如 `3864880`），必须换算成带单位的文本，
-/// 否则界面上会出现一串裸数字。
-String rankingMetricLabel(RankingItem item) {
-  final given = item.metric.trim();
-  if (given.isNotEmpty) return given;
-  final raw = heatMetric(item.drama);
-  if (raw != null) {
-    final value = heatValue(item.drama);
-    if (value != null && isBareNumber(raw)) {
-      return '${formatHeatValue(value)} 热度';
-    }
-    return raw;
-  }
-  return episodeCountLabel(item.drama);
+String _trim1(double value) {
+  final text = value.toStringAsFixed(1);
+  return text.endsWith('.0') ? text.substring(0, text.length - 2) : text;
 }
 
-class ScheduleGroup {
-  const ScheduleGroup({required this.label, required this.items, this.date});
-
-  final String label;
-  final DateTime? date;
-  final List<RankingItem> items;
-
-  int get total => items.length;
+String _compact(double value) {
+  if (value >= 100000000) return '${_trim1(value / 100000000)}亿';
+  if (value >= 10000) return '${_trim1(value / 10000)}万';
+  return value.toInt().toString();
 }
 
-String scheduleDayLabel(DateTime date, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  final target = DateTime(date.year, date.month, date.day);
-  return switch (today.difference(target).inDays) {
-    0 => '今天',
-    1 => '昨天',
-    2 => '前天',
-    _ => '${date.month}月${date.day}日',
-  };
+/// 热度徽标文案：原文已带「万/亿」直接沿用，纯数字压缩展示。
+String _metricText(Drama drama) {
+  final raw =
+      _countValue(drama.heat) >= _countValue(drama.views)
+          ? drama.heat.trim()
+          : drama.views.trim();
+  if (raw.isEmpty) return '';
+  final value = double.tryParse(raw);
+  return '热度 ${value == null ? raw : _compact(value)}';
 }
 
-class _Scored {
-  const _Scored(this.value, this.drama);
-  final double value;
-  final Drama drama;
-}
-
-/// 组内排名：我的追剧置顶，其余按归一化热度降序，再按集数。
-List<RankingItem> _rankWithin(
-  List<Drama> dramas,
-  bool Function(Drama) isFollowing,
-) {
-  final sorted = [...dramas]..sort((a, b) {
-    final follow = (isFollowing(b) ? 1 : 0).compareTo(isFollowing(a) ? 1 : 0);
-    if (follow != 0) return follow;
-    final left = heatValue(a);
-    final right = heatValue(b);
-    if (left != null && right != null) return right.compareTo(left);
-    if (left != null) return -1;
-    if (right != null) return 1;
-    return b.episodes.compareTo(a.episodes);
-  });
+/// 实时热度榜：heat/views 聚合降序；同剧多源取热度最高的一条。
+List<RankingItem> buildHeatBoard(List<Drama> dramas) {
+  final seen = <String>{};
+  final ranked =
+      dramas
+          .where(
+            (drama) =>
+                seen.add('${drama.source}:${drama.id}') &&
+                _heatValue(drama) > 0,
+          )
+          .toList()
+        ..sort((a, b) => _heatValue(b).compareTo(_heatValue(a)));
   return [
-    for (var index = 0; index < sorted.length; index++)
-      RankingItem(
-        index + 1,
-        sorted[index],
-        metric: heatMetric(sorted[index]) ?? '',
-      ),
+    for (var index = 0; index < ranked.length; index++)
+      RankingItem(index + 1, ranked[index], metric: _metricText(ranked[index])),
   ];
 }
 
-/// 排期表：按上线日期倒序分组，只保留最近 [days] 天窗口内的条目。
-///
-/// 没有 `onlineDate` 的剧不会出现在排期表里 —— 各源并非都提供该字段
-/// （红果常常要靠额外的详情元数据补全），这里不做任何猜测。
+/// 排期表的一个日期分组。
+class ScheduleGroup {
+  const ScheduleGroup(this.label, this.total, this.items);
+  final String label;
+  final int total;
+  final List<RankingItem> items;
+}
+
+/// 解析 onlineDate 为 (year, month, day)；解析不出返回 null。
+/// 兼容 `2025-01-02` / `2025.1.2` / `2025年1月2日` / `1月2日` / `01-02`。
+({int year, int month, int day})? _parseDate(String raw) {
+  final text = raw.trim();
+  final full = RegExp(
+    r'(\d{4})[-/.年]\s*(\d{1,2})[-/.月]\s*(\d{1,2})',
+  ).firstMatch(text);
+  if (full != null) {
+    return (
+      year: int.parse(full.group(1)!),
+      month: int.parse(full.group(2)!),
+      day: int.parse(full.group(3)!),
+    );
+  }
+  final partial = RegExp(r'(\d{1,2})[-/.月]\s*(\d{1,2})').firstMatch(text);
+  if (partial != null) {
+    return (
+      year: DateTime.now().year,
+      month: int.parse(partial.group(1)!),
+      day: int.parse(partial.group(2)!),
+    );
+  }
+  return null;
+}
+
+/// 更新排期表：按上线日期分组，最新日期在前；组内追更中的排最前，
+/// 其余按热度降序。没有日期的条目归入末尾「待定」组。
 List<ScheduleGroup> buildScheduleGroups(
   List<Drama> dramas, {
-  required bool Function(Drama) isFollowing,
-  DateTime? now,
-  int days = 21,
+  required bool Function(Drama drama) isFollowing,
 }) {
-  final clock = now ?? DateTime.now();
-  final today = DateTime(clock.year, clock.month, clock.day);
-  final floor = today.subtract(Duration(days: days < 1 ? 0 : days - 1));
-  final buckets = <DateTime, List<Drama>>{};
+  final dated = <({int year, int month, int day}), List<Drama>>{};
+  final undated = <Drama>[];
   final seen = <String>{};
   for (final drama in dramas) {
-    if (!seen.add(drama.id)) continue;
-    final date = parseOnlineDate(drama.onlineDate);
-    if (date == null) continue;
-    if (date.isBefore(floor) || date.isAfter(today)) continue;
-    buckets.putIfAbsent(date, () => []).add(drama);
+    if (!seen.add('${drama.source}:${drama.id}')) continue;
+    final date = _parseDate(drama.onlineDate);
+    if (date == null) {
+      undated.add(drama);
+    } else {
+      dated.putIfAbsent(date, () => []).add(drama);
+    }
   }
-  final dates = buckets.keys.toList()
-    ..sort((a, b) => b.compareTo(a));
-  return [
-    for (final date in dates)
-      ScheduleGroup(
-        label: scheduleDayLabel(date, today),
-        date: date,
-        items: _rankWithin(buckets[date]!, isFollowing),
-      ),
-  ];
-}
+  final keys =
+      dated.keys.toList()
+        ..sort((a, b) {
+          final byYear = b.year.compareTo(a.year);
+          if (byYear != 0) return byYear;
+          final byMonth = b.month.compareTo(a.month);
+          if (byMonth != 0) return byMonth;
+          return b.day.compareTo(a.day);
+        });
+  List<RankingItem> ranked(List<Drama> rows) {
+    final sorted =
+        rows.toList()
+          ..sort((a, b) {
+            final byFollow =
+                (isFollowing(b) ? 1 : 0) - (isFollowing(a) ? 1 : 0);
+            if (byFollow != 0) return byFollow;
+            return _heatValue(b).compareTo(_heatValue(a));
+          });
+    return [
+      for (var index = 0; index < sorted.length; index++)
+        RankingItem(index + 1, sorted[index]),
+    ];
+  }
 
-/// 实时热度榜：跨源按归一化热度降序，最多 [maxItems] 条。
-///
-/// 只保留能解析出热度数值的条目 —— 拿不到数值的排在榜上只会误导用户。
-List<RankingItem> buildHeatBoard(List<Drama> dramas, {int maxItems = 100}) {
-  final ranked = <_Scored>[];
-  final seen = <String>{};
-  for (final drama in dramas) {
-    if (!seen.add(drama.id)) continue;
-    final value = heatValue(drama);
-    if (value == null) continue;
-    ranked.add(_Scored(value, drama));
-  }
-  ranked.sort((a, b) => b.value.compareTo(a.value));
-  final take = ranked.length < maxItems ? ranked.length : maxItems;
   return [
-    for (var index = 0; index < take; index++)
-      RankingItem(
-        index + 1,
-        ranked[index].drama,
-        metric: heatMetric(ranked[index].drama) ?? '',
+    for (final key in keys)
+      ScheduleGroup(
+        '${key.month}月${key.day}日',
+        dated[key]!.length,
+        ranked(dated[key]!),
       ),
+    if (undated.isNotEmpty)
+      ScheduleGroup('待定', undated.length, ranked(undated)),
   ];
 }

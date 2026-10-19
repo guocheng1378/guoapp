@@ -30,6 +30,8 @@ venv/
 !.env.template
 *.p12
 *.pfx
+tools/licensegen/licensegen.private.key
+tools/licensegen/licensegen.exe
 ios/Pods/
 ios/.symlinks/
 ios/Flutter/ephemeral/
@@ -43,3 +45,5 @@ ios/DuanjuCore/*.xcframework/
 /*.png
 /fix_anchor.ps1
 /分析报告-*.md
+# 本机排查临时目录（探针脚本、真机截图、日志转储）
+/.tools/

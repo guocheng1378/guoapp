@@ -9,6 +9,8 @@ import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 /// 点剧卡进播放：立即推透明启动浮层——底下首页保持可见，只在中央淡入
 /// 一个小转圈（无整页白底）；详情解析、续播集计算、VIP 确认都在浮层内
@@ -57,6 +59,7 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
   late final int _profileEpoch;
   int _generation = 0;
   String? _error;
+  bool _awaitingVip = false;
 
   @override
   void initState() {
@@ -106,6 +109,9 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       final episode = merged.episodes[index];
       if (episode.vip) {
         if (!mounted) return;
+        // VIP 确认期间停掉底下的转圈：对话框盖着转圈是纯噪音，
+        // 且测试环境的 pumpAndSettle 会因这个永续动画永远等不到收敛。
+        setState(() => _awaitingVip = true);
         final accepted = await showDialog<bool>(
           context: context,
           builder: (context) => GlassDialogShell(
@@ -126,12 +132,16 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
           ),
         );
         if (accepted != true) {
-          if (mounted) Navigator.of(context).maybePop();
+          if (mounted) {
+            setState(() => _awaitingVip = false);
+            Navigator.of(context).maybePop();
+          }
           return;
         }
         if (!mounted) {
           return;
         }
+        setState(() => _awaitingVip = false);
       }
       final position =
           watched?.episode == episode.number && watched?.finished == false
@@ -173,21 +183,25 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       body: SafeArea(
         top: false,
         child: error == null
-            ? Center(
-                // 白瓷面小圆片：亮色海报上转圈仍可辨，无整页底色。
-                child: GlassSurface(
-                  radius: 999,
-                  // 统一滑动栏瓷面档：微透白瓷+白描边。
-                  child: const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: SizedBox(
-                      width: 30,
-                      height: 30,
-                      child: CircularProgressIndicator(strokeWidth: 3),
-                    ),
-                  ),
-                ),
-              )
+            ? (_awaitingVip
+                  // VIP 确认对话框打开期间不渲染任何东西：底下首页可见，
+                  // 对话框盖着转圈是纯噪音，永续动画还会让测试等不到收敛。
+                  ? const SizedBox.shrink()
+                  : Center(
+                      // 白瓷面小圆片：亮色海报上转圈仍可辨，无整页底色。
+                      child: GlassSurface(
+                        radius: 999,
+                        // 统一滑动栏瓷面档：微透白瓷+白描边。
+                        child: const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: SizedBox(
+                            width: 30,
+                            height: 30,
+                            child: CircularProgressIndicator(strokeWidth: 3),
+                          ),
+                        ),
+                      ),
+                    ))
             : Center(
                 // 错误卡：连续文字面用实底档，保证可读；可返回可重试。
                 child: GlassSurface(
@@ -198,10 +212,7 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        Icons.play_disabled_rounded,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                      AppIcon(AppIcons.playDisabled, color: Theme.of(context).colorScheme.primary),
                       const SizedBox(height: 10),
                       Text(
                         '暂时无法播放',

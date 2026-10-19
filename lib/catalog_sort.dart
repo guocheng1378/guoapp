@@ -5,6 +5,7 @@ enum CatalogSort {
   source('源站顺序'),
   heat('热度'),
   views('播放量'),
+  score('评分'),
   date('上线日期'),
   name('名称'),
   season('自然季号');
@@ -17,25 +18,38 @@ class CatalogView {
   const CatalogView({
     this.sort = CatalogSort.source,
     this.release = '',
+    this.area = '',
+    this.year = '',
     this.allSources = false,
   });
   final CatalogSort sort;
   final String release;
+
+  /// 地区/年份筛选（'' = 全部）。选项由当前已加载条目动态聚合，
+  /// 持久化恢复的值允许悬空（表现为不选中态，不做白名单校验）。
+  final String area;
+  final String year;
   final bool allSources;
 
   CatalogView copyWith({
     CatalogSort? sort,
     String? release,
+    String? area,
+    String? year,
     bool? allSources,
   }) => CatalogView(
     sort: sort ?? this.sort,
     release: release ?? this.release,
+    area: area ?? this.area,
+    year: year ?? this.year,
     allSources: allSources ?? this.allSources,
   );
 
   Map<String, dynamic> toJson() => {
     'sort': sort.name,
     'release': release,
+    'area': area,
+    'year': year,
     'allSources': allSources,
   };
 
@@ -48,6 +62,8 @@ class CatalogView {
     release: {'', 'finished', 'ongoing', 'unknown'}.contains(value['release'])
         ? value['release'] as String
         : '',
+    area: value['area'] as String? ?? '',
+    year: value['year'] as String? ?? '',
     allSources: value['allSources'] == true,
   );
 }
@@ -76,6 +92,46 @@ bool matchesDramaQuery(Drama drama, String query) {
   return terms.every(fields.contains);
 }
 
+/// 解析评分文本（maccms vod_score 一般 0-10，"8.5"/"8.5分"）。
+/// 超出 0-10 视为无效（其他字段混入时不当评分用），解析不出返回 null。
+double? scoreValue(String text) {
+  final match = RegExp(r'\d+(?:\.\d+)?').firstMatch(text.trim());
+  if (match == null) return null;
+  final value = double.tryParse(match.group(0)!);
+  if (value == null || value < 0 || value > 10) return null;
+  return value;
+}
+
+/// 聚合当前条目集上的地区/年份筛选选项：地区按条目数降序，
+/// 年份数字降序取前 10（老片年份长尾不必全列），非数字年份排最后。
+({List<String> areas, List<String> years}) catalogFilterOptions(
+  Iterable<Drama> items,
+) {
+  final areaCounts = <String, int>{};
+  final yearCounts = <String, int>{};
+  for (final drama in items) {
+    final area = drama.area.trim();
+    if (area.isNotEmpty) areaCounts[area] = (areaCounts[area] ?? 0) + 1;
+    final year = drama.year.trim();
+    if (year.isNotEmpty) yearCounts[year] = (yearCounts[year] ?? 0) + 1;
+  }
+  final areas =
+      areaCounts.keys.toList()..sort((a, b) {
+        final byCount = (areaCounts[b] ?? 0).compareTo(areaCounts[a] ?? 0);
+        return byCount != 0 ? byCount : a.compareTo(b);
+      });
+  final years =
+      yearCounts.keys.toList()..sort((a, b) {
+        final numberA = int.tryParse(a);
+        final numberB = int.tryParse(b);
+        if (numberA != null && numberB != null) return numberB.compareTo(numberA);
+        if (numberA != null) return -1;
+        if (numberB != null) return 1;
+        return b.compareTo(a);
+      });
+  return (areas: areas, years: years.take(10).toList());
+}
+
 double? catalogMetric(String text) {
   final cleaned = text.toLowerCase().replaceAll(RegExp(r'[,，\s]'), '');
   final match = RegExp(
@@ -93,6 +149,33 @@ double? catalogMetric(String text) {
         'b' => 1000000000,
         _ => 1,
       };
+}
+
+/// 当前条目集上真正有效的排序项：依赖字段（热度/播放量/上线日期）在全部条目
+/// 上都解析不出数值时，对应排序与源站顺序等价（假排序），UI 应禁用该选项。
+/// 源站顺序、名称、季号只依赖本地字段，恒可用。
+/// 服务端排序（如剧果 sort=hot/new）由调用方按源能力并入返回集合。
+Set<CatalogSort> catalogSortSupport(Iterable<Drama> items) {
+  var heat = false;
+  var views = false;
+  var score = false;
+  var dated = false;
+  for (final drama in items) {
+    heat = heat || catalogMetric(drama.heat) != null;
+    views = views || catalogMetric(drama.views) != null;
+    score = score || scoreValue(drama.score) != null;
+    dated = dated || DateTime.tryParse(drama.onlineDate) != null;
+    if (heat && views && score && dated) break;
+  }
+  return {
+    CatalogSort.source,
+    CatalogSort.name,
+    CatalogSort.season,
+    if (heat) CatalogSort.heat,
+    if (views) CatalogSort.views,
+    if (score) CatalogSort.score,
+    if (dated) CatalogSort.date,
+  };
 }
 
 int _seasonNumber(String label) {
@@ -163,10 +246,15 @@ int _descending(num? a, num? b) => a == null
 
 List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
   final items = rows.where((drama) {
+    // 地区/年份为精确匹配筛选（选项来自已加载条目，值域与字段一致）。
+    if (view.area.isNotEmpty && drama.area.trim() != view.area) return false;
+    if (view.year.isNotEmpty && drama.year.trim() != view.year) return false;
     if (view.release.isEmpty) return true;
     final release = drama.releaseStatus == 'completed'
         ? 'finished'
         : drama.releaseStatus;
+    // 「状态未知」= 站源没有给出完结状态的条目（空/unknown）。
+    // 不填 releaseStatus 的源在此筛选下等于全量，语义与「全部」重合属预期。
     return view.release == 'unknown'
         ? release.isEmpty || release == 'unknown'
         : release == view.release;
@@ -178,6 +266,7 @@ List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
       drama.id: switch (view.sort) {
         CatalogSort.heat => catalogMetric(drama.heat),
         CatalogSort.views => catalogMetric(drama.views),
+        CatalogSort.score => scoreValue(drama.score),
         CatalogSort.date => DateTime.tryParse(
           drama.onlineDate,
         )?.millisecondsSinceEpoch,

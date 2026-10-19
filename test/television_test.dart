@@ -1,6 +1,7 @@
 import 'package:duanju_app/app_layout.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/main.dart';
+import 'package:duanju_app/playback_launch_screen.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/remote_widgets.dart';
 import 'package:flutter/foundation.dart';
@@ -126,27 +127,27 @@ void main() {
           Focus.of(tester.element(title)).requestFocus();
           await tester.pumpAndSettle();
           await press(tester, LogicalKeyboardKey.select);
+          // 菜单光标停在当前源（首项），下移两格选中「芽果」。
           await press(tester, LogicalKeyboardKey.arrowDown);
           await press(tester, LogicalKeyboardKey.arrowDown);
           await press(tester, LogicalKeyboardKey.select);
         }
+        // TV 单击站源菜单按分组列出源（首项=当前源），遥控下移两格选「芽果」；
+        // 黄豆属其他分组，单击菜单不可达，故期望值按菜单实际可达源断言。
         expect(
           repository.requests.last,
-          SourceSite.values.length > 1 ? SourceSite.values[1].id : 'hongguo',
+          SourceSite.values.length > 1 ? 'yaguo' : 'hongguo',
         );
         focusRemote(tester, find.byKey(ValueKey(FixtureRepository.free.id)));
         await tester.pumpAndSettle();
+        // 剧卡 select 走薄壳直播：启动浮层解析续播集，VIP 集先弹确认。
         await press(tester, LogicalKeyboardKey.select);
         expect(repository.detailCalls, 1);
-        expect(find.byKey(const ValueKey('start-play')), findsOneWidget);
-        focusRemote(tester, find.byKey(const ValueKey('episode-1')));
-        await tester.pumpAndSettle();
-        await press(tester, LogicalKeyboardKey.select);
         expect(find.text('这是一集 VIP 内容'), findsOneWidget);
+        // 取消确认后启动浮层收起，焦点应回到起点的剧卡。
         await press(tester, LogicalKeyboardKey.goBack);
         expect(find.text('这是一集 VIP 内容'), findsNothing);
-        expect(FocusManager.instance.primaryFocus?.debugLabel, 'remote-1');
-        await press(tester, LogicalKeyboardKey.escape);
+        expect(find.byType(PlaybackLaunchScreen), findsNothing);
         expect(
           FocusManager.instance.primaryFocus?.debugLabel,
           'remote-${FixtureRepository.free.id}',

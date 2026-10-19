@@ -134,6 +134,10 @@ func (manager *nativeDownloads) downloadBundle(ctx context.Context, media provid
 			return "", errors.New("下载播放列表无效")
 		}
 		lines, height, master := nativeHLSSelect(strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n"), quality)
+		if !master {
+			// 与播放一致：下载前剔除源站注入的广告分片段。
+			lines = nativePruneAdSegments(lines, base)
+		}
 		if depth == 0 && height > 0 {
 			bundle.quality = height
 		}

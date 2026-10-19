@@ -5,6 +5,7 @@ import 'download_preferences.dart';
 import 'episode_browser.dart';
 import 'glass.dart';
 import 'remote_widgets.dart';
+import 'app_icons.dart';
 
 class DownloadSelection {
   const DownloadSelection(this.episodes, this.quality);
@@ -107,14 +108,16 @@ class _DownloadPickerState extends State<DownloadPicker> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-              Padding(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 嵌入模式（播放器底部标签页）高度有限：标题并入工具行、
+              // 提示文本只在整页模式显示，保证分集网格有可用高度。
+              if (!widget.embedded)
+                Padding(
                 padding: EdgeInsets.fromLTRB(
-                  widget.embedded ? 10 : 18,
-                  widget.embedded ? 6 : 8,
+                  18,
+                  8,
                   widget.embedded ? 10 : 18,
                   0,
                 ),
@@ -151,6 +154,12 @@ class _DownloadPickerState extends State<DownloadPicker> {
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    if (widget.embedded)
+                      Text(
+                        '下载选集',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
                     TextButton(
                       onPressed: _submitting ? null : () => _select(episodes),
                       child: const Text('全选'),
@@ -192,10 +201,9 @@ class _DownloadPickerState extends State<DownloadPicker> {
                   ],
                 ),
               ),
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: widget.embedded ? 10 : 18,
-                ),
+              if (!widget.embedded)
+                Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18),
                 child: Text(
                   '保存源站原始视频；指定画质不可用时自动使用可用版本。',
                   style: TextStyle(
@@ -245,14 +253,13 @@ class _DownloadPickerState extends State<DownloadPicker> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.download_rounded),
+                      : AppIcon(AppIcons.download),
                   label: Text(
                     _submitting ? '正在加入下载…' : '加入下载 · ${_selected.length} 集',
                   ),
                 ),
               ),
             ],
-          ),
           ),
         ),
       ),

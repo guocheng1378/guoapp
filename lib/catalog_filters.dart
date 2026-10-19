@@ -3,9 +3,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
+import 'folme.dart';
 import 'glass.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 class CatalogFilters extends StatefulWidget {
   const CatalogFilters({
@@ -131,13 +134,17 @@ class _CatalogFiltersState extends State<CatalogFilters> {
                         Padding(
                           key: _anchors[entry.id],
                           padding: const EdgeInsets.only(right: 6),
-                          child: GlassChip(
-                            key: ValueKey('category-${entry.id}'),
-                            label: entry.name,
-                            selected: entry.id == widget.category,
-                            onTap: () => widget.onCategory(entry.id),
-                            // 胶囊视觉保持小米 ~32px，命中区撑到 48px。
-                            hitTarget: 48,
+                          // Folme 果冻按压：与顶栏胶囊岛同款手感
+                          // （按下 0.96、松手弹簧回弹）。
+                          child: FolmePress(
+                            child: GlassChip(
+                              key: ValueKey('category-${entry.id}'),
+                              label: entry.name,
+                              selected: entry.id == widget.category,
+                              onTap: () => widget.onCategory(entry.id),
+                              // 胶囊视觉保持小米 ~32px，命中区撑到 48px。
+                              hitTarget: 48,
+                            ),
                           ),
                         ),
                     ],
@@ -148,10 +155,7 @@ class _CatalogFiltersState extends State<CatalogFilters> {
           IconButton(
             tooltip: widget.error,
             onPressed: widget.onRetry,
-            icon: Icon(
-              Icons.refresh_rounded,
-              color: Theme.of(context).colorScheme.error,
-            ),
+            icon: AppIcon(AppIcons.refresh, color: Theme.of(context).colorScheme.error),
           ),
         if (widget.trailing != null) widget.trailing!,
       ],

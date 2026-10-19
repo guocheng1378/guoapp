@@ -6,12 +6,14 @@ import 'package:flutter/services.dart';
 import 'catalog_filters.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
+import 'featured_catalog.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_launch_screen.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class RecommendationsScreen extends StatefulWidget {
   const RecommendationsScreen({
@@ -47,6 +49,124 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
   bool _failedMore = false;
   String? _error;
   int _generation = 0;
+
+  // —— 多源精选卡 ——
+  // 数据逻辑见 featured_catalog.dart（按日期确定性轮换源 + 换一换 shift）。
+  // 只覆盖桌面/手机 sliver 版；TV 端 RemoteGrid 无 header 位，暂不展示。
+  static const double _featuredTileWidth = 150;
+  List<Drama> _featured = [];
+  String _featuredSource = '';
+  int _featuredShift = 0;
+  bool _featuredLoading = false;
+
+  String get _featuredName =>
+      SourceSite.byId(_featuredSource)?.name ?? _featuredSource;
+
+  Future<void> _loadFeatured() async {
+    // 推荐页走红果推荐：锚定当前站源，只在同类源之间轮换精选位；
+    // 黄果类锚点不走精选位（pickFeaturedSource 返回空串，直接跳过）。
+    // 首页轮播已改豆瓣选片（loadDoubanPicks），精选轮换只剩推荐页用。
+    final anchor = SourceSite.byId(widget.store.source) ?? SourceSite.hongguo;
+    final source = pickFeaturedSource(
+      widget.store,
+      anchor,
+      shift: _featuredShift,
+    );
+    if (source.isEmpty) return;
+    setState(() => _featuredLoading = true);
+    try {
+      final items = await loadFeatured(widget.repository, source);
+      if (!mounted) return;
+      setState(() {
+        _featuredSource = source;
+        _featured = items;
+        _featuredLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _featuredSource = source;
+        _featured = [];
+        _featuredLoading = false;
+      });
+    }
+  }
+
+  void _rotateFeatured() {
+    _featuredShift++;
+    _loadFeatured();
+  }
+
+  Widget _buildFeatured() {
+    if (!_featuredLoading && _featuredSource.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final sourceName = _featuredName;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '多源精选 · $sourceName',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _featuredLoading ? null : _rotateFeatured,
+                icon: AppIcon(AppIcons.refresh),
+                label: const Text('换一换'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_featuredLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(18),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (_featured.isEmpty)
+            Text(
+              '精选内容暂时拉取失败，可点击「换一换」试试其他站源。',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            SizedBox(
+              height: DramaTile.extentFor(context, _featuredTileWidth),
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _featured.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 12),
+                itemBuilder: (context, index) {
+                  final drama = _featured[index];
+                  return SizedBox(
+                    width: _featuredTileWidth,
+                    child: DramaTile(
+                      key: ValueKey('featured-${drama.id}'),
+                      drama: drama,
+                      repository: widget.repository,
+                      onTap: () => unawaited(
+                        openPlaybackDirectly(
+                          context,
+                          drama: drama,
+                          repository: widget.repository,
+                          store: widget.store,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -202,12 +322,12 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                                 : _hasMore
                                 ? RemoteButton(
                                     label: '继续推荐',
-                                    icon: Icons.auto_awesome_rounded,
+                                    icon: AppIcon(AppIcons.autoAwesome),
                                     onPressed: () => _load(more: true),
                                   )
                                 : RemoteButton(
                                     label: '刷新获取新推荐',
-                                    icon: Icons.refresh_rounded,
+                                    icon: AppIcon(AppIcons.refresh),
                                     onPressed: () => _load(force: true),
                                   ),
                           ),
@@ -243,6 +363,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                       controller: _scroll,
                       physics: const AlwaysScrollableScrollPhysics(),
                       slivers: [
+                        SliverToBoxAdapter(child: _buildFeatured()),
                         SliverPadding(
                           padding: const EdgeInsets.all(16),
                           sliver: SliverGrid(
@@ -280,9 +401,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                                   : _hasMore
                                   ? OutlinedButton.icon(
                                       onPressed: () => _load(more: true),
-                                      icon: const Icon(
-                                        Icons.auto_awesome_rounded,
-                                      ),
+                                      icon: AppIcon(AppIcons.autoAwesome),
                                       label: const Text('继续推荐'),
                                     )
                                   : TextButton(

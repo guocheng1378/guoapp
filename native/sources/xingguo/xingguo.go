@@ -70,8 +70,10 @@ func (s *Source) dramaFromNode(node map[string]any, base string) provider.Drama 
 	}
 	heat := provider.FindInt(node, "heat")
 	views := ""
+	heatLabel := ""
 	if heat > 0 {
 		views = strconv.Itoa(heat) + "万播放"
+		heatLabel = strconv.Itoa(heat)
 	}
 	return provider.Drama{
 		ID:           provider.DramaID(s.spec.ID, sourceKey),
@@ -81,6 +83,7 @@ func (s *Source) dramaFromNode(node map[string]any, base string) provider.Drama 
 		Intro:        provider.FindString(node, "introduction", "desc"),
 		Cover:        provider.Cover(base, node, "icon", "cover"),
 		EpisodeCount: json.Number(strconv.Itoa(provider.FindInt(node, "chapterCount", "total"))),
+		Heat:         heatLabel,
 		Views:        views,
 		ChannelName:  provider.SourceName(s.spec.ID),
 	}

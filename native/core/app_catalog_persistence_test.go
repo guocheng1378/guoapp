@@ -233,7 +233,7 @@ func TestNativeCatalogPreservesLargeLibraryAndPage501(t *testing.T) {
 	for index := range items {
 		items[index] = nativeDrama{ID: fmt.Sprintf("huangguoai:%d", index+1), Source: sourceHuangguoAI, Title: "合成目录"}
 	}
-	key := nativeCatalogKey(sourceHuangguoAI, "ai-duanju")
+	key := nativeCatalogKey(sourceHuangguoAI, "ai-duanju", "")
 	if err := engine.saveCatalogCache(key, &nativeCatalogResult{Items: items, Page: 500, HasMore: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestNativeCatalogPreservesLargeLibraryAndPage501(t *testing.T) {
 	if requested != "501" {
 		t.Fatal("catalog silently clamped the requested page", requested)
 	}
-	if err := engine.saveCatalogCache(nativeCatalogKey(sourceHuangguoAI, "ai-manju"), &nativeCatalogResult{
+	if err := engine.saveCatalogCache(nativeCatalogKey(sourceHuangguoAI, "ai-manju", ""), &nativeCatalogResult{
 		Items: []nativeDrama{{ID: "huangguoai:6001", Source: sourceHuangguoAI, Title: "第6001部"}, {ID: "huangguoai:6002", Source: sourceHuangguoAI, Title: "第6002部"}},
 		Page:  1,
 	}); err != nil {

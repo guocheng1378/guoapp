@@ -10,6 +10,7 @@ import 'local_store.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class SavedLibrary extends StatefulWidget {
   const SavedLibrary({
@@ -50,6 +51,34 @@ class SavedLibrary extends StatefulWidget {
 class _SavedLibraryState extends State<SavedLibrary> {
   final _search = TextEditingController();
   String _filter = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _healEpisodeCounts();
+  }
+
+  /// 存量自愈：早期版本把部分站源的「总条目/播放量」误当集数存进了追剧
+  /// 快照（卡片显示「共数万集」）。对可疑条目（episodes > 500）后台拉一次
+  /// 详情，用真实分集数覆盖；失败静默，不影响列表展示。
+  Future<void> _healEpisodeCounts() async {
+    final suspects = {
+      for (final drama in widget.store.favorites) drama.id: drama,
+      for (final entry in widget.store.history) entry.drama.id: entry.drama,
+    }.values.where((drama) => drama.episodes > 500).toList();
+    for (final drama in suspects) {
+      if (!mounted) return;
+      try {
+        final detail = await widget.repository.detail(drama);
+        if (!mounted) return;
+        if (detail.drama.episodes > 0) {
+          await widget.store.refreshDrama(detail.drama);
+        }
+      } catch (_) {
+        // 源不可用/受限等：静默跳过，用户打开详情时 merge 仍会修正。
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -119,7 +148,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
       ),
       badge: badge,
       subtitle: watched == null
-          ? SourceSite.byId(drama.source).name
+          ? (SourceSite.byId(drama.source)?.name ?? '未知源')
           : '第 ${watched.episode} 集 · ${formatPosition(watched.position)}',
     );
   }
@@ -166,7 +195,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
                 IconButton(
                   tooltip: '清空观看记录',
                   onPressed: _clearHistory,
-                  icon: const Icon(Icons.delete_outline_rounded),
+                  icon: AppIcon(AppIcons.delete),
                 ),
             ],
           ),
@@ -182,13 +211,13 @@ class _SavedLibraryState extends State<SavedLibrary> {
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               hintText: widget.history ? '搜索观看记录' : '搜索追剧',
-              prefixIcon: const Icon(Icons.search_rounded),
+              prefixIcon: AppIcon(AppIcons.search),
               suffixIcon: _search.text.isEmpty
                   ? null
                   : IconButton(
                       tooltip: '清空搜索',
                       onPressed: () => setState(_search.clear),
-                      icon: const Icon(Icons.close_rounded),
+                      icon: AppIcon(AppIcons.close),
                     ),
             ),
           ),
@@ -224,7 +253,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
               margin: EdgeInsets.zero,
               child: ListTile(
                 key: const ValueKey('continue-watching'),
-                leading: const Icon(Icons.play_circle_outline),
+                leading: AppIcon(AppIcons.playCircle),
                 title: Text(
                   '继续观看 · ${resume.drama.title}',
                   maxLines: 1,
@@ -246,8 +275,8 @@ class _SavedLibraryState extends State<SavedLibrary> {
             : '没有匹配的记录',
         message: all.isEmpty ? '去发现页，挑一部喜欢的短剧。' : '可以更换搜索词或筛选条件。',
         icon: widget.history
-            ? Icons.history_rounded
-            : Icons.bookmark_border_rounded,
+            ? AppIcon(AppIcons.history)
+            : AppIcon(AppIcons.bookmark),
       );
       return LayoutBuilder(
         builder: (context, constraints) {

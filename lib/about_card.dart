@@ -1,15 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
+import 'app_icons.dart';
 
 /// 手机端「关于」轻量浮卡：锚定顶栏 ⋯ 岛，无 barrier 压暗、
 /// 小玻璃面贴锚点下方，点空白处关闭（与排序筛选浮卡同族，
 /// 替代居中大玻璃 AboutDialog）。TV 端仍走玻璃弹窗保焦点导航。
+///
+/// 彩蛋：头部（图标/应用名/版本）在 1.6 秒内连点 5 次触发
+/// [onActivate]（弹出激活页，验证通过后解锁隐藏站源——由回调方实现），
+/// 触发后自动关闭浮卡。
 Future<void> showAboutCard({
   required BuildContext context,
   required GlobalKey anchorKey,
   required String appName,
   required String version,
+  VoidCallback? onActivate,
 }) async {
   final anchorContext = anchorKey.currentContext;
   final overlayBox =
@@ -21,7 +29,6 @@ Future<void> showAboutCard({
   final anchorSize = anchorBox.size;
   final screenSize = overlayBox.size;
 
-  final dark = Theme.of(context).brightness == Brightness.dark;
   const cardWidth = 248.0;
   var left = topLeft.dx + anchorSize.width - cardWidth;
   left = left.clamp(12.0, screenSize.width - cardWidth - 12);
@@ -52,6 +59,56 @@ Future<void> showAboutCard({
     },
     pageBuilder: (dialogContext, animation, secondaryAnimation) {
       final scheme = Theme.of(dialogContext).colorScheme;
+      var taps = 0;
+      Timer? tapTimer;
+      void registerTap() {
+        taps++;
+        tapTimer?.cancel();
+        tapTimer = Timer(const Duration(milliseconds: 1600), () => taps = 0);
+        if (taps < 5) return;
+        tapTimer?.cancel();
+        taps = 0;
+        onActivate?.call();
+        Navigator.of(dialogContext).pop();
+      }
+
+      final header = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: registerTap,
+        child: Row(
+          children: [
+            AppIcon(AppIcons.playCircleFilled, size: 32, color: Color(0xFFFF765F)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    appName,
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  Text(
+                    version,
+                    style: Theme.of(dialogContext)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
       return Stack(
         children: [
           Positioned(
@@ -77,43 +134,7 @@ Future<void> showAboutCard({
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const Icon(
-                                Icons.play_circle_filled_rounded,
-                                size: 32,
-                                color: Color(0xFFFF765F),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      appName,
-                                      style: Theme.of(dialogContext)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                    Text(
-                                      version,
-                                      style: Theme.of(dialogContext)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: scheme.onSurfaceVariant,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+                          header,
                           const SizedBox(height: 12),
                           Text(
                             '独立运行，打开即可浏览和播放。观看记录与追剧收藏保存在当前设备。',

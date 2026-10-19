@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:duanju_app/app_build.dart';
 import 'package:duanju_app/core_bridge.dart';
+import 'package:duanju_app/folme.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/main.dart';
 import 'package:duanju_app/models.dart';
@@ -46,15 +47,15 @@ void main() {
         DuanjuApp(repository: repository, store: await localStore()),
       );
       await tester.pumpAndSettle();
-      final indicator = find.byType(RefreshIndicator);
+      final indicator = find.byType(FogRefresh);
       expect(indicator, findsOneWidget);
       for (final fails in [false, true]) {
         final pending = Completer<CatalogPage>();
         repository.pendingCatalog = pending;
         final requests = repository.requests.length;
-        // widget test 的手势链路触发不了 RefreshIndicator（框架层限制），
+        // widget test 的手势链路触发不了刷新胶囊（框架层限制），
         // 改用公开 API show() 驱动同一条 onRefresh 链路。
-        tester.state<RefreshIndicatorState>(indicator).show();
+        tester.state<FogRefreshState>(indicator).show();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
         expect(repository.requests.length, greaterThan(requests));

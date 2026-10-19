@@ -27,6 +27,26 @@ const (
 	SourceWsyzy            = "wsyzy"
 	SourceSorani           = "sorani"
 	SourceDongpiandi       = "dongpiandi"
+
+	// 成人源（CategoryAdult，maccms 采集站，Dart 侧 isRestricted 默认关闭）。
+	// 2026-10-19 探针剔除 7 个死源：maodou/naixx/shayu/jingpin（后端无响应）、
+	// lajiao/xiangjiao（整站超时）、xibao（TLS 证书无效）。
+	SourceZY155   = "zy155"
+	SourceYutu    = "yutu"
+	SourceFanhao  = "fanhao"
+	SourceLsbzy   = "lsbzy"
+	SourceHsck    = "hsck"
+	SourceDanaizi = "danaizi"
+	SourceJkun    = "jkun"
+	SourceLebo    = "lebo"
+	SourceSenlin  = "senlin"
+	SourceDoudou  = "doudou"
+	SourceDidi    = "didi"
+	SourceHeiliao = "heiliao"
+	SourceTaohua  = "taohua"
+	SourceSouav   = "souav"
+	SourceCkzy    = "ckzy"
+	SourceAosika  = "aosika"
 )
 
 type sourceEntry struct {
@@ -159,5 +179,86 @@ var sourceEntries = []sourceEntry{
 		spec:    Spec{ID: SourceDongpiandi, Name: "真果·鉴", Base: "https://dongpiandi.ai", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
 		aliases: []string{"dongpiandi", "真果·鉴", "dongpiandi.ai"},
 		hosts:   []string{"dongpiandi.ai", "www.dongpiandi.ai"},
+	},
+	// ---- 成人源（CategoryAdult，均为 maccms_api 采集站；受限名单见 models.dart）----
+	{
+		spec:    Spec{ID: SourceZY155, Name: "155", Base: "https://155api.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"zy155", "155", "155api.com", "155zy2.com"},
+		hosts:   []string{"155api.com", "155zy2.com"},
+	},
+	{
+		spec:    Spec{ID: SourceYutu, Name: "玉兔", Base: "https://apiyutu.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"yutu", "apiyutu.com"},
+		hosts:   []string{"apiyutu.com"},
+	},
+	{
+		spec:    Spec{ID: SourceFanhao, Name: "番号", Base: "http://fhapi9.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"fanhao", "fhapi9.com"},
+		hosts:   []string{"fhapi9.com"},
+	},
+	{
+		spec:    Spec{ID: SourceLsbzy, Name: "老色逼", Base: "https://apilsbzy1.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"lsbzy", "apilsbzy1.com"},
+		hosts:   []string{"apilsbzy1.com"},
+	},
+	{
+		spec:    Spec{ID: SourceHsck, Name: "黄色仓库", Base: "https://hsckzy.xyz", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"hsck", "hsckzy.xyz"},
+		hosts:   []string{"hsckzy.xyz"},
+	},
+	{
+		spec:    Spec{ID: SourceDanaizi, Name: "大奶子", Base: "https://apidanaizi.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"danaizi", "apidanaizi.com"},
+		hosts:   []string{"apidanaizi.com"},
+	},
+	{
+		spec:    Spec{ID: SourceJkun, Name: "jkun", Base: "https://jkunzyapi.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"jkun", "jkunzyapi.com"},
+		hosts:   []string{"jkunzyapi.com"},
+	},
+	{
+		spec:    Spec{ID: SourceLebo, Name: "乐播", Base: "https://lbapi9.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"lebo", "lbapi9.com"},
+		hosts:   []string{"lbapi9.com"},
+	},
+	{
+		spec:    Spec{ID: SourceSenlin, Name: "森林", Base: "https://beiyong.slapibf.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"senlin", "slapibf.com", "beiyong.slapibf.com"},
+		hosts:   []string{"beiyong.slapibf.com", "slapibf.com"},
+	},
+	{
+		spec:    Spec{ID: SourceDoudou, Name: "豆豆", Base: "https://api.douapi.cc", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"doudou", "doudouzy.com", "api.douapi.cc"},
+		hosts:   []string{"api.douapi.cc", "doudouzy.com"},
+	},
+	{
+		spec:    Spec{ID: SourceDidi, Name: "滴滴", Base: "https://api.ddapi.cc", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"didi", "didizy.com", "api.ddapi.cc"},
+		hosts:   []string{"api.ddapi.cc", "didizy.com"},
+	},
+	{
+		spec:    Spec{ID: SourceHeiliao, Name: "黑料", Base: "https://www.heiliaozyapi.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"heiliao", "heiliaozy.cc", "heiliaozyapi.com"},
+		hosts:   []string{"www.heiliaozyapi.com", "heiliaozyapi.com", "heiliaozy.cc"},
+	},
+	{
+		spec:    Spec{ID: SourceTaohua, Name: "桃花", Base: "https://thzy1.me", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"taohua", "thzy1.me", "thzy8.me"},
+		hosts:   []string{"thzy1.me", "thzy8.me"},
+	},
+	{
+		spec:    Spec{ID: SourceSouav, Name: "souav", Base: "https://api.souavzyw.net", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"souav", "souavzyw.com", "api.souavzyw.net"},
+		hosts:   []string{"api.souavzyw.net", "souavzyw.com"},
+	},
+	{
+		spec:    Spec{ID: SourceCkzy, Name: "CK", Base: "https://ckzy.me", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Paged: true, RequiresAllSources: true},
+		aliases: []string{"ckzy", "ckzy.me"},
+		hosts:   []string{"ckzy.me"},
+	},
+	{
+		spec:    Spec{ID: SourceAosika, Name: "奥斯卡", Base: "https://aosikazy.com", Kind: "maccms_api", Category: CategoryAdult, Family: FamilyDuanju, Paged: true, RequiresAllSources: true},
+		aliases: []string{"aosika", "aosikazy.com"},
+		hosts:   []string{"aosikazy.com"},
 	},
 }

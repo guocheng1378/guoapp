@@ -1,13 +1,21 @@
 import 'package:duanju_app/core_bridge.dart';
 import 'package:duanju_app/models.dart';
+import 'package:duanju_app/ranking_models.dart';
 
 class FixtureRepository extends AppRepository {
   int detailCalls = 0;
   bool fail = false;
   final requests = <String>[];
+  // 目录查询词流水（豆瓣搜片断言「不重搜」用，与精选位拉取分离）。
+  final queries = <String>[];
   final pages = <int>[];
   final forced = <bool>[];
   final cachedPages = <String, CatalogPage>{};
+  // 豆瓣搜片测试：rankingPage 置空时 rankings 走基类抛错（模拟变体无
+  // 榜单 Provider）；queryResults 以查询词为键返回命中条目。
+  int rankingsCalls = 0;
+  RankingPage? rankingPage;
+  final Map<String, List<Drama>> queryResults = {};
   static const free = Drama(
     id: 'hongguo:100',
     source: 'hongguo',
@@ -25,6 +33,19 @@ class FixtureRepository extends AppRepository {
   @override
   Future<void> initialize() async {}
   @override
+  Future<RankingPage> rankings(
+    String board, {
+    int page = 1,
+    bool force = false,
+  }) async {
+    rankingsCalls++;
+    final stub = rankingPage;
+    if (stub == null) {
+      return super.rankings(board, page: page, force: force);
+    }
+    return stub;
+  }
+  @override
   Future<CatalogPage> cached(String source, {String category = ''}) async =>
       cachedPages[source] ?? CatalogPage([]);
   @override
@@ -36,13 +57,20 @@ class FixtureRepository extends AppRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) async {
     requests.add(source);
+    // 仅记录搜索查询（目录拉取 query 为空不记），供「不重搜」断言用。
+    if (query.isNotEmpty) queries.add(query);
     pages.add(page);
     forced.add(force);
     if (fail) {
       throw AppFailure('合成网络错误');
+    }
+    final hits = queryResults[query];
+    if (query.isNotEmpty && hits != null) {
+      return CatalogPage(hits, page: page, hasMore: false);
     }
     return CatalogPage(
       [

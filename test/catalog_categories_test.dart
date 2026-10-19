@@ -61,6 +61,7 @@ class CategoryRepository extends FixtureRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) async {
     categoryRequests.add('$source|$category|$page');
@@ -100,6 +101,11 @@ class CategoryRepository extends FixtureRepository {
     int page = 1,
     bool force = false,
   }) async {
+    // 豆瓣榜不桩：首页轮播的豆瓣搜片会拿榜单剧名搜站源，桩了会往
+    // categoryRequests 混入查询式目录请求，干扰「只加载自己目录」。
+    if (board.startsWith('douban-')) {
+      return super.rankings(board, page: page, force: force);
+    }
     rankRequests.add('$board|$page|$force');
     return RankingPage(
       items: [
@@ -186,13 +192,35 @@ void main() {
         source: 'huangguoai',
         enableSwitches: ['huangguoai', 'cloudfront'],
       );
-      expect(find.text('黄果 AI'), findsOneWidget);
-      expect(find.text('黄果旧版'), findsNothing);
+      // 黄果类锚点不走精选位（pickFeaturedSource 返回空串）：轮播回退
+      // 自家条目，卡片副标题同样标当前源名——顶栏之外多一处「黄果 AI」。
+      expect(find.text('黄果 AI'), findsNWidgets(2));
+      expect(
+        find.ancestor(
+          of: find.text('黄果 AI'),
+          matching: find.byKey(const ValueKey('home-carousel')),
+        ),
+        findsOneWidget,
+      );
+      // 兄弟黄果源不再进轮播（黄果锚点对精选位整体关闭）。
+      expect(
+        find.ancestor(
+          of: find.text('黄果旧版'),
+          matching: find.byKey(const ValueKey('home-carousel')),
+        ),
+        findsNothing,
+      );
       expect(
         repository.categoryRequests.toSet(),
         contains('huangguoai||1'),
       );
-      expect(repository.categoryRequests, isNot(contains('cloudfront||1')));
+      // 分类浏览只加载当前入口的目录；黄果类锚点不走精选位，轮播不再
+      // 拉兄弟入口（cloudfront）的首页目录。
+      expect(
+        repository.categoryRequests
+            .where((request) => request == 'cloudfront||1'),
+        isEmpty,
+      );
       expect(find.text('AI成人短剧'), findsNothing);
       expect(find.text('AI 短剧'), findsOneWidget);
       Future<void> choose(String name) async {
@@ -269,8 +297,8 @@ void main() {
       final browser = CatalogBrowser(repository);
       // 黄果系源 groupId 已按源拆分，测试组手动构造。
       final group = SourceGroup('huangguo', '黄果', [
-        SourceSite.byId('huangguoai'),
-        SourceSite.byId('cloudfront'),
+        SourceSite.byId('huangguoai')!,
+        SourceSite.byId('cloudfront')!,
       ]);
       final first = await browser.load(group);
       expect(first.items.length, 1);
@@ -315,7 +343,14 @@ void main() {
         find.byKey(const ValueKey('rank-21-hongguo:rank:hongguo-hot:2')),
         findsNothing,
       );
-      expect(repository.categoryRequests, ['hongguo||1']);
+      // 全源变体下轮播精选源会自带一次分类请求；除此之外，进入榜单
+      // 不得触发任何 hongguo 分类加载。
+      expect(repository.categoryRequests, contains('hongguo||1'));
+      expect(
+        repository.categoryRequests
+            .where((request) => request.startsWith('hongguo|')),
+        ['hongguo||1'],
+      );
       expect(tester.takeException(), isNull);
     },
   );

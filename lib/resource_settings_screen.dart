@@ -7,6 +7,7 @@ import 'local_store.dart';
 import 'resource_settings.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'app_icons.dart';
 
 class DownloadPreferencesScreen extends StatelessWidget {
   const DownloadPreferencesScreen({super.key, required this.store});
@@ -249,11 +250,9 @@ class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
                             tooltip: _showProxy ? '隐藏代理地址' : '显示代理地址',
                             onPressed: () =>
                                 setState(() => _showProxy = !_showProxy),
-                            icon: Icon(
-                              _showProxy
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                            ),
+                            icon: _showProxy
+                                ? AppIcon(AppIcons.visibilityOff)
+                                : AppIcon(AppIcons.visibility),
                           ),
                         ),
                       ),

@@ -324,8 +324,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('应用'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('测试短剧'));
-    await tester.pumpAndSettle();
+    // 合集保持展开态：再 tap 一次「测试短剧」会收起合集，任务卡随之离树。
     expect(find.byKey(const ValueKey('download-task-1')), findsNothing);
 
     await tester.tap(find.byWidget(_episodePopup(tester, '2')));
@@ -496,7 +495,16 @@ void main() {
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.select);
       await tester.pumpAndSettle();
-      focusRemote(tester, find.text('测试短剧').first);
+      // focusRemote 的 finder 需要容器型目标（在其后代中找焦点组件），
+      // 对 Text 直接查找恒为空，因此用合集卡上的 key 定位。
+      focusRemote(
+        tester,
+        find.byKey(
+          ValueKey('download-collection-${FixtureRepository.free.id}'),
+        ),
+      );
+      // requestFocus 在帧末才生效，不 pump 就按键会打到旧焦点（工具栏）。
+      await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.select);
       await tester.pumpAndSettle();
       focusRemote(tester, find.byKey(const ValueKey('download-task-1')));

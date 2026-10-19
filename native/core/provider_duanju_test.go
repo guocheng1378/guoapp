@@ -33,10 +33,18 @@ func TestDuanjuRegistryKeepsDistinctIdentitiesFromExistingSources(t *testing.T) 
 		seen[source] = true
 	}
 	catalog := duanjuCatalogSpecs()
-	if len(catalog) != 19 {
-		t.Fatalf("duanju catalog should register 19 sources, got %d", len(catalog))
-	}
+	// 排序路由测试（catalog_sorter_test.go）会向注册表注入 sorttest-* 假源，
+	// 真实源计数与身份断言需排除它们。
+	real := make([]provider.Spec, 0, len(catalog))
 	for _, spec := range catalog {
+		if !strings.HasPrefix(spec.ID, "sorttest-") {
+			real = append(real, spec)
+		}
+	}
+	if len(real) != 35 {
+		t.Fatalf("duanju catalog should register 35 sources, got %d", len(real))
+	}
+	for _, spec := range real {
 		if seen[spec.ID] {
 			t.Fatalf("duanju source %q collides with an existing source id", spec.ID)
 		}
@@ -81,7 +89,7 @@ func TestDuanjuMaccmsAPIParsesCatalogDetailAndSearch(t *testing.T) {
 	})
 	d.providerHosts[sourceYingshigongchang] = server.URL
 
-	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), sourceYingshigongchang, 1, "46")
+	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), sourceYingshigongchang, 1, "46", "")
 	if err != nil || len(items) != 1 || !more {
 		t.Fatalf("maccms-api catalog failed: %+v %v", items, err)
 	}
@@ -124,7 +132,7 @@ func TestDuanjuMaccmsAPIRequestUsesListTypeAndPage(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"code":1,"page":2,"pagecount":5,"total":120,"list":[{"vod_id":90,"vod_name":"翻页样本","type_id":46,"type_name":"短剧"}]}`))
 	})
 	d.providerHosts[source360zy] = server.URL
-	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), source360zy, 2, "46")
+	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), source360zy, 2, "46", "")
 	if err != nil || len(items) != 1 || !more {
 		t.Fatalf("maccms-api paged catalog failed: %+v %v", items, err)
 	}
@@ -160,6 +168,23 @@ func TestDuanjuMaccmsAPIPrefersDirectMediaSource(t *testing.T) {
 	}
 }
 
+func TestDuanjuMaccmsAPIFallsBackToPageLinesWhenNoDirectMedia(t *testing.T) {
+	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"code":1,"list":[{"vod_id":91,"vod_name":"网页线路样本","type_id":46,"type_name":"短剧","vod_pic":"https://pic.example.cn/c.jpg","vod_play_from":"laoyweb","vod_play_url":"第1集$https://share.example.cn/play/91-1-1.html#第2集$https://share.example.cn/play/91-1-2.html"}]}`))
+	})
+	d.providerHosts[sourceYingshigongchang] = server.URL
+	_, chapters, err := d.fetchDuanjuDetail(context.Background(), sourceYingshigongchang, "91")
+	if err != nil || len(chapters) != 2 {
+		t.Fatalf("maccms-api page-line fallback failed: %+v %v", chapters, err)
+	}
+	for _, chapter := range chapters {
+		if chapter.VideoURL != "" || chapter.PageURL == "" {
+			t.Fatalf("maccms-api page-line chapters should carry PageURL only: %+v", chapter)
+		}
+	}
+}
+
 func TestDuanjuSoraniParsesCatalogDetailAndSearch(t *testing.T) {
 	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -177,7 +202,7 @@ func TestDuanjuSoraniParsesCatalogDetailAndSearch(t *testing.T) {
 	})
 	d.cfg.SoraniAPIURL = server.URL
 
-	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), sourceSorani, 1, "")
+	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), sourceSorani, 1, "", "")
 	if err != nil || len(items) != 1 || !more {
 		t.Fatalf("sorani catalog failed: %+v %v", items, err)
 	}

@@ -19,6 +19,8 @@ import 'sources_screen.dart';
 import 'episode_browser.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 class DetailScreen extends StatefulWidget {
   const DetailScreen({
@@ -340,7 +342,7 @@ class _DetailScreenState extends State<DetailScreen> {
             style: IconButton.styleFrom(
               minimumSize: const Size(52, 52),
             ),
-            icon: const Icon(Icons.download_rounded),
+            icon: AppIcon(AppIcons.download),
           ),
           const SizedBox(width: 12),
         ],
@@ -359,7 +361,7 @@ class _DetailScreenState extends State<DetailScreen> {
             onPressed: !allowed || _loading || episodes.isEmpty
                 ? null
                 : () => _play(resumeIndex, resume: true),
-            icon: const Icon(Icons.play_arrow_rounded, size: 26),
+            icon: AppIcon(AppIcons.play, size: 26),
             label: Text(
               watched != null && episodes.isNotEmpty
                   ? '继续播放 · 第 ${episodes[resumeIndex].number} 集'
@@ -615,7 +617,7 @@ class _DetailScreenState extends State<DetailScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                Icon(Icons.grid_view_rounded, color: colors.onSurfaceVariant),
+                AppIcon(AppIcons.gridView, color: colors.onSurfaceVariant),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -629,11 +631,9 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
                 Text(expanded ? '收起' : '展开'),
                 const SizedBox(width: 2),
-                Icon(
-                  expanded
-                      ? Icons.expand_less_rounded
-                      : Icons.expand_more_rounded,
-                ),
+                expanded
+                    ? AppIcon(AppIcons.expandLess)
+                    : AppIcon(AppIcons.expandMore),
               ],
             ),
           ),
@@ -688,7 +688,7 @@ class _DetailScreenState extends State<DetailScreen> {
   Widget _overview(Drama drama) {
     final colors = Theme.of(context).colorScheme;
     final meta = [
-      SourceSite.byId(drama.source).name,
+      SourceSite.byId(drama.source)?.name ?? '未知源',
       if (drama.episodes > 0) '共 ${drama.episodes} 集',
       if (drama.releaseStatus.isNotEmpty && drama.releaseStatus != 'unknown')
         drama.releaseLabel,
@@ -858,11 +858,7 @@ class _DetailScreenState extends State<DetailScreen> {
                         ),
                         if (notices[entry.drama.id]?.read == false) ...[
                           const SizedBox(width: 6),
-                          Icon(
-                            Icons.fiber_new_rounded,
-                            size: 18,
-                            color: colors.primary,
-                          ),
+                          AppIcon(AppIcons.fiberNew, size: 18, color: colors.primary),
                         ],
                       ],
                     ),
@@ -928,18 +924,15 @@ class _DetailScreenState extends State<DetailScreen> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  state?.status == FollowStatus.watched
-                      ? Icons.check_circle_outline
-                      : state == null
-                      ? Icons.bookmark_add_outlined
-                      : Icons.bookmark_rounded,
-                  size: 20,
-                ),
+                state?.status == FollowStatus.watched
+                    ? AppIcon(AppIcons.checkCircle, size: 20)
+                    : state == null
+                    ? AppIcon(AppIcons.bookmarkAdd, size: 20)
+                    : AppIcon(AppIcons.bookmark, filled: true, size: 20),
                 const SizedBox(width: 8),
                 Text(state?.label ?? '加入追剧'),
                 const SizedBox(width: 4),
-                const Icon(Icons.expand_more_rounded, size: 18),
+                AppIcon(AppIcons.expandMore, size: 18),
               ],
             ),
           ),

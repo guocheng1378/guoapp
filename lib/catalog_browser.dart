@@ -16,6 +16,46 @@ String categoryName(String name) {
   };
 }
 
+/// 首页「题材」本地筛选词表（local: 类目）。不依赖源站分类上报——
+/// 无论条目带不带分类字段，筛选条都固定提供这些题材，匹配见
+/// [matchesLocalGenre]：分类/标签/标题/简介任一命中即算。
+///
+/// 短剧与视频的内容类型不同，词表按组的内容类型分别下发：
+/// 短剧组（含混合组）给短剧题材词，纯视频组另外给影视题材词。
+const shortDramaGenreCatalog = [
+  '总裁', '战神', '赘婿', '甜宠', '逆袭', '闪婚', '复仇', '重生',
+  '穿越', '萌宝', '豪门', '神豪', '玄幻', '都市', '古装', '年代',
+  '追妻', '马甲', '神医', '离婚', '乡村', '民国', '女帝', '先婚后爱',
+];
+
+/// 影视类站源（maccms 系）的题材/类型词：按片单类型筛选。
+const videoGenreCatalog = [
+  '动作', '喜剧', '悬疑', '科幻', '恐怖', '惊悚', '爱情', '战争',
+  '犯罪', '动画', '纪录', '奇幻', '冒险', '剧情', '武侠', '家庭',
+  '历史', '音乐', '传记', '运动',
+];
+
+/// 按组的内容类型挑选题材词：纯视频组只用影视词，其余情况给短剧词，
+/// 混合组两套都给。
+List<String> genreCatalogFor(SourceGroup group) {
+  final short = group.sources.any((source) => source.isShortDrama);
+  final video = group.sources.any((source) => source.isVideoSource);
+  return [
+    if (short || !video) ...shortDramaGenreCatalog,
+    if (video) ...videoGenreCatalog,
+  ];
+}
+
+/// 题材本地匹配：优先命中条目的分类字段（源站 genre 的规范化名），
+/// 其次标签；标题/简介兜底（「战神归来」标题即含题材词）。
+bool matchesLocalGenre(Drama drama, String genre) {
+  if (categoryName(drama.category) == genre) return true;
+  for (final tag in drama.tags) {
+    if (tag.contains(genre)) return true;
+  }
+  return drama.title.contains(genre) || drama.description.contains(genre);
+}
+
 class _CatalogChoice {
   _CatalogChoice(this.category);
   final CatalogCategory category;
@@ -145,10 +185,23 @@ class CatalogBrowser {
     return choices.values.toList();
   }
 
-  List<CatalogCategory> categories(SourceGroup group) => [
-    CatalogCategory.all,
-    for (final choice in _choices(group)) choice.category,
-  ];
+  List<CatalogCategory> categories(SourceGroup group) {
+    final known = _choices(group)
+        .map((choice) => choice.category.name)
+        .toSet()
+      // 「未分类」是空 category 的兜底名，不算源站自带分组。
+      ..remove(categoryName(''));
+    return [
+      CatalogCategory.all,
+      for (final choice in _choices(group)) choice.category,
+      // 固定题材词表只作兜底：源站自己上报过分类（条目带分类字段）时
+      // 不再追加提示词分组，避免与源自带分组重复/冲突；完全无分类的
+      // 源（如部分 maccms 采集站）才下发词表。
+      if (known.isEmpty)
+        for (final genre in genreCatalogFor(group))
+          CatalogCategory('local:$genre', genre, local: true),
+    ];
+  }
 
   _CatalogChoice? _choice(SourceGroup group, String category) => _choices(
     group,
@@ -158,6 +211,7 @@ class CatalogBrowser {
     SourceGroup group, {
     String category = '',
     String query = '',
+    String sort = '',
     bool more = false,
     bool force = false,
     bool useCache = false,
@@ -179,7 +233,9 @@ class CatalogBrowser {
         : {for (final source in group.sources) source.id: ''};
     final key =
         '${group.sources.map((s) => s.id).join(',')}|'
-        '${choice?.category.local == false ? category : ''}|$query';
+        '${choice?.category.local == false ? category : ''}|$query|'
+        // 服务端排序参与会话隔离：不同排序各自缓存页序，切换排序即切换会话。
+        '$sort';
     final session = _sessions.putIfAbsent(key, _CatalogSession.new);
     final generation = ++session.generation;
     final failures = <String, String>{};
@@ -259,6 +315,7 @@ class CatalogBrowser {
           source,
           category: requests[source]!,
           query: query,
+          sort: sort,
           page: page,
           force: force,
         );
@@ -272,7 +329,7 @@ class CatalogBrowser {
         entry.page = result.page;
         entry.nextPage = result.warning.isEmpty ? result.page + 1 : page;
         entry.hasMore =
-            (query.isEmpty || SourceSite.byId(source).pagedSearch) &&
+            (query.isEmpty || (SourceSite.byId(source)?.pagedSearch ?? false)) &&
             (result.hasMore || result.warning.isNotEmpty);
         entry.fresh = result.fresh && result.warning.isEmpty;
         if (query.isEmpty) _remember(source, result.items);
@@ -284,7 +341,8 @@ class CatalogBrowser {
       } catch (error) {
         if (generation != session.generation) return;
         entry.nextPage = page;
-        entry.hasMore = query.isEmpty || SourceSite.byId(source).pagedSearch;
+        entry.hasMore =
+            query.isEmpty || (SourceSite.byId(source)?.pagedSearch ?? false);
         entry.fresh = false;
         if (force) entry.items = [];
         failures[source] = error.toString();

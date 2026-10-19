@@ -225,6 +225,7 @@ abstract class AppRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   });
   Future<CatalogPage> cached(String source, {String category = ''});
@@ -234,6 +235,90 @@ abstract class AppRepository {
   Future<PlaybackPlan> fallback(PlaybackPlan current);
   Future<void> cancelPlayback();
   Future<void> release(String session);
+}
+
+/// 豆瓣图床 img1-9.doubanio.com 是腾讯 EdgeOne 且开 Bot 管理：Go 引擎
+/// （tls-client Chrome 指纹）在手机端被判定为爬虫，返回 ~1KB 的
+/// EO_Bot_Ssid JS 挑战页（HTTP 200）而非海报。Dart dart:io HttpClient
+/// 是 BoringSSL 指纹（与手机 curl 同族，实测 img9 放行），因此豆瓣条目
+/// 的封面在 Dart 侧直接下载，失败再回落 Go 原路兜底。
+class DoubanCoverLoader {
+  static const _minImageBytes = 4096;
+  static final _pending = <String, Future<String>>{};
+  static final _failed = <String>{};
+  static Directory? _dir;
+
+  static bool handles(String cover) => cover.contains('.doubanio.com');
+
+  static Future<String> load(Drama drama, {bool force = false}) async {
+    final url = drama.cover;
+    if (!handles(url)) return '';
+    if (!force && _failed.contains(url)) return '';
+    final existing = _pending[url];
+    if (existing != null) return existing;
+    final future = _download(url, force: force);
+    _pending[url] = future;
+    try {
+      final result = await future;
+      if (result.isEmpty && !force) _failed.add(url);
+      return result;
+    } finally {
+      _pending.remove(url);
+    }
+  }
+
+  static Future<Directory> _ensureDir() async {
+    final cached = _dir;
+    if (cached != null) return cached;
+    final base = await getTemporaryDirectory();
+    final dir = Directory(path.join(base.path, 'douban_covers'));
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return _dir = dir;
+  }
+
+  static Future<String> _download(String url, {bool force = false}) async {
+    final file = File(
+      path.join((await _ensureDir()).path,
+          'db_${url.hashCode.toUnsigned(0x7fffffff)}.jpg'),
+    );
+    if (!force && await file.exists()) {
+      final stat = await file.stat();
+      if (stat.size > _minImageBytes) return file.path;
+      await file.delete();
+    }
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/150.0.0.0 Mobile Safari/537.36',
+      );
+      request.headers
+          .set(HttpHeaders.refererHeader, 'https://movie.douban.com/');
+      final response = await request.close().timeout(
+            const Duration(seconds: 15),
+          );
+      if (response.statusCode != 200) return '';
+      final bytes = await response
+          .fold<List<int>>([], (acc, chunk) => acc..addAll(chunk))
+          .timeout(const Duration(seconds: 20));
+      // 挑战页/空体防御：真海报是几十 KB 的 JPEG（FFD8 开头）
+      if (bytes.length < _minImageBytes ||
+          bytes.length < 2 ||
+          bytes[0] != 0xFF ||
+          bytes[1] != 0xD8) {
+        return '';
+      }
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return '';
+    } finally {
+      client.close(force: true);
+    }
+  }
 }
 
 class NativeRepository extends AppRepository {
@@ -434,8 +519,9 @@ class NativeRepository extends AppRepository {
         ]
         .where(
           (board) =>
-              SourceSite.isAvailable(board.source) &&
-              (access?.allowsSource(board.source) ?? true),
+              SourceSite.isRankingOnly(board.source) ||
+              (SourceSite.isAvailable(board.source) &&
+                  (access?.allowsSource(board.source) ?? true)),
         )
         .toList();
   }
@@ -488,7 +574,13 @@ class NativeRepository extends AppRepository {
       );
 
   void _authorize(String source, {bool download = false}) {
-    if (!SourceSite.isAvailable(source)) {
+    // 豆瓣是榜单专用源：不注册 provider、不进站源菜单，因此
+    // SourceSite.isAvailable('douban') 恒为 false。榜单封面（cover）等
+    // 只读请求必须在此放行，否则豆瓣条目恒抛「当前版本不包含此站源」，
+    // 榜单与首页轮播的豆瓣卡全部落到失败态（只显示重试图标）。
+    // 豆瓣没有播放/下载链路（点击走同名搜索），无需校验用户源权限。
+    if (SourceSite.isRankingOnly(source)) return;
+    if (!SourceSite.authorized(source)) {
       throw AppFailure('当前版本不包含此站源');
     }
     if (access == null) return;
@@ -576,7 +668,16 @@ class NativeRepository extends AppRepository {
       final epoch = access?.profileEpoch;
       if (!unrestricted && access?.locked == true) throw AppFailure('请先解锁当前用户');
       if (action == 'rankings') {
-        _authorize(RankingBoard.sourceForID(input['board'] as String));
+        final source = RankingBoard.sourceForID(input['board'] as String);
+        // 榜单专用源（豆瓣）只读参考数据：榜单读取放行，不受站源可用性
+        // 约束，但跟随访问锁；其余站源照常 _authorize。
+        if (SourceSite.isRankingOnly(source)) {
+          if (access?.locked ?? false) {
+            throw AppFailure('当前用户没有此操作权限');
+          }
+        } else {
+          _authorize(source);
+        }
       }
       if (action == 'recommendations' ||
           action == 'cachedRecommendations' ||
@@ -679,8 +780,8 @@ class NativeRepository extends AppRepository {
         );
       }
       throw AppFailure('站源响应超时，请重试');
-    } catch (_) {
-      throw AppFailure('本地核心加载失败，请使用完整安装包重新安装');
+    } catch (error) {
+      throw AppFailure('本地核心加载失败，请使用完整安装包重新安装（$error）');
     }
   }
 
@@ -738,6 +839,17 @@ class NativeRepository extends AppRepository {
   @override
   Future<String> cover(Drama drama, {bool force = false}) async {
     final epoch = access?.profileEpoch;
+    // 豆瓣条目：Dart 直下（EdgeOne 对 Go 指纹不友好），失败回落 Go 原路。
+    if (DoubanCoverLoader.handles(drama.cover)) {
+      final doubanPath = await DoubanCoverLoader.load(drama, force: force);
+      if (doubanPath.isNotEmpty) {
+        _authorize(drama.source);
+        if (epoch != access?.profileEpoch) {
+          throw AppFailure('用户已切换，请重新操作');
+        }
+        return doubanPath;
+      }
+    }
     final result = await _call({
       'action': 'cover',
       'drama': drama.toJson(),
@@ -807,6 +919,7 @@ class NativeRepository extends AppRepository {
     int page = 1,
     String query = '',
     String category = '',
+    String sort = '',
     bool force = false,
   }) async {
     final result = CatalogPage.fromJson(
@@ -816,6 +929,7 @@ class NativeRepository extends AppRepository {
         'page': page,
         'query': query,
         'category': category,
+        'sort': sort,
         'force': force,
       }),
     );

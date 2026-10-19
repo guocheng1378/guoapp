@@ -17,26 +17,26 @@ import (
 )
 
 type Config struct {
-	dataDir          string
-	MaxPagesPerSort  int
-	PageSize         int
-	Retries          int
-	InsecureTLS      bool
-	HuangguoAIURL string
-	HuangdouURL   string
-	HongguoURL    string
-	HuangjuURL    string
-	HuangjuAPIURL string
-	YeguoURL      string
-	YeguoAPIURL   string
-	SoraniAPIURL  string
-	Token         string
-	AESKeyHex     string
-	InterfaceKey  string
-	ParamKey      string
-	ParamIV       string
-	APIBase       string
-	CDNURL        string
+	dataDir         string
+	MaxPagesPerSort int
+	PageSize        int
+	Retries         int
+	InsecureTLS     bool
+	HuangguoAIURL   string
+	HuangdouURL     string
+	HongguoURL      string
+	HuangjuURL      string
+	HuangjuAPIURL   string
+	YeguoURL        string
+	YeguoAPIURL     string
+	SoraniAPIURL    string
+	Token           string
+	AESKeyHex       string
+	InterfaceKey    string
+	ParamKey        string
+	ParamIV         string
+	APIBase         string
+	CDNURL          string
 }
 
 type Downloader struct {
@@ -81,6 +81,9 @@ type nativeDrama struct {
 	Heat           string   `json:"heat,omitempty"`
 	Views          string   `json:"views,omitempty"`
 	OnlineDate     string   `json:"onlineDate,omitempty"`
+	Area           string   `json:"area,omitempty"`
+	Year           string   `json:"year,omitempty"`
+	Score          string   `json:"score,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
 	ReleaseStatus  string   `json:"releaseStatus,omitempty"`
 }
@@ -104,6 +107,7 @@ type nativeInput struct {
 	Page             int                     `json:"page"`
 	Query            string                  `json:"query"`
 	Category         string                  `json:"category"`
+	Sort             string                  `json:"sort"`
 	Drama            nativeDrama             `json:"drama"`
 	Chapter          Chapter                 `json:"chapter"`
 	Index            int                     `json:"index"`
@@ -193,16 +197,36 @@ func nativeNormalize(drama Drama) nativeDrama {
 		}
 	}
 	episodes := 0
-	for _, value := range []any{drama.TotalEpisode, drama.TotalEpisodeSnake, drama.EpisodeCount, drama.EpisodeCountSnake, drama.ChapterCount, drama.ChapterCountSnake, drama.Total, drama.Episodes} {
-		if count, _ := strconv.Atoi(nativeText(value)); count > episodes {
+	// 正规集数字段（totalEpisode/episodeCount/episodes）直接信任；上限防脏大值溢出。
+	for _, value := range []any{drama.TotalEpisode, drama.TotalEpisodeSnake, drama.EpisodeCount, drama.EpisodeCountSnake, drama.Episodes} {
+		if count, _ := strconv.Atoi(nativeText(value)); count > episodes && count <= 100000 {
 			episodes = count
 		}
 	}
-	source, sourceID, _ := splitProviderDramaID(drama.ID)
+	// ChapterCount/Total 在部分站点是分页总数/播放量/合集数（legacy 行数据透传），
+	// 只能当弱证据：正规字段全空时兜底且上限 999，脏大值直接丢弃，
+	// 否则榜单会显示「更新至数万集」。
+	if episodes == 0 {
+		for _, value := range []any{drama.ChapterCount, drama.ChapterCountSnake, drama.Total} {
+			if count, _ := strconv.Atoi(nativeText(value)); count > episodes && count <= 999 {
+				episodes = count
+			}
+		}
+	}
+	source, sourceID, ok := splitProviderDramaID(drama.ID)
+	if !ok && drama.Source != "" {
+		// 榜单专用源（豆瓣）不注册 provider，条目 ID 反解必然失败；
+		// 此类条目构造时已显式带 Source/SourceID，直接采信。
+		source, sourceID = drama.Source, drama.SourceID
+		if sourceID == "" {
+			sourceID = strings.TrimPrefix(drama.ID, source+":")
+		}
+	}
 	return nativeDrama{MetadataSchema: 1, ID: drama.ID, Source: source, SourceID: sourceID, Title: drama.DisplayTitle(),
 		Description: firstNonEmpty(drama.Desc, drama.Intro), Cover: cover, Episodes: episodes,
 		Category: nativeDramaCategory(drama), VIP: drama.VIP,
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
+		Area: drama.Area, Year: drama.Year, Score: drama.Score,
 		Tags: append([]string(nil), drama.Tags...), ReleaseStatus: drama.ReleaseStatus}
 }
 
@@ -320,7 +344,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 			nativeState.engine = engine
 		}
 		nativeState.Unlock()
-		return map[string]any{"version": "0.2.17", "standalone": true, "allSources": buildAllSources == "true"}, nil
+		return map[string]any{"version": "0.2.94", "standalone": true, "allSources": buildAllSources == "true"}, nil
 	}
 	engine := nativeState.engine
 	nativeState.Unlock()
@@ -411,7 +435,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 		if !validNativeCategory(canonicalProviderSource(input.Source), input.Category) {
 			return nil, errors.New("内容分类无效")
 		}
-		return engine.nativeCached(nativeCatalogKey(input.Source, input.Category)), nil
+		return engine.nativeCached(nativeCatalogKey(input.Source, input.Category, "")), nil
 	case "categories":
 		items, err := engine.nativeCategories(ctx, input.Source, input.Force)
 		return map[string]any{"items": items}, err
@@ -459,7 +483,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if !validNativeCategory(source, category) {
 		return nativeCatalogResult{}, errors.New("内容分类无效")
 	}
-	cacheKey := nativeCatalogKey(source, category)
+	sort := normalizeNativeSort(input.Sort)
+	cacheKey := nativeCatalogKey(source, category, sort)
 	if err := ctx.Err(); err != nil {
 		return nativeCatalogResult{}, err
 	}
@@ -596,14 +621,21 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	case sourceHuangguoAI:
 		items, result.HasMore, err = d.fetchHuangguoAICatalogPage(ctx, page, category)
 	case sourceHuangju:
-		items, result.HasMore, err = d.fetchHuangjuCatalogPage(ctx, page, category, "")
+		// 服务端排序：剧果「全部」页默认 sort=hot（热度），上线日期映射到「最新」
+		// 通道 sort=new；views/name/season 留客户端排序。sort 与分类互斥，
+		// 分类非空时保持分类语义交给客户端排序。
+		huangjuCategory := category
+		if category == "" && sort == "date" {
+			huangjuCategory = huangjuNewestCategory
+		}
+		items, result.HasMore, err = d.fetchHuangjuCatalogPage(ctx, page, huangjuCategory, "")
 	case sourceYeguo:
 		items, result.HasMore, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
 	case sourceCloudFront:
 		items, result.HasMore, err = d.fetchLegacyCatalogCategoryPage(ctx, page, category)
 	default:
 		if isDuanjuProviderSource(source) {
-			items, result.HasMore, err = d.fetchDuanjuCatalogPage(ctx, source, page, category)
+			items, result.HasMore, err = d.fetchDuanjuCatalogPage(ctx, source, page, category, sort)
 		}
 	}
 	if err != nil && len(items) == 0 {
@@ -704,6 +736,11 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		return nativePlan{}, err
 	}
 	choice := nativePlaybackChoices(media, input.Quality)
+	// CDN 直链多带短时效签名，播放中途过期时由本机流代理回调这里重新
+	// 解析并热替换地址，播放器无感知（见 nativeForward / nativeRenewAsset）。
+	choice.refresher = func(ctx context.Context) (providerMedia, error) {
+		return engine.downloader.resolveProviderMedia(ctx, Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index})
+	}
 	if series, video, valid := hongguoPlaybackIDs(task); valid {
 		choice.danmakuSeries, choice.danmakuVideo = series, video
 	}

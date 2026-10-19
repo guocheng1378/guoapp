@@ -5,6 +5,8 @@
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
+import 'app_icons.dart';
+import 'motion_tokens.dart';
 
 class GlassMenuEntry<T> {
   const GlassMenuEntry(
@@ -33,20 +35,21 @@ Future<T?> showGlassMenu<T>({
   required List<GlassMenuEntry<T>> entries,
 }) {
   if (entries.isEmpty) return Future<T?>.value();
-  final anchorContext = anchorKey?.currentContext ?? anchor;
   final overlayBox =
       Overlay.of(context, rootOverlay: true).context.findRenderObject();
-  if (anchorContext == null || overlayBox is! RenderBox) {
-    return Future<T?>.value();
-  }
-  final anchorBox = anchorContext.findRenderObject();
-  if (anchorBox is! RenderBox) return Future<T?>.value();
-  final topLeft = anchorBox.localToGlobal(
-    Offset.zero,
-    ancestor: overlayBox,
-  );
-  final anchorSize = anchorBox.size;
+  if (overlayBox is! RenderBox) return Future<T?>.value();
   final screenSize = overlayBox.size;
+  final anchorBox = (anchorKey?.currentContext ?? anchor)?.findRenderObject();
+  final RenderBox? anchorRender =
+      anchorBox is RenderBox && anchorBox.hasSize ? anchorBox : null;
+  // 锚点缺失或未布局（调用方漏传、或锚控件未挂载——如电视模式 ⋮ 是
+  // PopupMenuButton 时 _moreMenuKey 不在树上）：不再静默返回，那会让
+  // 「点了菜单项什么都没发生」变成死局；退化为居中偏上展示，barrier
+  // 仍可点关闭，与正常路径同一套交互。
+  final topLeft =
+      anchorRender?.localToGlobal(Offset.zero, ancestor: overlayBox) ??
+      Offset((screenSize.width - 220) / 2, screenSize.height * 0.3);
+  final anchorSize = anchorRender?.size ?? Size.zero;
 
   return showGeneralDialog<T>(
     context: context,
@@ -201,7 +204,7 @@ class _GlassMenuTile extends StatelessWidget {
                 ),
                 if (entry.checked) ...[
                   const SizedBox(width: 6),
-                  Icon(Icons.check_rounded, size: 20, color: scheme.primary),
+                  AppIcon(AppIcons.check, size: 20, color: scheme.primary),
                 ],
               ],
             ),

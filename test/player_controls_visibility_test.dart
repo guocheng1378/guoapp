@@ -1,5 +1,4 @@
 import 'package:duanju_app/local_store.dart';
-import 'package:duanju_app/models.dart';
 import 'package:duanju_app/player_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -353,7 +352,7 @@ void main() {
     await unmount(tester, player);
   });
 
-  testWidgets('HUD：一集播完的连播倒计时会自动走完', (tester) async {
+  testWidgets('HUD：一集播完立即连播，不出现倒计时提示', (tester) async {
     final player = await mount(tester);
     await tester.pump(const Duration(seconds: 5));
 
@@ -361,21 +360,15 @@ void main() {
     player.stream.completed.listen((_) => completedSeen = true);
     player.finishEpisode();
     await tester.pump();
-    // 只推进一点点：倒计时是 1 秒一档，推进太久会直接走完
     await settle(tester);
+    await tester.pump(const Duration(milliseconds: 300));
     expect(completedSeen, isTrue, reason: '播完事件应送达播放页');
     expect(
       find.byKey(const ValueKey('player-advance-countdown')),
-      findsOneWidget,
-      reason: '播完应出现连播倒计时提示',
-    );
-
-    await tester.pump(const Duration(seconds: 4));
-    expect(
-      find.byKey(const ValueKey('player-advance-countdown')),
       findsNothing,
-      reason: '倒计时必须自己走完，不能停在屏幕上不走',
+      reason: '连播不等待，倒计时提示不该出现',
     );
+    expect(player.opened.length, 2, reason: '播完应立即打开下一集');
     await unmount(tester, player);
   });
 }

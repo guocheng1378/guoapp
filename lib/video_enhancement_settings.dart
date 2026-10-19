@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'remote_widgets.dart';
 import 'video_enhancement.dart';
 import 'video_enhancement_preferences.dart';
+import 'app_icons.dart';
 
 class VideoEnhancementSettings extends StatelessWidget {
   const VideoEnhancementSettings({
@@ -119,14 +120,14 @@ class VideoEnhancementSettings extends StatelessWidget {
               RemoteButton(
                 key: const ValueKey('enhancement-compare'),
                 label: controller.comparing ? '恢复增强' : '原画对比',
-                icon: Icons.compare_rounded,
+                icon: AppIcon(AppIcons.compare),
                 onPressed: controller.canCompare && !busy ? onCompare : null,
               )
             else
               OutlinedButton.icon(
                 key: const ValueKey('enhancement-compare'),
                 onPressed: controller.canCompare && !busy ? onCompare : null,
-                icon: const Icon(Icons.compare_rounded),
+                icon: AppIcon(AppIcons.compare),
                 label: Text(controller.comparing ? '恢复增强' : '原画对比'),
               ),
           ] else if (!controller.supported) ...[

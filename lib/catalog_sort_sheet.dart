@@ -3,13 +3,24 @@ import 'package:flutter/material.dart';
 import 'app_layout.dart';
 import 'catalog_sort.dart';
 import 'glass.dart';
+import 'app_icons.dart';
 
 /// TV 端入口：底部玻璃弹层（遥控焦点导航可靠，保留「应用」确认步骤）。
 /// 手机端走 [showCatalogFilterMenu] 锚定浮卡，不再占半屏。
+/// [supported] 为当前条目集上有效的排序项；null 表示不降级（全部可用）。
+/// [areaOptions]/[yearOptions] 为当前条目集上动态聚合的筛选选项；
+/// null 或空列表时对应筛选节整体隐藏（源不带该字段，如短剧类）。
 Future<CatalogView?> chooseCatalogView(
   BuildContext context,
-  CatalogView current,
-) => showModalBottomSheet<CatalogView>(
+  CatalogView current, {
+  Set<CatalogSort>? supported,
+  List<String>? areaOptions,
+  List<String>? yearOptions,
+}) {
+  // 选中态挂在函数级：bottom sheet 的 builder 在 viewInsets/主题变化时会
+  // 整体重跑，变量写在 builder 内会被重置回打开时快照（同下浮卡）。
+  var selected = current;
+  return showModalBottomSheet<CatalogView>(
   context: context,
   backgroundColor: Colors.transparent,
   shape: const RoundedRectangleBorder(
@@ -18,7 +29,6 @@ Future<CatalogView?> chooseCatalogView(
   isScrollControlled: true,
   useSafeArea: true,
   builder: (context) {
-    var selected = current;
     return GlassSurface(
       variant: GlassVariant.surface,
       radius: GlassTokens.radiusBar,
@@ -68,9 +78,13 @@ Future<CatalogView?> chooseCatalogView(
                           sort == CatalogSort.values.first,
                       label: Text(sort.label),
                       selected: selected.sort == sort,
-                      onSelected: (_) => update(
-                        () => selected = selected.copyWith(sort: sort),
-                      ),
+                      // 置灰禁用 = 该排序对当前条目集无效（依赖字段全空且
+                      // 源站不支持服务端排序），点了也与源站顺序等价。
+                      onSelected: supported?.contains(sort) ?? true
+                          ? (_) => update(
+                              () => selected = selected.copyWith(sort: sort),
+                            )
+                          : null,
                     ),
                 ],
               ),
@@ -91,9 +105,47 @@ Future<CatalogView?> chooseCatalogView(
                     ),
                 ],
               ),
+              if (areaOptions != null && areaOptions.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                const Text('地区'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final area in ['', ...areaOptions])
+                      ChoiceChip(
+                        label: Text(area.isEmpty ? '全部' : area),
+                        selected: selected.area == area,
+                        onSelected: (_) => update(
+                          () => selected = selected.copyWith(area: area),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+              if (yearOptions != null && yearOptions.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                const Text('年份'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final year in ['', ...yearOptions])
+                      ChoiceChip(
+                        label: Text(year.isEmpty ? '全部' : year),
+                        selected: selected.year == year,
+                        onSelected: (_) => update(
+                          () => selected = selected.copyWith(year: year),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 16),
               Text(
-                '排序和筛选作用于已加载的剧集；源站顺序即站点的最新收录与推荐顺序，缺少排序资料的条目排在最后。',
+                '排序和筛选作用于已加载的剧集；源站顺序即站点的最新收录与推荐顺序，缺少排序资料的条目排在最后。置灰的排序项当前站源不支持。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 20),
@@ -111,6 +163,7 @@ Future<CatalogView?> chooseCatalogView(
     );
   },
 );
+}
 
 const _releaseOptions = <String, String>{
   '': '全部',
@@ -127,6 +180,9 @@ Future<void> showCatalogFilterMenu({
   required GlobalKey anchorKey,
   required CatalogView current,
   required ValueChanged<CatalogView> onChanged,
+  Set<CatalogSort>? supported,
+  List<String>? areaOptions,
+  List<String>? yearOptions,
 }) async {
   final anchorContext = anchorKey.currentContext;
   final overlayBox =
@@ -147,6 +203,11 @@ Future<void> showCatalogFilterMenu({
     0.0,
     screenSize.height - 64,
   );
+
+  // 选中态必须挂在函数级：pageBuilder 会在 DuanjuApp 随 store 通知重建
+  // MaterialApp 时整体重跑，声明写在 pageBuilder 内会被重置回打开时快照，
+  // 表现为点选后胶囊当场不变黑、关掉重开才「追认」新选中。
+  var selected = current;
 
   await showGeneralDialog<void>(
     context: context,
@@ -169,7 +230,6 @@ Future<void> showCatalogFilterMenu({
       );
     },
     pageBuilder: (dialogContext, animation, secondaryAnimation) {
-      var selected = current;
       return Stack(
         children: [
           Positioned(
@@ -195,18 +255,23 @@ Future<void> showCatalogFilterMenu({
                           children: [
                             for (final sort in CatalogSort.values)
                               _filterChip(
+                                key: ValueKey('filter-sort-${sort.name}'),
                                 context: dialogContext,
                                 dark: dark,
                                 label: sort.label,
                                 checked: selected.sort == sort,
-                                onTap: () {
-                                  update(
-                                    () => selected = selected.copyWith(
-                                      sort: sort,
-                                    ),
-                                  );
-                                  onChanged(selected);
-                                },
+                                // 置灰禁用 = 该排序对当前条目集无效
+                                //（依赖字段全空且源站不支持服务端排序）。
+                                onTap: supported?.contains(sort) ?? true
+                                    ? () {
+                                        update(
+                                          () => selected = selected.copyWith(
+                                            sort: sort,
+                                          ),
+                                        );
+                                        onChanged(selected);
+                                      }
+                                    : null,
                               ),
                           ],
                         ),
@@ -219,6 +284,10 @@ Future<void> showCatalogFilterMenu({
                           children: [
                             for (final entry in _releaseOptions.entries)
                               _filterChip(
+                                key: ValueKey(
+                                  'filter-release-'
+                                  '${entry.key.isEmpty ? 'all' : entry.key}',
+                                ),
                                 context: dialogContext,
                                 dark: dark,
                                 label: entry.value,
@@ -234,6 +303,66 @@ Future<void> showCatalogFilterMenu({
                               ),
                           ],
                         ),
+                        if (areaOptions != null && areaOptions.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _sectionLabel(dialogContext, '地区'),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final area in ['', ...areaOptions])
+                                _filterChip(
+                                  key: ValueKey(
+                                    'filter-area-'
+                                    '${area.isEmpty ? 'all' : area}',
+                                  ),
+                                  context: dialogContext,
+                                  dark: dark,
+                                  label: area.isEmpty ? '全部' : area,
+                                  checked: selected.area == area,
+                                  onTap: () {
+                                    update(
+                                      () => selected = selected.copyWith(
+                                        area: area,
+                                      ),
+                                    );
+                                    onChanged(selected);
+                                  },
+                                ),
+                            ],
+                          ),
+                        ],
+                        if (yearOptions != null && yearOptions.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _sectionLabel(dialogContext, '年份'),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final year in ['', ...yearOptions])
+                                _filterChip(
+                                  key: ValueKey(
+                                    'filter-year-'
+                                    '${year.isEmpty ? 'all' : year}',
+                                  ),
+                                  context: dialogContext,
+                                  dark: dark,
+                                  label: year.isEmpty ? '全部' : year,
+                                  checked: selected.year == year,
+                                  onTap: () {
+                                    update(
+                                      () => selected = selected.copyWith(
+                                        year: year,
+                                      ),
+                                    );
+                                    onChanged(selected);
+                                  },
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -259,24 +388,25 @@ Widget _sectionLabel(BuildContext context, String text) => Padding(
 );
 
 Widget _filterChip({
+  Key? key,
   required BuildContext context,
   required bool dark,
   required String label,
   required bool checked,
-  required VoidCallback onTap,
+  required VoidCallback? onTap,
 }) {
   // 与滑动栏分类胶囊同一实现（GlassChip）：选中黑瓷白字+对勾，
   // 不再走第二套「主色文字+主色对勾」视觉。
-  return GlassChip(
+  final chip = GlassChip(
+    key: key,
     label: label,
     selected: checked,
-    onTap: onTap,
+    onTap: onTap ?? () {},
     trailing: checked
-        ? Icon(
-            Icons.check_rounded,
-            size: 16,
-            color: GlassChipTokens.onSelected(dark),
-          )
+        ? AppIcon(AppIcons.check, size: 16, color: GlassChipTokens.onSelected(dark))
         : null,
   );
+  if (onTap != null) return chip;
+  // 禁用态：屏蔽命中 + 降透明度（GlassChip.onTap 非空，外包一层处理）。
+  return IgnorePointer(child: Opacity(opacity: 0.38, child: chip));
 }

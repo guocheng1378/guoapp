@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"duanjuapp/native/provider"
 )
@@ -21,15 +22,19 @@ const (
 )
 
 type vod struct {
-	VodID       any    `json:"vod_id"`
-	VodName     string `json:"vod_name"`
-	TypeID      any    `json:"type_id"`
-	TypeName    string `json:"type_name"`
-	VodPic      string `json:"vod_pic"`
-	VodContent  string `json:"vod_content"`
-	VodRemarks  string `json:"vod_remarks"`
-	VodPlayFrom string `json:"vod_play_from"`
-	VodPlayURL  string `json:"vod_play_url"`
+	VodID       any             `json:"vod_id"`
+	VodName     string          `json:"vod_name"`
+	TypeID      any             `json:"type_id"`
+	TypeName    string          `json:"type_name"`
+	VodPic      string          `json:"vod_pic"`
+	VodContent  string          `json:"vod_content"`
+	VodRemarks  string          `json:"vod_remarks"`
+	VodTime     json.RawMessage `json:"vod_time"`
+	VodArea     any             `json:"vod_area"`
+	VodYear     any             `json:"vod_year"`
+	VodScore    any             `json:"vod_score"`
+	VodPlayFrom string          `json:"vod_play_from"`
+	VodPlayURL  string          `json:"vod_play_url"`
 }
 
 type flexInt int
@@ -158,9 +163,6 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 		return nil, false, errors.New("maccms-api 源未配置")
 	}
 	address := catalogURL(base, strings.TrimSpace(category), page)
-	if strings.TrimSpace(query) != "" {
-		address = fmt.Sprintf("%s/api.php/provide/vod/?ac=list&wd=%s&pg=1", base, url.QueryEscape(query))
-	}
 	raw, err := host.Text(ctx, provider.Request{
 		Source:  s.spec.ID,
 		Address: address,
@@ -184,19 +186,26 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 			continue
 		}
 		intro := provider.Truncate(strings.TrimSpace(stripHTMLTags(item.VodContent)), 500)
+		// vod_remarks 为「已完结/全集/第N集」类备注，可推断完结状态；推断不出为空。
+		remarks := strings.TrimSpace(item.VodRemarks)
 		out = append(out, provider.Drama{
-			ID:           provider.DramaID(s.spec.ID, id),
-			Source:       s.spec.ID,
-			SourceID:     id,
-			Title:        strings.TrimSpace(item.VodName),
-			Name:         strings.TrimSpace(item.VodName),
-			Desc:         intro,
-			Intro:        intro,
-			Cover:        item.VodPic,
-			CoverURL:     item.VodPic,
-			CategoryName: item.TypeName,
-			Remark:       strings.TrimSpace(item.VodRemarks),
-			ChannelName:  channel,
+			ID:            provider.DramaID(s.spec.ID, id),
+			Source:        s.spec.ID,
+			SourceID:      id,
+			Title:         strings.TrimSpace(item.VodName),
+			Name:          strings.TrimSpace(item.VodName),
+			Desc:          intro,
+			Intro:         intro,
+			Cover:         item.VodPic,
+			CoverURL:      item.VodPic,
+			CategoryName:  item.TypeName,
+			Remark:        remarks,
+			ReleaseStatus: provider.ReleaseStatus(remarks, 0, 0),
+			OnlineDate:    vodTimeOnlineDate(item.VodTime),
+			Area:          vodText(item.VodArea),
+			Year:          vodText(item.VodYear),
+			Score:         vodText(item.VodScore),
+			ChannelName:   channel,
 		})
 	}
 	return out, page < int(decoded.PageCount), nil
@@ -230,22 +239,25 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 	urlList := strings.Split(item.VodPlayURL, sourceSep)
 
 	var chapters []provider.Chapter
-	order := make([]int, 0, len(urlList))
-	scores := make([]int, 0, len(urlList))
-	for i := 0; i < len(fromList) && i < len(urlList); i++ {
-		score := 0
-		if provider.LooksLikeMedia(firstMediaURL(urlList[i])) {
-			score = 10
-		}
-		order = append(order, i)
-		scores = append(scores, score)
+	type maccmsPlayLine struct {
+		direct bool
 	}
-	sort.SliceStable(order, func(a, b int) bool {
-		return scores[order[a]] > scores[order[b]]
-	})
-
-	for _, index := range order {
-		parts := strings.FieldsFunc(urlList[index], func(r rune) bool {
+	lines := make([]maccmsPlayLine, 0, len(urlList))
+	for i := 0; i < len(fromList) && i < len(urlList); i++ {
+		lines = append(lines, maccmsPlayLine{direct: provider.LooksLikeMedia(firstMediaURL(urlList[i]))})
+	}
+	hasDirect := false
+	for _, line := range lines {
+		if line.direct {
+			hasDirect = true
+			break
+		}
+	}
+	for i, line := range lines {
+		if hasDirect && !line.direct {
+			continue
+		}
+		parts := strings.FieldsFunc(urlList[i], func(r rune) bool {
 			return r == '$' || r == '#'
 		})
 		var clean []string
@@ -259,14 +271,19 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 			if episodeURL == "" {
 				continue
 			}
-			chapters = append(chapters, provider.Chapter{
+			chapter := provider.Chapter{
 				ID:             provider.ChapterID(s.spec.ID, vodID, strconv.Itoa(len(chapters)+1)),
 				Source:         s.spec.ID,
 				Title:          strings.TrimSpace(clean[j]),
-				VideoURL:       episodeURL,
 				Referer:        base + "/",
 				CurrentEpisode: provider.RawEpisode(len(chapters) + 1),
-			})
+			}
+			if line.direct {
+				chapter.VideoURL = episodeURL
+			} else {
+				chapter.PageURL = episodeURL
+			}
+			chapters = append(chapters, chapter)
 		}
 	}
 
@@ -283,9 +300,57 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 		CoverURL:     item.VodPic,
 		CategoryName: item.TypeName,
 		Remark:       strings.TrimSpace(item.VodRemarks),
+		OnlineDate:   vodTimeOnlineDate(item.VodTime),
+		Area:         vodText(item.VodArea),
+		Year:         vodText(item.VodYear),
+		Score:        vodText(item.VodScore),
 		ChannelName:  provider.SourceName(s.spec.ID),
 	}
 	return drama, chapters, nil
+}
+
+// maccms 无热度/播放量数据（采集站 vod_hits 恒空），「上线日期」即源站 vod_time。
+// 列表默认顺序就是 vod_time 降序，date 服务端排序与源站顺序天然一致；
+// 热度/播放量在 Dart 侧因字段缺失被置灰，正常不可达，万一传入按源站顺序返回。
+func (s *Source) CatalogPageSorted(ctx context.Context, host provider.Host, page int, category, sort string) ([]provider.Drama, bool, error) {
+	return s.CatalogPage(ctx, host, page, category, "")
+}
+
+// vodTimeOnlineDate 把 maccms vod_time 解析为 2006-01-02。源站两种格式并存：
+// unix 秒（数字）或 "2006-01-02 15:04:05" 字符串。非法值返回空串，
+// 让 Dart 侧日期排序保持置灰而不是全量假日期。
+func vodTimeOnlineDate(raw json.RawMessage) string {
+	s := strings.TrimSpace(strings.Trim(string(raw), `"`))
+	if s == "" || s == "null" {
+		return ""
+	}
+	if secs, err := strconv.ParseInt(s, 10, 64); err == nil {
+		// 小于 1e9 的时间戳（1973 前后）视为无效，避免 4 位年份被误当秒。
+		if secs <= 0 || secs < 1000000000 {
+			return ""
+		}
+		return time.Unix(secs, 0).Format("2006-01-02")
+	}
+	if len(s) >= 10 {
+		if _, err := time.Parse("2006-01-02", s[:10]); err == nil {
+			return s[:10]
+		}
+	}
+	return ""
+}
+
+// vodText 把 vod_area/vod_year/vod_score 等松散类型字段统一为字符串。
+// 采集站同一字段字符串与数字并存（年份/评分常见数字），零值返回空串。
+func vodText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	}
+	return ""
 }
 
 func (s *Source) Search(ctx context.Context, host provider.Host, query string) ([]provider.Drama, error) {
@@ -309,12 +374,15 @@ func (s *Source) Search(ctx context.Context, host provider.Host, query string) (
 	out := make([]provider.Drama, 0, len(decoded.List))
 	for _, item := range decoded.List {
 		id := vodIDString(item.VodID)
+		remarks := strings.TrimSpace(item.VodRemarks)
 		out = append(out, provider.Drama{
-			ID:       provider.DramaID(s.spec.ID, id),
-			Source:   s.spec.ID,
-			SourceID: id,
-			Title:    strings.TrimSpace(item.VodName),
-			Cover:    item.VodPic,
+			ID:            provider.DramaID(s.spec.ID, id),
+			Source:        s.spec.ID,
+			SourceID:      id,
+			Title:         strings.TrimSpace(item.VodName),
+			Cover:         item.VodPic,
+			Remark:        remarks,
+			ReleaseStatus: provider.ReleaseStatus(remarks, 0, 0),
 		})
 	}
 	return out, nil

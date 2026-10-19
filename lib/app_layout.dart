@@ -22,7 +22,13 @@ ThemeData televisionTheme(ThemeData theme) {
   final button = ButtonStyle(
     side: focusSide,
     minimumSize: const WidgetStatePropertyAll(Size(52, 48)),
-    textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 17)),
+    // 基于 bodyMedium 派生，保持 inherit 与 SDK 默认按钮样式一致。
+    // 裸 TextStyle(fontSize:17) 的 inherit=true 与 bodyMedium 的 inherit=false
+    // 在模式切换时触发 TextStyle.lerp 断言，按钮 build 失败、页面卡死。
+    textStyle: WidgetStatePropertyAll(
+      theme.textTheme.bodyMedium?.copyWith(fontSize: 17) ??
+          const TextStyle(fontSize: 17, inherit: false),
+    ),
   );
   return theme.copyWith(
     focusColor: colors.primaryContainer,

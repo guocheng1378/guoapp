@@ -89,8 +89,11 @@ const lanLegacySources = {
 };
 
 Set<String> lanSources(Object? value, {bool advertised = false}) {
+  // 广播/配对侧上限需覆盖本机全部可选站源（knownValues 现有 41 个，
+  // 2026-10-19 恢复 engineValues 并扩入成人源后突破旧上限 32，导致
+  // 两端 ALL_SOURCES 构建互连时抛「设备站源范围无效」），取 64 留余量。
   if (value is! List ||
-      value.length > (advertised ? 32 : SourceSite.allValues.length)) {
+      value.length > (advertised ? 64 : SourceSite.allValues.length)) {
     throw const FormatException('设备站源范围无效');
   }
   final result = value.map((source) => lanText(source, 32)).toSet();

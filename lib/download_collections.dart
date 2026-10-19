@@ -55,7 +55,7 @@ List<DownloadCollection> downloadCollections(
       continue;
     }
     final text =
-        '${job.drama.title} ${SourceSite.byId(job.drama.source).name} ${job.drama.category}'
+        '${job.drama.title} ${SourceSite.byId(job.drama.source)?.name ?? '未知源'} ${job.drama.category}'
             .toLowerCase();
     if (terms.any((term) => !text.contains(term))) continue;
     if (!(switch (filter) {

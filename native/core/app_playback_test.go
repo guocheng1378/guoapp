@@ -57,9 +57,9 @@ func TestNativeStreamLateResolutionPreservesCurrentSession(t *testing.T) {
 	}
 	defer stream.server.Close()
 	media := providerMedia{URL: "https://example.test/master.m3u8", Playlist: "#EXTM3U\n#EXT-X-ENDLIST\n"}
-	current, currentToken := stream.nativeOpen(media)
+	current, currentToken, _ := stream.nativeOpen(media)
 	defer stream.nativeRelease(currentToken)
-	_, lateToken := stream.nativeOpen(media)
+	_, lateToken, _ := stream.nativeOpen(media)
 	stream.nativeRelease(lateToken)
 	response, err := http.Get(current)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestNativeHLSExtensionlessPlaylistsAndRedirectBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stream.server.Close()
-	address, token := stream.nativeOpen(providerMedia{URL: upstream.URL + "/root"})
+	address, token, _ := stream.nativeOpen(providerMedia{URL: upstream.URL + "/root"})
 	defer stream.nativeRelease(token)
 	read := func(address string) string {
 		t.Helper()

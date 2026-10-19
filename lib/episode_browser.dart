@@ -7,6 +7,7 @@ import 'app_layout.dart';
 import 'glass.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
+import 'app_icons.dart';
 
 const episodePageSize = 50;
 
@@ -101,7 +102,7 @@ class EpisodeRangeBar extends StatelessWidget {
               IconButton(
                 tooltip: '跳转集数',
                 onPressed: episodes.isEmpty ? null : () => _jump(context),
-                icon: const Icon(Icons.pin_outlined),
+                icon: AppIcon(AppIcons.pin),
               ),
             ],
           ),
@@ -113,7 +114,7 @@ class EpisodeRangeBar extends StatelessWidget {
                   onPressed: page > 0
                       ? () => onLocate((page - 1) * episodePageSize)
                       : null,
-                  icon: const Icon(Icons.chevron_left_rounded),
+                  icon: AppIcon(AppIcons.chevronLeft),
                 ),
                 Expanded(
                   child: DropdownButtonHideUnderline(
@@ -141,7 +142,7 @@ class EpisodeRangeBar extends StatelessWidget {
                   onPressed: page + 1 < count
                       ? () => onLocate((page + 1) * episodePageSize)
                       : null,
-                  icon: const Icon(Icons.chevron_right_rounded),
+                  icon: AppIcon(AppIcons.chevronRight),
                 ),
               ],
             ),

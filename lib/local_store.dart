@@ -55,9 +55,11 @@ class LocalStore extends ChangeNotifier {
   }
 
   void _initialize() {
-    _loadSourceSwitches();
     try {
       _snapshot = LocalSnapshot(preferences);
+      // 快照就位后再读站源开关；此前在快照赋值前调用，开关永远读空，
+      // 重启后用户显式设置的开/关状态会全部回落到默认值。
+      _loadSourceSwitches();
       final raw = _snapshot!.getString('profiles');
       if (raw == null &&
           (_snapshot!.getString('activeProfile') != null ||
@@ -283,6 +285,13 @@ class LocalStore extends ChangeNotifier {
 
   bool get hideVip =>
       _configurationError == null ? _bool(_key('hideVip')) ?? true : true;
+
+  /// 黄果类/成人类站源默认整组隐藏，仅在「关于」浮卡上连点 5 次
+  /// 触发彩蛋后显示。设备级全局开关（不随用户档分离）。
+  bool get restrictedUnlocked =>
+      _configurationError == null ? _bool('restrictedUnlocked') ?? false : false;
+  Future<void> setRestrictedUnlocked(bool value) =>
+      _setting('restrictedUnlocked', value);
   String get displayMode {
     final value = _configurationError == null ? _string('displayMode') : null;
     return {'auto', 'television', 'standard'}.contains(value) ? value! : 'auto';
