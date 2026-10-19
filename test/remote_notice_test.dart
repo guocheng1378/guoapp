@@ -61,6 +61,15 @@ const RemoteNoticeConfig _updateOnly = RemoteNoticeConfig(
   ),
 );
 
+const RemoteNoticeConfig _announceWithImage = RemoteNoticeConfig(
+  announcement: RemoteNoticeAnnouncement(
+    title: '带图公告',
+    message: '看看这张图',
+    button: '我知道了',
+    image: 'https://example.com/banner.jpg',
+  ),
+);
+
 RemoteNoticeTrigger _host({
   required String version,
   RemoteNoticeConfig? config,
@@ -158,6 +167,59 @@ void main() {
       expect(config!.announcement, isNull);
     });
 
+    test('image 合法 URL 解析进公告段', () {
+      final config = RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'announcement': <String, Object?>{
+          'enabled': true,
+          'title': 'T',
+          'message': 'M',
+          'image': 'https://example.com/banner.jpg',
+        },
+      }));
+      expect(config?.announcement?.image, 'https://example.com/banner.jpg');
+    });
+
+    test('image 非法值静默置空', () {
+      RemoteNoticeConfig parseWithImage(String image) {
+        return RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+          'announcement': <String, Object?>{
+            'enabled': true,
+            'title': 'T',
+            'message': 'M',
+            'image': image,
+          },
+        }))!;
+      }
+      expect(parseWithImage('javascript:alert(1)').announcement?.image, '');
+      expect(parseWithImage('ftp://example.com/a.png').announcement?.image, '');
+      expect(parseWithImage('not a url').announcement?.image, '');
+      expect(parseWithImage('  ').announcement?.image, '');
+    });
+
+    test('纯图公告（无标题正文但配图）有效', () {
+      final config = RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'announcement': <String, Object?>{
+          'enabled': true,
+          'image': 'https://example.com/banner.jpg',
+        },
+      }));
+      expect(config?.announcement, isNotNull);
+      expect(config!.announcement!.image, 'https://example.com/banner.jpg');
+      expect(config.announcement!.title, '');
+      expect(config.announcement!.message, '');
+    });
+
+    test('纯图但 image 非法时整段丢弃', () {
+      final config = RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'announcement': <String, Object?>{
+          'enabled': true,
+          'image': 'not a url',
+        },
+      }));
+      expect(config, isNotNull);
+      expect(config!.announcement, isNull);
+    });
+
     test('坏 JSON 与非对象根返回 null', () {
       expect(RemoteNoticeConfig.tryParse('{oops'), isNull);
       expect(RemoteNoticeConfig.tryParse('[]'), isNull);
@@ -186,6 +248,32 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('公告标题'), findsNothing);
       expect(find.text('home-body'), findsOneWidget);
+    });
+
+    testWidgets('公告配图时弹窗渲染图片区块', (tester) async {
+      await _pumpToNotice(
+        tester,
+        _host(version: '0.2.96+100', config: _announceWithImage),
+      );
+      expect(find.text('带图公告'), findsOneWidget);
+      expect(find.text('看看这张图'), findsOneWidget);
+      // FLUTTER_TEST 下 HTTP 返回 400：Image widget 存在（errorBuilder
+      // 只替换渲染输出，不移除 Image 元素本身）。
+      expect(find.byType(Image), findsOneWidget);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Image), findsNothing);
+    });
+
+    testWidgets('公告无配图时弹窗不渲染图片', (tester) async {
+      await _pumpToNotice(
+        tester,
+        _host(version: '0.2.96+100', config: _announceOnly),
+      );
+      expect(find.text('公告标题'), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
     });
 
     testWidgets('远程 build 更大时弹更新卡，稍后再说可关', (tester) async {

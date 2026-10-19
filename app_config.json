@@ -3,10 +3,10 @@
   "announcement": {
     "enabled": true,
     "title": "欢迎使用真果鉴",
-    "message": "公告弹窗现已支持配图：下方这张图同样是在 GitHub 上配置的，改 URL 即可换图。",
+    "message": "在 GitHub 上修改本段文案并提交保存后，所有用户下次打开应用即可看到新内容。",
     "button": "我知道了",
     "link": "",
-    "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
+    "image": ""
   },
   "update": {
     "enabled": true,

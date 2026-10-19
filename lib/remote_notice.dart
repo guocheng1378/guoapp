@@ -41,12 +41,16 @@ class RemoteNoticeAnnouncement {
     required this.message,
     required this.button,
     this.link = '',
+    this.image = '',
   });
 
   final String title;
   final String message;
   final String button;
   final String link;
+
+  /// 可选配图 URL（仅 http/https）；空串或非法值 = 不显示。
+  final String image;
 }
 
 /// 更新段（update）：仅当 [build] 大于本机安装包构建号时展示。
@@ -91,14 +95,29 @@ class RemoteNoticeConfig {
     if (raw['enabled'] != true) return null;
     final title = raw['title']?.toString() ?? '';
     final message = raw['message']?.toString() ?? '';
-    if (title.isEmpty && message.isEmpty) return null;
+    final image = _sanitizeImageUrl(raw['image']?.toString() ?? '');
+    // 纯图公告（无标题无正文但配了图）同样有效。
+    if (title.isEmpty && message.isEmpty && image.isEmpty) return null;
     final button = raw['button']?.toString() ?? '';
     return RemoteNoticeAnnouncement(
       title: title,
       message: message,
       button: button.trim().isEmpty ? '我知道了' : button,
       link: raw['link']?.toString() ?? '',
+      image: image,
     );
+  }
+
+  /// 配图 URL 防御清洗：仅接受 http/https，其余（空值/乱写/内嵌 scheme）
+  /// 一律静默置空，与整条链路的容错哲学一致。
+  static String _sanitizeImageUrl(String raw) {
+    final url = raw.trim();
+    if (url.isEmpty) return '';
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
+      return '';
+    }
+    return url;
   }
 
   static RemoteNoticeUpdate? _parseUpdate(Object? raw) {
@@ -285,6 +304,30 @@ Future<void> showRemoteNoticeCard(
         ),
       );
 
+      Widget announcementImage(String url) => ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 200),
+          child: Image.network(
+            url,
+            width: double.infinity,
+            fit: BoxFit.cover,
+            // 加载中给固定高度占位，避免弹窗高度跳动。
+            loadingBuilder: (context, child, progress) {
+              if (progress == null) return child;
+              return Container(
+                height: 120,
+                alignment: Alignment.center,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.06),
+              );
+            },
+            // 加载失败整块消失：与远程公告静默容错哲学一致。
+            errorBuilder: (context, error, stackTrace) =>
+                const SizedBox.shrink(),
+          ),
+        ),
+      );
+
       return Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 320),
@@ -332,14 +375,25 @@ Future<void> showRemoteNoticeCard(
                         sectionHeader(AppIcons.info, announcement.title),
                       );
                     }
-                    if (announcement.message.isNotEmpty) {
+                    final hasImage = announcement.image.isNotEmpty;
+                    if (announcement.message.isNotEmpty || hasImage) {
                       if (announcement.title.isNotEmpty) {
                         sections.add(const SizedBox(height: 10));
                       }
                       sections.add(
                         Flexible(
                           child: SingleChildScrollView(
-                            child: bodyText(announcement.message),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (announcement.message.isNotEmpty)
+                                  bodyText(announcement.message),
+                                if (announcement.message.isNotEmpty && hasImage)
+                                  const SizedBox(height: 12),
+                                if (hasImage)
+                                  announcementImage(announcement.image),
+                              ],
+                            ),
                           ),
                         ),
                       );
