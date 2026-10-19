@@ -2,8 +2,8 @@
   "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版）。announcement.enabled=true 时每次启动弹公告；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。",
   "announcement": {
     "enabled": true,
-    "title": "欢迎使用真果鉴",
-    "message": "这是一条示例公告。在 GitHub 上修改本段文案并提交保存后，所有用户下次打开应用即可看到新内容。",
+    "title": "远程公告已生效",
+    "message": "这是刚在 GitHub 上提交的新文案。无需发版、无需重新安装，下次启动即对全部用户生效。",
     "button": "我知道了",
     "link": ""
   },
