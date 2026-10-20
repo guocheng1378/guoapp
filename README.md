@@ -6,7 +6,7 @@
 
 站源请求 · 解析 · 播放 · 下载，全部在设备本地完成，无自建服务端、无账号依赖。
 
-![Version](https://img.shields.io/badge/version-0.2.94%2B101-E85D4A?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.96%2B2140-E85D4A?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Windows%20%7C%20Android%20TV-2B2B2E?style=flat-square)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47-54C5F8?style=flat-square&logo=flutter&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)
