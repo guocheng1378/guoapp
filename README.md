@@ -68,7 +68,7 @@
 
 **安装步骤**
 1. Android：下载 APK → 允许「安装未知应用」→ 安装（首次启动如被系统拦截，选择「仍要安装」）
-2. Windows：解压 zip → 运行 `duanju_app.exe`
+2. Windows：解压 zip → 运行 `zhenguojian.exe`
 
 ## 🚀 快速上手
 
