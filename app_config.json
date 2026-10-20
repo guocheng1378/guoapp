@@ -11,8 +11,8 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2130,
-    "notes": "新增启动公告与版本更新提示。",
+    "build": 2136,
+    "notes": "修复「黄果AI」站源不能使用的问题：\n· 详情页不再混入无关推荐视频\n· 多集剧可正常播放全部集数（此前部分剧集播放错乱）\n· 更新线路地址，提升可访问性",
     "url": "https://github.com/guocheng1378/guoapp/releases/latest"
   }
 }
