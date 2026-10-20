@@ -38,13 +38,19 @@ func readRenewBody(t *testing.T, address string) (int, string) {
 
 func TestNativeStreamRenewsExpiredMediaAddress(t *testing.T) {
 	var mu sync.Mutex
-	staleHits, freshHits, renewals := 0, 0, 0
+	staleHits, freshHits, renewals, fillHits := 0, 0, 0, 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		// 带 Range 的是后台预读，不带 Range 的是播放器转发。
+		fill := r.Header.Get("Range") != ""
 		switch r.URL.Path {
 		case "/stale.mp4":
-			staleHits++
+			if fill {
+				fillHits++
+			} else {
+				staleHits++
+			}
 			w.WriteHeader(http.StatusForbidden)
 		case "/fresh.mp4":
 			freshHits++
@@ -71,9 +77,16 @@ func TestNativeStreamRenewsExpiredMediaAddress(t *testing.T) {
 	mu.Lock()
 	hits, renewCount := staleHits, renewals
 	mu.Unlock()
-	// 原地址尝试两次（首次失败重试一次）后触发重签。
-	if hits != 2 || renewCount != 1 {
+	// 原地址尝试四次（同址带退避重试）后触发重签。
+	if hits != 4 || renewCount != 1 {
 		t.Fatalf("unexpected attempts: stale=%d renewals=%d", hits, renewCount)
+	}
+	// 预读遇到 403 只试一次就放弃（签名失效交给重签，不反复打源站）。
+	mu.Lock()
+	fills := fillHits
+	mu.Unlock()
+	if fills != 1 {
+		t.Fatalf("prefetch should give up on 403 after one try, fills=%d", fills)
 	}
 	// 第二次请求直接使用热替换后的地址，不再触发重签。
 	status, _ = readRenewBody(t, address)
@@ -83,16 +96,24 @@ func TestNativeStreamRenewsExpiredMediaAddress(t *testing.T) {
 	mu.Lock()
 	hits, freshCount, renewCount := staleHits, freshHits, renewals
 	mu.Unlock()
-	if hits != 2 || freshCount != 2 || renewCount != 1 {
+	// fresh 三次：重签后那次转发、第二次请求的转发，以及预读换新地址后的重试。
+	if hits != 4 || freshCount != 3 || renewCount != 1 {
 		t.Fatalf("second request renewed again: stale=%d fresh=%d renewals=%d", hits, freshCount, renewCount)
 	}
 }
 
 func TestNativeStreamRetriesRandomNotFound(t *testing.T) {
 	var mu sync.Mutex
-	flakyHits := 0
+	flakyHits, fillHits := 0, 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
+		if r.Header.Get("Range") != "" {
+			// 后台预读不受播放器的随机 404 影响。
+			fillHits++
+			mu.Unlock()
+			io.WriteString(w, "ok")
+			return
+		}
 		flakyHits++
 		hits := flakyHits
 		mu.Unlock()

@@ -1,7 +1,7 @@
 name: duanju_app
 description: 独立运行的多端短剧应用
 publish_to: none
-version: 0.2.96+2134
+version: 0.2.96+2140
 
 environment:
   sdk: '>=3.12.0 <4.0.0'
@@ -40,6 +40,11 @@ dev_dependencies:
 dependency_overrides:
   media_kit_libs_windows_video:
     path: packages/media_kit_libs_windows_video
+  # 2.5.0/2.5.1 均已迁移 Built-in Kotlin（无 kotlin-android 插件声明），本项目
+  # android.builtInKotlin=false 时其 Kotlin 源不编译，app javac 找不到
+  # SharedPreferencesPlugin（2135 成功是 intermediates 增量复用的假象）。
+  # 约束 ^2.3.4 允许降到 Groovy 形态旧版。
+  shared_preferences_android: 2.4.3
 
 flutter:
   config:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -203,6 +205,18 @@ func parseRouterData(raw string) map[string]any {
 	return data
 }
 
+// hongguoFullResolveKey 标记「必须走完整取流链」。
+//
+// 红果对公开剧集使用固定形态的 360p 直链（/video/public/{vid}/360p.mp4），
+// 剧集 ID 就在章节里，因此解析可以零网络完成——但当这条直链不可用、需要
+// 换一条真实地址时必须绕开快速通道，否则会在同一个地址上空转。
+type hongguoFullResolveKey struct{}
+
+func hongguoRequiresFullResolve(ctx context.Context) bool {
+	flag, _ := ctx.Value(hongguoFullResolveKey{}).(bool)
+	return flag
+}
+
 func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (providerMedia, error) {
 	source, seriesID, ok := splitProviderDramaID(task.DramaID)
 	if !ok || source != sourceHongguo {
@@ -211,6 +225,13 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	videoID := strings.TrimPrefix(task.Chapter.VideoURL, "hongguo-cenc://")
 	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
 		return providerMedia{}, fmt.Errorf("红果章节 ID 无效，请重新获取章节")
+	}
+	// 快速通道：直链形态固定且剧集 ID 已知，直接构造地址返回。
+	// 实测走完整链（App 取流已失效 → 网页播放页 → 直链预热探测）要 8 秒以上，
+	// 切一集等这么久正是「卡」的主因。直链是否就绪由本机流代理的预读与
+	// 重签兜底：不可用时会带着强制标记重走完整链换一条真实地址。
+	if media, ok := d.hongguoFastMedia(ctx, seriesID, videoID); ok {
+		return media, nil
 	}
 	media, nativeErr := d.resolveHongguoAppMedia(ctx, videoID)
 	if nativeErr == nil {
@@ -384,6 +405,75 @@ func hongguoPublicVideoPath(videoID string) string {
 		return ""
 	}
 	return "/video/public/" + videoID + "/360p.mp4"
+}
+
+// hongguoFastMedia 尝试零网络拼出公开直链。
+//
+// 返回 ok=false 表示应走完整取流链（带强制标记，或剧集 ID 不合法）。
+func (d *Downloader) hongguoFastMedia(ctx context.Context, seriesID, videoID string) (providerMedia, bool) {
+	if hongguoRequiresFullResolve(ctx) {
+		return providerMedia{}, false
+	}
+	address := d.hongguoPublicMediaAddress(seriesID, videoID)
+	if address == "" {
+		return providerMedia{}, false
+	}
+	media := providerMedia{URL: address, Referer: d.providerBaseURL(sourceHongguo) + "/", Quality: 360}
+	media.Variants = []providerMedia{media}
+	// 后台预热：源站对公开直链的首次请求会随机 404（CDN 缓存未就绪），
+	// 提前探几路让 CDN 就绪，播放的第一个请求就能直接 200，不必在
+	// 播放线程里等重试或重签。
+	d.hongguoWarmMediaAsync(ctx, d.providerBaseURL(sourceHongguo), address)
+	return media, true
+}
+
+// hongguoWarmMediaAsync 并发做几路轻量探测，命中即停。
+// 不阻塞调用方：解析已经返回地址，这里只负责把 CDN 焐热。
+func (d *Downloader) hongguoWarmMediaAsync(ctx context.Context, base, address string) {
+	warmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	var group sync.WaitGroup
+	for attempt := 0; attempt < 3; attempt++ {
+		group.Add(1)
+		go func(attempt int) {
+			defer group.Done()
+			select {
+			case <-warmCtx.Done():
+				return
+			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			}
+			request, err := http.NewRequestWithContext(warmCtx, http.MethodGet, address, nil)
+			if err != nil {
+				return
+			}
+			request.Header.Set("User-Agent", hongguoWebUserAgent)
+			request.Header.Set("Referer", base+"/")
+			request.Header.Set("Range", "bytes=0-0")
+			response, err := d.client.Do(request)
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+			response.Body.Close()
+			cancel()
+		}(attempt)
+	}
+	go func() {
+		group.Wait()
+		cancel()
+	}()
+}
+
+// hongguoPublicMediaAddress 拼出公开剧集的 360p 直链（零网络解析用）。
+func (d *Downloader) hongguoPublicMediaAddress(seriesID, videoID string) string {
+	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
+		return ""
+	}
+	path := hongguoPublicVideoPath(videoID)
+	if path == "" {
+		return ""
+	}
+	return d.providerBaseURL(sourceHongguo) + path
 }
 
 func hongguoSEOAvailable(seo map[string]any) bool {

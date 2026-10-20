@@ -10,19 +10,21 @@ void main() {
     routeCount: count,
   );
 
-  test('tries alternate routes before fresh resolutions, then stops', () {
+  test('reuses the current route first, then tries alternates, then refreshes', () {
     final recovery = PlaybackRecovery();
-    expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
+    // 原地重开零网络、零解析，源站首字节抖动时最优先。
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.reuse);
     expect(recovery.next(route(1)), PlaybackRecoveryAction.alternative);
     expect(recovery.next(route(2)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
     expect(recovery.next(route(0)), PlaybackRecoveryAction.stop);
     recovery.reset();
-    expect(recovery.next(route(0)), PlaybackRecoveryAction.alternative);
+    expect(recovery.next(route(0)), PlaybackRecoveryAction.reuse);
   });
 
   test('one-route sources refresh twice without endless retrying', () {
     final recovery = PlaybackRecovery();
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.reuse);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
@@ -31,9 +33,10 @@ void main() {
 
   test('many failing alternatives cannot exceed the automatic retry limit', () {
     final recovery = PlaybackRecovery();
-    for (var i = 0; i < 4; i++) {
+    expect(recovery.next(route(0, count: 10)), PlaybackRecoveryAction.reuse);
+    for (var i = 0; i < 3; i++) {
       expect(
-        recovery.next(route(i, count: 10)),
+        recovery.next(route(i + 1, count: 10)),
         PlaybackRecoveryAction.alternative,
       );
     }
@@ -57,14 +60,15 @@ void main() {
         now: start.add(Duration(seconds: seconds)),
       );
       expect(stalled(0), isFalse);
-      expect(stalled(19), isFalse);
-      expect(stalled(20), isTrue);
-      expect(stalled(21, position: 6), isFalse);
-      expect(stalled(40, position: 6), isFalse);
-      expect(stalled(60, playing: false, position: 6), isFalse);
+      // 卡顿阈值放宽到 45 秒：源站首字节实测可等 16 秒，20 秒会误判。
+      expect(stalled(44), isFalse);
+      expect(stalled(45), isTrue);
+      expect(stalled(46, position: 6), isFalse);
+      expect(stalled(60, position: 6), isFalse);
       expect(stalled(80, playing: false, position: 6), isFalse);
-      expect(stalled(100, foreground: false, position: 6), isFalse);
-      expect(stalled(101, position: 6), isFalse);
+      expect(stalled(100, playing: false, position: 6), isFalse);
+      expect(stalled(120, foreground: false, position: 6), isFalse);
+      expect(stalled(121, position: 6), isFalse);
       health.reset();
       expect(stalled(200, position: 6), isFalse);
     },

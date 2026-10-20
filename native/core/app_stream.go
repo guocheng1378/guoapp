@@ -39,6 +39,16 @@ type nativeStreamSession struct {
 	refresher   func(context.Context) (providerMedia, error)
 	renewMu     sync.Mutex
 	renewedAt   time.Time
+	renewedByID map[string]time.Time
+	renewing    map[string]chan nativeRenewResult
+	// caches 是本集媒体各资产的本地预读缓存（直链媒体才有），见 app_stream_cache.go。
+	caches map[string]*nativeStreamCache
+}
+
+// nativeRenewResult 是一次后台重签的结果。
+type nativeRenewResult struct {
+	address string
+	ok      bool
 }
 
 type nativeStreamServer struct {
@@ -179,7 +189,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 	}
 	token := hex.EncodeToString(tokenBytes)
 	ctx, cancel := context.WithCancel(providerMediaContext(context.Background(), media.credentials))
-	session := &nativeStreamSession{assets: map[string]nativeStreamAsset{}, referer: media.Referer, key: media.HLSKey, ctx: ctx, cancel: cancel, lastUsed: time.Now(), credentials: media.credentials}
+	session := &nativeStreamSession{assets: map[string]nativeStreamAsset{}, referer: media.Referer, key: media.HLSKey, ctx: ctx, cancel: cancel, lastUsed: time.Now(), credentials: media.credentials, caches: map[string]*nativeStreamCache{}}
 	if len(refresher) > 0 {
 		session.refresher = refresher[0]
 	}
@@ -187,6 +197,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 	for id, old := range stream.sessions {
 		if time.Since(old.lastUsed) > 10*time.Minute {
 			old.cancel()
+			nativeCloseStreamCache(old)
 			delete(stream.sessions, id)
 		}
 	}
@@ -198,6 +209,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 			}
 		}
 		stream.sessions[oldest].cancel()
+		nativeCloseStreamCache(stream.sessions[oldest])
 		delete(stream.sessions, oldest)
 	}
 	stream.sessions[token] = session
@@ -210,13 +222,27 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 		entry.data = []byte(media.Playlist)
 		entry.contentType = "application/vnd.apple.mpegurl"
 	}
+	// 直链媒体的本地预读在播放器真正请求该资产时再启动（见 nativeServe），
+	// 避免对「预加载但还没播」的下一集也占源站带宽。
 	return stream.nativeAsset(token, session, entry), token, nil
+}
+
+// nativeCloseStreamCache 释放会话的本地预读缓存（关文件并删临时文件）。
+func nativeCloseStreamCache(session *nativeStreamSession) {
+	session.mu.Lock()
+	caches := session.caches
+	session.caches = nil
+	session.mu.Unlock()
+	for _, cache := range caches {
+		cache.close()
+	}
 }
 
 func (stream *nativeStreamServer) nativeRelease(token string) {
 	stream.mu.Lock()
 	if session := stream.sessions[token]; session != nil {
 		session.cancel()
+		nativeCloseStreamCache(session)
 		delete(stream.sessions, token)
 	}
 	stream.mu.Unlock()
@@ -352,14 +378,12 @@ func nativeRenewedURL(media providerMedia, oldAddress string) string {
 
 // nativeRenewAsset 在媒体地址失效（403/404/410）时重新解析并热替换会话内
 // 该资产的地址。本机代理地址（assetId）保持不变，播放器无感知地续传；
-// 并发失败请求经 renewMu 串行化，冷却期内不重复请求解析接口，已在队列
-// 中等待的请求醒来后直接复用首个请求刷新出的新地址。
+// 冷却期按资产分别记录，已在队列中等待的请求醒来后直接复用首个请求刷新
+// 出的新地址。
 func (session *nativeStreamSession) nativeRenewAsset(ctx context.Context, id, oldAddress string) (string, bool) {
-	session.renewMu.Lock()
-	defer session.renewMu.Unlock()
 	session.mu.Lock()
 	asset, found := session.assets[id]
-	since := time.Since(session.renewedAt)
+	since := time.Since(session.renewedByID[id])
 	session.mu.Unlock()
 	if found && asset.address != oldAddress {
 		return asset.address, true
@@ -367,11 +391,15 @@ func (session *nativeStreamSession) nativeRenewAsset(ctx context.Context, id, ol
 	if session.refresher == nil {
 		return "", false
 	}
-	if !session.renewedAt.IsZero() && since < 3*time.Second {
+	if !session.renewedByID[id].IsZero() && since < 5*time.Second {
 		return "", false
 	}
 	media, err := session.refresher(ctx)
 	session.mu.Lock()
+	if session.renewedByID == nil {
+		session.renewedByID = map[string]time.Time{}
+	}
+	session.renewedByID[id] = time.Now()
 	session.renewedAt = time.Now()
 	session.mu.Unlock()
 	if err != nil {
@@ -388,6 +416,38 @@ func (session *nativeStreamSession) nativeRenewAsset(ctx context.Context, id, ol
 	}
 	session.mu.Unlock()
 	return address, true
+}
+
+// nativeRenewAssetAsync 在后台发起重签并返回结果通道。
+//
+// 重签要走整条解析链：红果的 App 取流接口已失效时要退回网页兜底，
+// 一次解析实测要 8 秒以上，堵在播放器的请求线程里等于直接卡死画面。
+// 改为后台重签 + 短暂等待窗口：命中新地址就用它重试，否则把失败交回
+// 播放器；播放器重试同一请求时资产地址已被热替换，直接命中新地址。
+func (session *nativeStreamSession) nativeRenewAssetAsync(ctx context.Context, id, oldAddress string) <-chan nativeRenewResult {
+	session.renewMu.Lock()
+	if session.renewing == nil {
+		session.renewing = map[string]chan nativeRenewResult{}
+	}
+	if existing, found := session.renewing[id]; found {
+		session.renewMu.Unlock()
+		return existing
+	}
+	results := make(chan nativeRenewResult, 1)
+	session.renewing[id] = results
+	session.renewMu.Unlock()
+	go func() {
+		// 重签必须换一条真实地址：带上强制标记，绕开源侧的「零网络直链
+		// 快速通道」，否则会在同一个失效地址上空转。
+		renewCtx := context.WithValue(ctx, hongguoFullResolveKey{}, true)
+		address, ok := session.nativeRenewAsset(renewCtx, id, oldAddress)
+		results <- nativeRenewResult{address: address, ok: ok}
+		close(results)
+		session.renewMu.Lock()
+		delete(session.renewing, id)
+		session.renewMu.Unlock()
+	}()
+	return results
 }
 
 // nativeLastUsed 返回流会话最近一次被播放器读取的时间；会话已不存在时
@@ -449,14 +509,29 @@ func (stream *nativeStreamServer) nativeForward(ctx context.Context, request *ht
 		response.Body.Close()
 	}
 	response, upstream := attempt(asset.address)
-	if response == nil || retryable(response) {
+	// 源站对同一直链会随机返回 404/502（CDN 未就绪，几百毫秒后就绪）。
+	// 同址带退避重试比换地址快得多：换地址要重走整条解析链（数秒）。
+	for retry := 0; retry < 3 && (response == nil || retryable(response)); retry++ {
 		discard(response)
+		select {
+		case <-ctx.Done():
+			return nil, upstream
+		case <-time.After(time.Duration(150*(retry+1)) * time.Millisecond):
+		}
 		response, upstream = attempt(asset.address)
 	}
 	if response != nil && renewable(response) {
-		if address, ok := session.nativeRenewAsset(ctx, id, asset.address); ok {
-			discard(response)
-			response, upstream = attempt(address)
+		// 后台重签 + 短暂等待：整条解析链可能要数秒，不能堵在播放器的
+		// 请求线程里。等待窗口内拿到新地址就重试，否则交回播放器——它
+		// 重试同一请求时资产地址已被热替换，会直接命中新地址。
+		results := session.nativeRenewAssetAsync(ctx, id, asset.address)
+		select {
+		case renewed := <-results:
+			if renewed.ok {
+				discard(response)
+				response, upstream = attempt(renewed.address)
+			}
+		case <-time.After(nativeRenewWait):
 		}
 	}
 	return response, upstream
@@ -520,6 +595,15 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		}
 		return
 	}
+	if len(asset.data) == 0 && !strings.Contains(asset.contentType, "mpegurl") {
+		// 直链媒体：后台单连接把整集拉进本地缓存，播放器的请求改读本地文件。
+		// 源站响应头排队实测最长 27 秒，这一刻提前付掉，切集才是零等待；
+		// 缓存没就绪时再走回源路径（见 nativeForward）。
+		stream.nativeStartPrefetch(session, parts[1], asset, 0)
+		if stream.nativeServeCached(ctx, writer, request, session, parts[1], asset) {
+			return
+		}
+	}
 	response, upstream := stream.nativeForward(ctx, request, session, parts[1], asset)
 	if response == nil {
 		http.Error(writer, "读取媒体失败，请重试", http.StatusBadGateway)
@@ -532,6 +616,9 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		http.Error(writer, err.Error(), response.StatusCode)
 		return
 	}
+	// 回源确认是整集大文件后，在后台预读一份到本机：播放器的后续 Range
+	// 请求即可零等待命中本地，把源站的首字节抖动挡在代理之外。
+	stream.nativeStartPrefetch(session, parts[1], asset, response.ContentLength)
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	finalURL := upstream.URL
 	if response.Request != nil && response.Request.URL != nil {

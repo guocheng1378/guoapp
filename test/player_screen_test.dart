@@ -82,7 +82,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
       await settleOperations(tester);
-      expect(repository.fallbackCalls, 1);
+      // 首次恢复是「原地重开」：沿用同一地址与会话重开播放器，不消耗备用
+      // 线路，也不动解析进度。
+      expect(repository.fallbackCalls, 0);
       expect(repository.primaryCalls, 1);
       expect(player.opened.last.start, const Duration(seconds: 28));
       expect(player.state.rate, 1.5);
@@ -100,18 +102,19 @@ void main() {
       final repository = RouteRepository()..broken = true;
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
-      // maxAttempts=4 + maxRefreshes=2：完整耗尽需 5 次失败
-      // （alternative→refresh→alternative→refresh），窗口放宽到 7 秒防贴边漂移。
+      // 恢复链：reuse → alternative → refresh → alternative → stop。
+      // 初次挂载算一次 primary，之后 refresh 一次、alternative 两次。
       for (var i = 0; i < 7; i++) {
         await tester.pump(const Duration(seconds: 1));
         await settleOperations(tester);
       }
-      expect(repository.primaryCalls, 3);
+      expect(repository.primaryCalls, 2);
       expect(repository.fallbackCalls, 2);
       expect(find.text('暂时无法播放'), findsOneWidget);
       expect(repository.active, isEmpty);
-      await tester.pump(const Duration(seconds: 25));
-      expect(repository.primaryCalls + repository.fallbackCalls, 5);
+      // 卡顿看门狗阈值 45 秒：越过它也不应再发起新的解析/换线路。
+      await tester.pump(const Duration(seconds: 50));
+      expect(repository.primaryCalls + repository.fallbackCalls, 4);
       repository.broken = false;
       await tester.tap(find.text('重试播放'));
       await settleOperations(tester);
@@ -125,13 +128,19 @@ void main() {
   testWidgets(
     'switching episodes ignores a delayed fallback and frees both old plans',
     (tester) async {
-      final repository = RouteRepository()..deferFallback = true;
+      // broken=true 让「原地重开」也立刻失败，恢复链才会继续走到换线路，
+      // 从而制造出一个迟到的 fallback。
+      final repository = RouteRepository()
+        ..deferFallback = true
+        ..broken = true;
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
-      player.fail();
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      await settleOperations(tester);
+      for (var i = 0; i < 2; i++) {
+        player.fail();
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await settleOperations(tester);
+      }
       expect(repository.pending, isNotNull);
       await tester.tap(find.byKey(const ValueKey('play-episode-2')));
       await settleOperations(tester);

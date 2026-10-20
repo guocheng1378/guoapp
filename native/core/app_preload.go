@@ -52,6 +52,7 @@ func (stream *nativeStreamServer) nativePrefetch(ctx context.Context, token, ent
 	stop := context.AfterFunc(session.ctx, cancel)
 	defer stop()
 	remaining, requests := int64(nativePreloadLimit), 0
+	prefetched := int64(0)
 	visited := map[string]bool{}
 	var warm func(string, int) bool
 	warm = func(local string, depth int) bool {
@@ -73,14 +74,20 @@ func (stream *nativeStreamServer) nativePrefetch(ctx context.Context, token, ent
 		playlist := strings.Contains(asset.contentType, "mpegurl")
 		if len(asset.data) == 0 {
 			requests++
+			if !playlist {
+				// 直链媒体：立刻启动后台整集预读（一条上游连接顺序拉完）。
+				// 源站响应头排队实测最长 27 秒，这一刻提前付掉，切集时命中
+				// 本地缓存即可零等待出画面。预读挂在会话上，不受本次预加载
+				// 的超时影响。
+				stream.nativeStartPrefetch(session, id, asset, 0)
+				return true
+			}
+			// 清单/分片：体量小，照旧拉一小段预热。
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.address, nil)
 			if err != nil {
 				return false
 			}
 			request.Header.Set("Referer", session.referer)
-			if !playlist {
-				request.Header.Set("Range", fmt.Sprintf("bytes=0-%d", remaining-1))
-			}
 			response, err := stream.downloader.doMediaRequest(request)
 			if err != nil {
 				return false
@@ -91,13 +98,16 @@ func (stream *nativeStreamServer) nativePrefetch(ctx context.Context, token, ent
 				(response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent) {
 				return false
 			}
-			if response.Request != nil && response.Request.URL != nil {
+			if response.Request != nil && response.Request.URL != nil && playlist {
 				asset.address = response.Request.URL.String()
 			}
 			asset.contentType = response.Header.Get("Content-Type")
 			asset.etag, asset.modified = response.Header.Get("ETag"), response.Header.Get("Last-Modified")
 			playlist = playlist || strings.Contains(strings.ToLower(asset.contentType), "mpegurl") || bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
-			asset.data = body
+			if playlist {
+				// 清单类内容体量小，直接留在内存里。
+				asset.data = body
+			}
 			asset.total = int64(len(body))
 			if response.StatusCode == http.StatusPartialContent {
 				start, end, total, valid := nativeContentRange(response.Header.Get("Content-Range"))
@@ -113,6 +123,7 @@ func (stream *nativeStreamServer) nativePrefetch(ctx context.Context, token, ent
 				asset.contentType = "application/vnd.apple.mpegurl"
 			}
 			remaining -= int64(len(body))
+			prefetched += int64(len(body))
 			session.mu.Lock()
 			session.assets[id] = asset
 			session.mu.Unlock()
@@ -158,7 +169,7 @@ func (stream *nativeStreamServer) nativePrefetch(ctx context.Context, token, ent
 		return true
 	}
 	warm(entry, 0)
-	return nativePreloadLimit - remaining
+	return prefetched
 }
 
 var nativeContentRangePattern = regexp.MustCompile(`^bytes ([0-9]+)-([0-9]+)/([0-9]+)$`)

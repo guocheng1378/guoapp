@@ -28,7 +28,7 @@ class PlaybackPreloader extends ChangeNotifier {
           ? '下一集已下载'
           : bytes > 0
           ? '下一集已准备 · 预取 ${(bytes / 1024).ceil()} KB'
-          : '下一集播放地址已准备';
+          : '下一集正在后台准备';
     }
     if (loading || _delay != null) return '正在准备下一集';
     return error.isNotEmpty ? '下一集预加载暂不可用，切集时会重新获取' : '播放后段提前准备下一集';
@@ -61,7 +61,10 @@ class PlaybackPreloader extends ChangeNotifier {
       return;
     }
     final ticket = _generation;
-    _delay = Timer(const Duration(milliseconds: 600), () async {
+    // 延后 1.5 秒再预取下一集：切集要等这一集准备就绪，延后太久会让切集
+    // 重新走一遍解析（红果解析已改成零网络构造，但首字节仍要排队）。
+    // 1.5 秒既能让本集先出画面，也不会让预取与当前播放争太久。
+    _delay = Timer(const Duration(milliseconds: 1500), () async {
       _delay = null;
       loading = true;
       notifyListeners();

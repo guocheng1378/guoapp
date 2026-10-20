@@ -198,7 +198,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         widget.playerFactory?.call() ??
         Player(
           configuration: const PlayerConfiguration(
-            bufferSize: 16 * 1024 * 1024,
+            // 缓冲 64MB：红果等站点的 CDN 首字节等待实测 0.3~16 秒，
+            // 缓冲太小会在源站抖动时直接露底成「卡住」；一集短剧 360p
+            // 约 10~30MB，64MB 足够把整集铺满。
+            bufferSize: 64 * 1024 * 1024,
             logLevel: MPVLogLevel.error,
           ),
         );
@@ -905,6 +908,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     final action = current.local
         ? PlaybackRecoveryAction.stop
         : _recovery.next(current);
+    if (action == PlaybackRecoveryAction.reuse) {
+      await _reusePlayback(position);
+      return;
+    }
     if (action == PlaybackRecoveryAction.stop) {
       _resumePosition = position;
       final ticket = _generation;
@@ -936,6 +943,57 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     await _play(_index, position: position, recoveryAction: action);
+  }
+
+  /// 原地重开：沿用同一播放地址与流会话，只把播放器重新打开。
+  ///
+  /// 源站首字节抖动（红果实测 0.3~16 秒）造成的卡顿，重开后多半自愈；
+  /// 这一步零网络、零解析开销，比「换线路 / 重新解析」快一个数量级。
+  /// 重开失败时回到常规恢复链继续兜底。
+  Future<void> _reusePlayback(double position) async {
+    final plan = _plan;
+    if (_closed || plan == null || plan.url.isEmpty) {
+      return;
+    }
+    final ticket = _generation;
+    _acceptErrors = false;
+    _danmaku.setPlan(null);
+    await _serialize(() async {
+      if (_closed || ticket != _generation) {
+        return;
+      }
+      try {
+        await _player.stop();
+        await _player.open(
+          Media(
+            plan.url,
+            httpHeaders: plan.headers,
+            start: position > 0
+                ? Duration(milliseconds: (position * 1000).round())
+                : null,
+          ),
+          play: _foreground && _playIntent,
+        );
+      } catch (_) {
+        if (!_closed && mounted && ticket == _generation) {
+          _acceptErrors = true;
+          _queueRecovery();
+        }
+        return;
+      }
+      if (_closed || ticket != _generation) {
+        return;
+      }
+      _health.reset();
+      if (mounted && !_closed && ticket == _generation) {
+        setState(() {
+          _loading = false;
+        });
+        _acceptErrors = true;
+        _danmaku.setPlan(plan);
+        _syncDanmaku();
+      }
+    });
   }
 
   void _togglePlayback() {
@@ -1057,6 +1115,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _error = null;
       _localFailure = false;
       _loadingMessage = switch (recoveryAction) {
+        PlaybackRecoveryAction.reuse => '正在重新连接播放',
         PlaybackRecoveryAction.alternative => '正在切换备用线路',
         PlaybackRecoveryAction.refresh => '正在重新获取播放地址',
         _ => '正在准备播放',
@@ -1117,7 +1176,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           await platform.setProperty(
             'demuxer-lavf-o',
             [
-              'seg_max_retry=3',
+              // 分片失败多给两次重试：红果网页直链会随机 404/502，
+              // 少一次重试就可能把一次抖动放大成一次播放失败。
+              'seg_max_retry=5',
               'strict=experimental',
               'allowed_extensions=ALL',
               plan.local
@@ -1127,7 +1188,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                 'decryption_key=${plan.decryptionKey}',
             ].join(','),
           );
-          await platform.setProperty('network-timeout', '20');
+          // 网络超时放宽到 30 秒：源站首字节实测可等 16 秒，
+          // 20 秒会在正常慢响应上被误判为失败。
+          await platform.setProperty('network-timeout', '30');
         }
         _plan = plan;
         installed = true;

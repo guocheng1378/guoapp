@@ -173,6 +173,17 @@ type nativeEngine struct {
 	sourceRecords    map[string]nativeSourceRecord
 	sourceCatalogMu  sync.Mutex
 	sourceCatalogs   map[string]chan struct{}
+	// resolveCache 缓存最近解析出的媒体信息（5 分钟）。红果的取流链
+	// （App 接口已失效 → 退回网页兜底）一次解析实测要 8 秒以上，播放
+	// 恢复时重新解析会把一次卡顿放大成十几秒停顿。
+	resolveCacheMu sync.Mutex
+	resolveCache   map[string]nativeResolveCacheEntry
+}
+
+// nativeResolveCacheEntry 是一条带过期时间的解析结果。
+type nativeResolveCacheEntry struct {
+	media    providerMedia
+	expireAt time.Time
 }
 
 var nativeState struct {
@@ -731,7 +742,7 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		}
 	}
 	task := Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index}
-	media, err := engine.downloader.resolveProviderMedia(ctx, task)
+	media, err := engine.nativeResolveMedia(ctx, task, input)
 	if err != nil {
 		return nativePlan{}, err
 	}
@@ -745,4 +756,46 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		choice.danmakuSeries, choice.danmakuVideo = series, video
 	}
 	return engine.nativeOpenPlayback(ctx, choice)
+}
+
+// nativeResolveCacheTTL 是解析结果的缓存时长。短时效签名地址过期后会
+// 由本机流代理的重签路径兜底，缓存只影响「同一集短时间内重复解析」。
+const nativeResolveCacheTTL = 5 * time.Minute
+
+// nativeResolveMedia 解析媒体信息，命中 5 分钟缓存则直接复用。
+func (engine *nativeEngine) nativeResolveMedia(ctx context.Context, task Task, input nativeInput) (providerMedia, error) {
+	key := nativeResolveCacheKey(task, input)
+	if !input.Force && key != "" {
+		engine.resolveCacheMu.Lock()
+		if engine.resolveCache != nil {
+			if entry, found := engine.resolveCache[key]; found && time.Now().Before(entry.expireAt) {
+				engine.resolveCacheMu.Unlock()
+				return entry.media, nil
+			}
+			delete(engine.resolveCache, key)
+		}
+		engine.resolveCacheMu.Unlock()
+	}
+	media, err := engine.downloader.resolveProviderMedia(ctx, task)
+	if err != nil {
+		return providerMedia{}, err
+	}
+	if key != "" {
+		engine.resolveCacheMu.Lock()
+		if engine.resolveCache == nil {
+			engine.resolveCache = map[string]nativeResolveCacheEntry{}
+		}
+		engine.resolveCache[key] = nativeResolveCacheEntry{media: media, expireAt: time.Now().Add(nativeResolveCacheTTL)}
+		engine.resolveCacheMu.Unlock()
+	}
+	return media, nil
+}
+
+// nativeResolveCacheKey 生成解析缓存键；无法稳定标识时返回空串（不缓存）。
+func nativeResolveCacheKey(task Task, input nativeInput) string {
+	reference := task.Chapter.VideoURL
+	if reference == "" {
+		return ""
+	}
+	return task.DramaID + "|" + reference + "|" + strconv.Itoa(task.Index) + "|" + strconv.Itoa(input.Quality)
 }
