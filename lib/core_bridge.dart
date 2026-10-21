@@ -58,6 +58,29 @@ String _nativeRequest(String body) {
   }
 }
 
+/// 远程站源配置热更（config.source）：把 app_config.json 的 sourceConfig 段
+/// 转发核心应用（黄果AI 镜像表 / 真果·鉴根地址）。核心侧权威校验（scheme、
+/// 去重、上限），非法段整段拒绝并保持当前生效值；本调用静默尽力而为，桥
+/// 不可用 / 超时 / 核心拒绝都不抛错，不影响启动链路。与用户态无关，不经
+/// _call 的访问锁与 profileEpoch 检查。
+Future<void> applyNativeSourceConfig(Map<String, dynamic> sourceConfig) async {
+  try {
+    final body = jsonEncode(<String, dynamic>{
+      'action': 'config.source',
+      'sourceConfig': sourceConfig,
+    });
+    final encoded =
+        await Isolate.run(() => _nativeRequest(body)).timeout(
+              const Duration(seconds: 10),
+            );
+    final response = jsonDecode(encoded);
+    // applied=false（核心校验拒绝）同样静默：保持内置兜底值即可。
+    if (response is Map && response['ok'] != true) return;
+  } on Object {
+    // 尽力而为。
+  }
+}
+
 class AppFailure implements Exception {
   AppFailure(this.message, {this.code = ''});
   final String message;
@@ -88,8 +111,8 @@ abstract class AppRepository {
   final Map<String, DramaDetail> _detailCache = {};
   final Map<String, DateTime> _detailCacheAt = {};
   final Map<String, Future<DramaDetail>> _detailPending = {};
-  static const Duration _detailTtl = Duration(minutes: 10);
-  static const int _detailCacheLimit = 32;
+  static const Duration _detailTtl = Duration(minutes: 30);
+  static const int _detailCacheLimit = 64;
 
   String _detailKey(Drama drama) => '${drama.source}|${drama.id}';
 
@@ -488,7 +511,7 @@ class NativeRepository extends AppRepository {
     // 推荐首屏同理预取详情：点卡零网络等待。
     if (!more && result.items.isNotEmpty) {
       _prefetchQueue.clear();
-      prefetchDetails(result.items.take(8));
+      prefetchDetails(result.items.take(12));
     }
     return result;
   }
@@ -520,8 +543,7 @@ class NativeRepository extends AppRepository {
         .where(
           (board) =>
               SourceSite.isRankingOnly(board.source) ||
-              (SourceSite.isAvailable(board.source) &&
-                  (access?.allowsSource(board.source) ?? true)),
+              SourceSite.isAvailable(board.source),
         )
         .toList();
   }
@@ -832,7 +854,7 @@ class NativeRepository extends AppRepository {
     // 这里同样预取首屏剧详情，保证点卡零网络等待。
     if (result.items.isNotEmpty) {
       _prefetchQueue.clear();
-      prefetchDetails(result.items.take(8));
+      prefetchDetails(result.items.take(12));
     }
     return result;
   }
@@ -937,7 +959,7 @@ class NativeRepository extends AppRepository {
     // 用户点卡时详情大概率已在缓存，进播放零网络等待。
     if (page == 1 && query.isEmpty && result.items.isNotEmpty) {
       _prefetchQueue.clear();
-      prefetchDetails(result.items.take(8));
+      prefetchDetails(result.items.take(12));
     }
     return result;
   }

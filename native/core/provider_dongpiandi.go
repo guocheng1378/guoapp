@@ -12,21 +12,57 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// dongpiandiBaseURL 是 AI 聚合站 dongpiandi.ai 的 REST API 根地址。
-// 平台用静态 HMAC-SHA256 密钥签名 /v1/* 请求，返回聚合后的目录/详情/播放解析。
-// 短剧（kind=short_drama）直接返回 m3u8 URL，无需二次票据解析。
+// AI 聚合站 dongpiandi.ai 的 REST API 根地址。平台用静态 HMAC-SHA256 密钥签名
+// /v1/* 请求，返回聚合后的目录/详情/播放解析；短剧（kind=short_drama）直接返回
+// m3u8 URL，无需二次票据解析。
+// dongpiandiBaseURLDefault 为内置兜底；根地址可经 config.source（applySourceConfig）
+// 远程热更（域名被墙/失效时切镜像根）。签名密钥 dongpiandiSignKey 不参与远程下发。
 const (
-	dongpiandiBaseURL  = "https://dongpiandi.ai"
-	dongpiandiSignKey  = "8b9a908a05eac640e1ee06f52acaa741bfe4ba9e004eeffdbeb635e532e06666"
-	dongpiandiSiteHost = "dongpiandi.ai"
-	dongpiandiClientUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15"
-	dongpiandiTimeout  = 15 * time.Second
+	dongpiandiBaseURLDefault = "https://dongpiandi.ai"
+	dongpiandiSignKey        = "8b9a908a05eac640e1ee06f52acaa741bfe4ba9e004eeffdbeb635e532e06666"
+	dongpiandiSiteHost       = "dongpiandi.ai"
+	dongpiandiClientUA       = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15"
+	dongpiandiTimeout        = 15 * time.Second
 )
+
+var (
+	dongpiandiConfigMu   sync.RWMutex
+	dongpiandiBaseURLHot string
+)
+
+// dongpiandiBaseURL 返回当前 API 根地址：热更值优先，空则回退内置。
+func dongpiandiBaseURL() string {
+	dongpiandiConfigMu.RLock()
+	defer dongpiandiConfigMu.RUnlock()
+	if dongpiandiBaseURLHot != "" {
+		return dongpiandiBaseURLHot
+	}
+	return dongpiandiBaseURLDefault
+}
+
+// setDongpiandiBaseURL 热更 API 根地址（调用方负责校验；传空回退内置）。
+func setDongpiandiBaseURL(base string) {
+	dongpiandiConfigMu.Lock()
+	defer dongpiandiConfigMu.Unlock()
+	dongpiandiBaseURLHot = base
+}
+
+// dongpiandiBaseURLCandidates 返回解析缓存 PageURL 的根地址候选（当前值在前、
+// 内置值兜底，已去重）：旧缓存内嵌旧域名，切换根地址后仍需可解析出剧集 ID。
+func dongpiandiBaseURLCandidates() []string {
+	current := dongpiandiBaseURL()
+	if current == dongpiandiBaseURLDefault {
+		return []string{dongpiandiBaseURLDefault}
+	}
+	return []string{current, dongpiandiBaseURLDefault}
+}
 
 type dongpiandiClient struct {
 	http *http.Client
@@ -62,7 +98,7 @@ func (c *dongpiandiClient) get(ctx context.Context, path string, q url.Values) (
 	nonce := dongpiandiNonce()
 	sig := dongpiandiSign("GET", full, ts, nonce)
 
-	reqURL := dongpiandiBaseURL + full
+	reqURL := dongpiandiBaseURL() + full
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dongpiandi: 构造请求失败: %w", err)
@@ -73,8 +109,8 @@ func (c *dongpiandiClient) get(ctx context.Context, path string, q url.Values) (
 	req.Header.Set("x-ai-movie-site-host", dongpiandiSiteHost)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", dongpiandiClientUA)
-	req.Header.Set("Origin", dongpiandiBaseURL)
-	req.Header.Set("Referer", dongpiandiBaseURL+"/")
+	req.Header.Set("Origin", dongpiandiBaseURL())
+	req.Header.Set("Referer", dongpiandiBaseURL()+"/")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -434,39 +470,48 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 		TotalEpisode: total,
 	}
 
-	// 对每集同步调用 playback resolve，拿到真实 m3u8。
-	chapters := make([]Chapter, 0, len(detail.Episodes))
-	for i, ep := range detail.Episodes {
+	// 对每集并发调用 playback resolve，拿到真实 m3u8（按原序回填）。
+	chapters := make([]Chapter, len(detail.Episodes))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i := range detail.Episodes {
+		ep := detail.Episodes[i]
 		if ep.Token == "" {
 			continue
 		}
-		resolveBody, err := client.get(ctx, "/v1/playback/resolve/"+url.PathEscape(ep.Token), nil)
-		var m3u8 string
-		if err == nil {
-			var resp dongpiandiResolveResp
-			if json.Unmarshal(resolveBody, &resp) == nil {
-				m3u8 = dongpiandiPickM3U8(resp.LineOptions)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			m3u8, _ := dongpiandiResolveEpisodeM3U8(ctx, client, ep.Token, false)
+			num := dongpiandiEpisodeNumber(ep.Number, i+1)
+			title := strings.TrimSpace(ep.Title)
+			if title == "" {
+				title = "第" + strconv.Itoa(num) + "集"
 			}
+			chapter := Chapter{
+				ID:       providerDramaID(sourceDongpiandi, ep.ID),
+				Source:   sourceDongpiandi,
+				Title:    title,
+				VideoURL: m3u8,
+				PageURL:  dongpiandiBaseURL() + "/player/" + url.PathEscape(detail.ID),
+				Referer:  dongpiandiBaseURL() + "/",
+			}
+			raw, _ := json.Marshal(num)
+			chapter.CurrentEpisode = raw
+			chapters[i] = chapter
+		}()
+	}
+	wg.Wait()
+	compact := make([]Chapter, 0, len(chapters))
+	for _, chapter := range chapters {
+		if chapter.ID != "" {
+			compact = append(compact, chapter)
 		}
-		num := dongpiandiEpisodeNumber(ep.Number, i+1)
-		title := strings.TrimSpace(ep.Title)
-		if title == "" {
-			title = "第" + strconv.Itoa(num) + "集"
-		}
-		chapter := Chapter{
-			ID:       providerDramaID(sourceDongpiandi, ep.ID),
-			Source:   sourceDongpiandi,
-			Title:    title,
-			VideoURL: m3u8,
-			PageURL:  dongpiandiBaseURL + "/player/" + url.PathEscape(detail.ID),
-			Referer:  dongpiandiBaseURL + "/",
-		}
-		raw, _ := json.Marshal(num)
-		chapter.CurrentEpisode = raw
-		chapters = append(chapters, chapter)
 	}
 
-	return drama, chapters, nil
+	return drama, compact, nil
 }
 
 // dongpiandiPickM3U8 从线路数组里挑出最优 m3u8：
@@ -530,6 +575,294 @@ func dongpiandiEpisodeNumber(v any, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// dongpiandiResolveEpisodeM3U8 对单集调用 playback resolve 拿播放地址。
+// probe=false 按站点权重直接挑线（详情页快速路径）；
+// probe=true 对权重最高的若干条已解析线路并发实测（可达性 + 首分片吞吐）后择优，
+// 实测无结果时回退权重挑线。真网实测站点推荐的线路可能只有 ~200KB/s 甚至 404，
+// 这是"真果·鉴一卡一卡"的直接根因，所以播放前必须实测。
+func dongpiandiResolveEpisodeM3U8(ctx context.Context, client *dongpiandiClient, epToken string, probe bool) (string, error) {
+	body, err := client.get(ctx, "/v1/playback/resolve/"+url.PathEscape(epToken), nil)
+	if err != nil {
+		return "", err
+	}
+	var resp dongpiandiResolveResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("dongpiandi: 解析播放响应失败: %w", err)
+	}
+	if probe {
+		if best := dongpiandiProbeBest(ctx, resp.LineOptions); best != "" {
+			return best, nil
+		}
+	}
+	return dongpiandiPickM3U8(resp.LineOptions), nil
+}
+
+// dongpiandiProbeCandidates 取权重最高的前 N 条已解析 m3u8/mp4 线路作为实测候选。
+func dongpiandiProbeCandidates(lines []dongpiandiLine) []dongpiandiLine {
+	scored := make([]dongpiandiLine, 0, len(lines))
+	for _, l := range lines {
+		if !l.Resolved || l.URL == "" {
+			continue
+		}
+		lower := strings.ToLower(l.URL)
+		if !strings.Contains(lower, ".m3u8") && !strings.Contains(lower, ".mp4") {
+			continue
+		}
+		scored = append(scored, l)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		return dongpiandiLineScore(scored[i]) > dongpiandiLineScore(scored[j])
+	})
+	if len(scored) > 4 {
+		scored = scored[:4]
+	}
+	return scored
+}
+
+type dongpiandiProbeResult struct {
+	url      string
+	ready    bool
+	ttfb     time.Duration
+	segBytes int64
+	segDur   time.Duration
+}
+
+// dongpiandiProbeBest 并发实测候选线路（整体预算 6 秒，到点收已完成者）：
+// 首分片吞吐最高且 >=64KB 者胜；无分片数据时取 m3u8 响应最快者；全部失败返回空串。
+func dongpiandiProbeBest(ctx context.Context, lines []dongpiandiLine) string {
+	candidates := dongpiandiProbeCandidates(lines)
+	if len(candidates) == 0 {
+		return ""
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 4500*time.Millisecond)
+	defer cancel()
+	results := make([]dongpiandiProbeResult, len(candidates))
+	var wg sync.WaitGroup
+	for i := range candidates {
+		i, line := i, candidates[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = dongpiandiProbeLine(probeCtx, line.URL)
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-probeCtx.Done():
+	}
+	best := -1
+	for i := range results {
+		r := results[i]
+		if !r.ready {
+			continue
+		}
+		if best < 0 {
+			best = i
+			continue
+		}
+		b := results[best]
+		bSeg := b.segBytes >= 64*1024
+		cSeg := r.segBytes >= 64*1024
+		switch {
+		case cSeg && !bSeg:
+			best = i
+		case cSeg == bSeg && cSeg:
+			if r.segDur > 0 && (b.segDur <= 0 || float64(r.segBytes)*float64(b.segDur) > float64(b.segBytes)*float64(r.segDur)) {
+				best = i
+			}
+		case !cSeg && !bSeg && (r.ttfb < b.ttfb || !b.ready):
+			best = i
+		}
+	}
+	if best >= 0 {
+		return results[best].url
+	}
+	return ""
+}
+
+// dongpiandiProbeLine 实测单条线路：拉 m3u8 主单（可达性）+ 下载首个分片前 256KB 计吞吐。
+func dongpiandiProbeLine(ctx context.Context, address string) dongpiandiProbeResult {
+	res := dongpiandiProbeResult{url: address}
+	lower := strings.ToLower(address)
+	if strings.Contains(lower, ".mp4") {
+		total, dur, _ := dongpiandiFetchSpeedCapture(ctx, address, 256*1024)
+		if total > 0 {
+			res.ready = true
+			res.segBytes, res.segDur = total, dur
+		}
+		return res
+	}
+	t0 := time.Now()
+	body, err := dongpiandiFetchLimited(ctx, address, 96*1024)
+	res.ttfb = time.Since(t0)
+	if err != nil || !strings.Contains(string(body), "#EXTM3U") {
+		return res
+	}
+	res.ready = true
+	seg := dongpiandiFirstSegment(address, string(body))
+	if seg == "" {
+		return res
+	}
+	total, dur := dongpiandiProbeMediaSpeed(ctx, seg, 0)
+	res.segBytes, res.segDur = total, dur
+	return res
+}
+
+// dongpiandiProbeMediaSpeed 测一个媒体地址的吞吐；若返回内容是嵌套 m3u8（master）
+// 则下钻一层继续测真实分片，最多两层。
+func dongpiandiProbeMediaSpeed(ctx context.Context, address string, depth int) (int64, time.Duration) {
+	total, dur, head := dongpiandiFetchSpeedCapture(ctx, address, 256*1024)
+	if depth < 2 && total > 0 && total < 64*1024 && strings.Contains(head, "#EXTM3U") {
+		if next := dongpiandiFirstSegment(address, head); next != "" {
+			return dongpiandiProbeMediaSpeed(ctx, next, depth+1)
+		}
+	}
+	return total, dur
+}
+
+// dongpiandiFetchLimited GET 一个地址，最多读 limit 字节；非 2xx 视为失败。
+func dongpiandiFetchLimited(ctx context.Context, address string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", dongpiandiClientUA)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("dongpiandi: 媒体地址 HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
+}
+
+// dongpiandiFetchSpeedCapture 以 Range 请求下载最多 maxBytes，返回 (前512字节, 总字节, 耗时)。
+func dongpiandiFetchSpeedCapture(ctx context.Context, address string, maxBytes int64) (int64, time.Duration, string) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return 0, 0, ""
+	}
+	req.Header.Set("User-Agent", dongpiandiClientUA)
+	req.Header.Set("Range", "bytes=0-"+strconv.FormatInt(maxBytes-1, 10))
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
+	if err != nil {
+		return 0, 0, ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return 0, 0, ""
+	}
+	buf := make([]byte, 32*1024)
+	var total int64
+	var head []byte
+	for total < maxBytes {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if len(head) < 512 {
+				head = append(head, buf[:min(n, 512-len(head))]...)
+			}
+			total += int64(n)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return total, time.Since(start), string(head)
+}
+
+// dongpiandiFirstSegment 从 m3u8 文本解析第一个媒体条目地址（支持相对路径，
+// master playlist 的下一级 m3u8 也按地址返回，由调用方下钻）。
+func dongpiandiFirstSegment(base, body string) string {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	for _, ln := range strings.Split(body, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		if ref, err := baseURL.Parse(ln); err == nil {
+			return ref.String()
+		}
+	}
+	return ""
+}
+
+// dongpiandiMediaAlive 轻量验证播放地址当前可用（m3u8 内容校验 / mp4 Range 2xx）。
+func dongpiandiMediaAlive(ctx context.Context, address string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if strings.Contains(strings.ToLower(address), ".mp4") {
+		total, _, _ := dongpiandiFetchSpeedCapture(ctx, address, 16*1024)
+		return total > 0
+	}
+	body, err := dongpiandiFetchLimited(ctx, address, 16*1024)
+	return err == nil && strings.Contains(string(body), "#EXTM3U")
+}
+
+// dongpiandiDetailIDFromPageURL 从 /player/{id} 形态的章节页地址里抽剧集 ID。
+// 兼容内置域名与热更域名：旧缓存内嵌旧域名，切根地址后仍需可解析。
+func dongpiandiDetailIDFromPageURL(pageURL string) string {
+	pageURL = strings.TrimSpace(pageURL)
+	for _, base := range dongpiandiBaseURLCandidates() {
+		marker := base + "/player/"
+		if !strings.HasPrefix(pageURL, marker) {
+			continue
+		}
+		id := strings.Trim(strings.TrimPrefix(pageURL, marker), "/")
+		if id == "" || strings.ContainsAny(id, "/?#") {
+			return ""
+		}
+		return id
+	}
+	return ""
+}
+
+// resolveDongpiandiMedia 播放期解析真果·鉴：
+// 1) 详情页缓存的线路先轻量存活验证，可用即直接播（零额外等待）；
+// 2) 失效（404/超时/非 m3u8）时按剧集 ID 重新解析并对候选线路实测择优，自动换线；
+// 3) 全部失败回退原地址走通用路径，由上层报标准错误。
+// 返回的 Referer 置空：实测资源站 CDN 不校验 Referer，且不带时吞吐明显更高。
+func (d *Downloader) resolveDongpiandiMedia(ctx context.Context, task Task) (providerMedia, error) {
+	address := strings.TrimSpace(task.Chapter.VideoURL)
+	if address != "" && dongpiandiMediaAlive(ctx, address) {
+		return d.prepareWebProviderMedia(ctx, providerMedia{URL: address}, "真果·鉴")
+	}
+	if detailID := dongpiandiDetailIDFromPageURL(strings.TrimSpace(task.Chapter.PageURL)); detailID != "" {
+		if _, sourceID, valid := splitProviderDramaID(task.Chapter.ID); valid {
+			client := newDongpiandiClient()
+			body, err := client.get(ctx, "/v1/catalog/"+url.PathEscape(detailID), nil)
+			if err == nil {
+				var detail dongpiandiDetail
+				if json.Unmarshal(body, &detail) == nil {
+					for _, ep := range detail.Episodes {
+						if ep.ID != sourceID || ep.Token == "" {
+							continue
+						}
+						m3u8, err := dongpiandiResolveEpisodeM3U8(ctx, client, ep.Token, true)
+						if err == nil && m3u8 != "" {
+							return d.prepareWebProviderMedia(ctx, providerMedia{URL: m3u8}, "真果·鉴")
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	if address == "" {
+		return providerMedia{}, errors.New("真果·鉴未返回有效播放地址，请刷新章节后重试")
+	}
+	return d.prepareWebProviderMedia(ctx, providerMedia{URL: address}, "真果·鉴")
 }
 
 // searchDongpiandi 用 /v1/browse/catalog 关键字搜索。

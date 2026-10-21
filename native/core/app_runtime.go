@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -83,6 +84,7 @@ type nativeDrama struct {
 	OnlineDate     string   `json:"onlineDate,omitempty"`
 	Area           string   `json:"area,omitempty"`
 	Year           string   `json:"year,omitempty"`
+	Duration       float64  `json:"duration,omitempty"`
 	Score          string   `json:"score,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
 	ReleaseStatus  string   `json:"releaseStatus,omitempty"`
@@ -102,6 +104,7 @@ type nativeInput struct {
 	JobID            string                  `json:"jobId"`
 	Command          string                  `json:"command"`
 	Action           string                  `json:"action"`
+	SourceConfig     map[string]any          `json:"sourceConfig,omitempty"`
 	Directory        string                  `json:"directory"`
 	Source           string                  `json:"source"`
 	Page             int                     `json:"page"`
@@ -238,7 +241,50 @@ func nativeNormalize(drama Drama) nativeDrama {
 		Category: nativeDramaCategory(drama), VIP: drama.VIP,
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
 		Area: drama.Area, Year: drama.Year, Score: drama.Score,
-		Tags: append([]string(nil), drama.Tags...), ReleaseStatus: drama.ReleaseStatus}
+		Duration: flexDurationSeconds(drama.Duration),
+		Tags:     append([]string(nil), drama.Tags...), ReleaseStatus: drama.ReleaseStatus}
+}
+
+// flexDurationSeconds 把 provider 层的时长松散值统一为秒（单集时长）：
+// 数字=秒；字符串支持 "1:05:30"/"45:12" 冒号分级与纯数字秒；无效返回 0，
+// Dart 侧短剧/长剧判定对 0 走兜底规则。
+func flexDurationSeconds(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		if n, err := typed.Float64(); err == nil {
+			return n
+		}
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return 0
+		}
+		if n, err := strconv.ParseFloat(text, 64); err == nil {
+			return n
+		}
+		parts := strings.Split(text, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return 0
+		}
+		total := 0.0
+		for _, part := range parts {
+			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err != nil || n < 0 {
+				return 0
+			}
+			total = total*60 + n
+		}
+		return total
+	}
+	return 0
 }
 
 func nativeDramaCategory(drama Drama) string {
@@ -387,6 +433,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return true, engine.updateSystemProxy(input.SystemProxy)
 	case "resourceSettings":
 		return engine.resourceSettings(), nil
+	case "config.source":
+		return applySourceConfig(input.SourceConfig)
 	case "saveResourceSettings":
 		return engine.saveResourceSettings(input.Settings)
 	case "controlDownloadBatch":
@@ -483,6 +531,77 @@ func nativeDispatch(input nativeInput) (any, error) {
 	default:
 		return nil, errors.New("不支持的应用操作")
 	}
+}
+
+// applySourceConfig 应用远程下发的站源配置（app_config.json 的 sourceConfig 段，
+// 由 Dart 侧拉取远程公告配置后经 config.source 转发）。校验规则：scheme 仅
+// http/https、镜像去重后 1-8 个、dongpiandi 根地址为合法根；任一字段非法则
+// 整段丢弃，保留当前生效值（未热更过即内置兜底）。签名密钥不经此通道下发。
+func applySourceConfig(config map[string]any) (any, error) {
+	if len(config) == 0 {
+		return map[string]any{"applied": false, "reason": "缺少 sourceConfig"}, nil
+	}
+	applied := 0
+	if raw, ok := config["huangguoAIMirrors"]; ok {
+		list, ok := raw.([]any)
+		if !ok {
+			return map[string]any{"applied": false, "reason": "huangguoAIMirrors 类型无效"}, nil
+		}
+		mirrors, ok := sanitizeSourceMirrorList(list)
+		if !ok {
+			return map[string]any{"applied": false, "reason": "huangguoAIMirrors 含非法地址"}, nil
+		}
+		setHuangguoAIMirrors(mirrors)
+		applied++
+	}
+	if raw, ok := config["dongpiandiBaseURL"]; ok {
+		text, ok := raw.(string)
+		if !ok || !validSourceBaseURL(text) {
+			return map[string]any{"applied": false, "reason": "dongpiandiBaseURL 非法"}, nil
+		}
+		setDongpiandiBaseURL(strings.TrimSuffix(strings.TrimSpace(text), "/"))
+		applied++
+	}
+	if applied == 0 {
+		return map[string]any{"applied": false, "reason": "无可识别字段"}, nil
+	}
+	return map[string]any{"applied": true}, nil
+}
+
+// sanitizeSourceMirrorList 校验镜像列表：字符串、http/https 根地址、去重、上限 8；
+// 任一项非法即整体失败（调用方整段丢弃），重复项仅去重不拒绝。
+func sanitizeSourceMirrorList(list []any) ([]string, bool) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		text, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		// 先规范化（去空白+去尾斜杠）再校验/判重，保证 https://x.com/ 与 https://x.com 视为同一镜像。
+		text = strings.TrimSuffix(strings.TrimSpace(text), "/")
+		if !validSourceBaseURL(text) {
+			return nil, false
+		}
+		if seen[text] {
+			continue
+		}
+		seen[text] = true
+		out = append(out, text)
+	}
+	if len(out) == 0 || len(out) > 8 {
+		return nil, false
+	}
+	return out, true
+}
+
+// validSourceBaseURL 校验远程下发的源站根地址：http/https scheme + 非空 host。
+func validSourceBaseURL(text string) bool {
+	u, err := url.Parse(strings.TrimSpace(text))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return false
+	}
+	return true
 }
 
 func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput) (nativeCatalogResult, error) {

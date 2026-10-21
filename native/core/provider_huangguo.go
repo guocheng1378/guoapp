@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,8 +34,17 @@ const (
 )
 
 var (
-	huangguoAIBaseURL     = "https://huangguoai.com"
-	huangguoAIBaseMirrors = []string{"https://hgai5.com", "https://ksb6.pu84h97k.cc", "https://huangguoai.pages.dev", "https://www.agdkczeyx.cc"}
+	huangguoAIBaseURL = "https://huangguoai.com"
+	// 2026-10-20 实测：hgai5 目录可用但详情页 404，pages.dev 是空壳；
+	// ksb6/agdkczeyx 目录、详情、播放地址齐全，置于候选前两位。
+	// 内置值保留作兜底；可经 config.source（applySourceConfig）远程热更。
+	huangguoAIBaseMirrors = []string{"https://ksb6.pu84h97k.cc", "https://www.agdkczeyx.cc", "https://hgai5.com", "https://huangguoai.pages.dev"}
+
+	// huangguoWebUserAgent 黄果AI 网页（目录/详情/单集页）只放行桌面浏览器 UA：
+	// 2026-10-20 实测 iPhone UA 会被镜像 301 踢到互相死循环的「移动版」域名
+	// （*.zj73w86v.cc ↔ *.uw29h15s.com），跟随耗尽后还可能落到主域「最新地址」
+	// 发布页（763B 伪装成功响应）；桌面 UA 一跳直达真实页面。
+	huangguoWebUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 	reDetailHref      = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/(?:d|detail|video)/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
 	reDramaCardStart  = regexp.MustCompile(`(?is)<(?:div|article)\b[^>]*class=["'][^"']*\b(?:hg-drama-card|o5-card)\b[^"']*["'][^>]*>`)
@@ -43,6 +53,7 @@ var (
 	reH1Tag           = regexp.MustCompile(`(?is)<h1[^>]*>(.*?)</h1>`)
 	reDescMeta        = regexp.MustCompile(`(?is)<meta\b[^>]*(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)["'][^>]*>`)
 	reEpisodeNumber   = regexp.MustCompile(`(?i)(?:第\s*0*(\d+)\s*(?:集|话|期)|(?:更新至|共|全)\s*0*(\d+)\s*(?:集|话|期)|(?:episode|ep)\s*#?\s*0*(\d+))`)
+	reAIEpisodeSlug   = regexp.MustCompile(`(?i)^ep[-_ ]?0*(\d+)$`)
 	reResolution      = regexp.MustCompile(`(?i)RESOLUTION\s*=\s*(\d+)x(\d+)`)
 	reBandwidth       = regexp.MustCompile(`(?i)(?:AVERAGE-)?BANDWIDTH\s*=\s*(\d+)`)
 	reDataHLS         = regexp.MustCompile(`(?is)data-hls=["']([^"']+)["']`)
@@ -52,6 +63,34 @@ var (
 	reViewsText       = regexp.MustCompile(`(?i)[0-9]+(?:\.[0-9]+)?\s*[w万]?\s*次播放`)
 	reScoreText       = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s*分`)
 )
+
+// huangguoAIMirrorsMu 保护 huangguoAIBaseMirrors：提供方请求并发读，config.source 热更写。
+var huangguoAIMirrorsMu sync.RWMutex
+
+// huangguoAIMirrorList 返回镜像表快照，避免调用方持有可变切片。
+func huangguoAIMirrorList() []string {
+	huangguoAIMirrorsMu.RLock()
+	defer huangguoAIMirrorsMu.RUnlock()
+	out := make([]string, len(huangguoAIBaseMirrors))
+	copy(out, huangguoAIBaseMirrors)
+	return out
+}
+
+// setHuangguoAIMirrors 热更镜像表（调用方负责校验）。
+func setHuangguoAIMirrors(mirrors []string) {
+	huangguoAIMirrorsMu.Lock()
+	defer huangguoAIMirrorsMu.Unlock()
+	huangguoAIBaseMirrors = mirrors
+}
+
+// huangguoProviderUserAgent 按 URL 归属源选择 UA：黄果AI 走桌面浏览器 UA，
+// 其余源维持核心默认 iPhone UA。
+func huangguoProviderUserAgent(rawURL string) string {
+	if providerSourceForURL(rawURL) == sourceHuangguoAI {
+		return huangguoWebUserAgent
+	}
+	return userAgent
+}
 
 type providerEpisode struct {
 	Key   string
@@ -215,6 +254,7 @@ func (d *Downloader) fetchHuangguoAIDetail(ctx context.Context, sourceID string)
 	drama := huangguoDetailMetadata(body, detailURL, sourceHuangguoAI, sourceID)
 	title := drama.DisplayTitle()
 	episodes := parseHuangguoAIEpisodes(body, detailURL, sourceID)
+	episodes = mergeAIEpisodeMedia(episodes, parseAIEpisodeMediaMap(body, detailURL), detailURL)
 	if len(episodes) == 0 {
 		if media := parseAIVideoURL(body, detailURL); media != "" {
 			episodes = []providerEpisode{{Key: "1", Title: title, URL: detailURL, Index: 1, HLS: media}}
@@ -280,7 +320,7 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			if err != nil {
 				return "", err
 			}
-			req.Header.Set("User-Agent", userAgent)
+			req.Header.Set("User-Agent", huangguoProviderUserAgent(rawURL))
 			if agent, ok := ctx.Value(providerTextUserAgentKey{}).(string); ok && agent != "" {
 				req.Header.Set("User-Agent", agent)
 			}
@@ -318,7 +358,10 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 || catalogResponseBlockReason(resp, body) != "" {
 				lastErr = d.catalogResponseError(req, resp, body)
-				if catalogResponseBlockReason(resp, body) != "" || resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 408 {
+				// 404 视为镜像内容不同步：换下一候选继续（镜像间详情/目录完整度不一致）；
+				// 其余 4xx（401/403/429 等）多为风控或限制，换域名同样无效，保持 break。
+				blockReason := catalogResponseBlockReason(resp, body)
+				if blockReason != "" || resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 408 && resp.StatusCode != 404 {
 					break
 				}
 				continue
@@ -347,7 +390,8 @@ func providerURLCandidates(rawURL string) []string {
 	if err != nil || u.Hostname() != "huangguoai.com" {
 		return []string{rawURL}
 	}
-	out := make([]string, 0, len(huangguoAIBaseMirrors)+8)
+	mirrors := huangguoAIMirrorList()
+	out := make([]string, 0, len(mirrors)+8)
 	seen := map[string]bool{}
 	add := func(candidate string) {
 		if candidate == "" || seen[candidate] {
@@ -356,13 +400,12 @@ func providerURLCandidates(rawURL string) []string {
 		seen[candidate] = true
 		out = append(out, candidate)
 	}
-	for i, mirror := range huangguoAIBaseMirrors {
-		if i == 1 {
-			for _, generated := range generatedHuangguoAIMirrors(rawURL, 8) {
-				add(rehostProviderURL(u, generated))
-			}
-		}
+	for _, mirror := range mirrors {
 		add(rehostProviderURL(u, mirror))
+	}
+	// 动态兜底域名排在全部固定镜像之后（历史上常整批失效，逐个超时太昂贵）。
+	for _, generated := range generatedHuangguoAIMirrors(rawURL, 4) {
+		add(rehostProviderURL(u, generated))
 	}
 	if len(out) == 0 {
 		return []string{rawURL}
@@ -616,26 +659,40 @@ func dramaFromAIMap(m map[string]any, pageURL, category string) (Drama, bool) {
 func parseHuangguoAIEpisodes(rawHTML, pageURL, sourceID string) []providerEpisode {
 	matches := reAIEpisodeLink.FindAllStringSubmatchIndex(rawHTML, -1)
 	seen := map[string]bool{}
-	var episodes []providerEpisode
+	var episodes, selfLinks []providerEpisode
 	usedIndex := map[int]bool{}
 	for _, m := range matches {
 		if len(m) < 4 || m[2] < 0 || m[3] < 0 {
 			continue
 		}
 		href := rawHTML[m[2]:m[3]]
+		// 详情页「相关推荐」里的外部视频（/video/{其他ID}/）不是本剧的剧集，
+		// 一律跳过——真网实测曾把 1 真集 + 14 推荐混成 15 集（2026-10-20）。
+		if !aiEpisodeLinkBelongsTo(href, sourceID) {
+			continue
+		}
 		fullURL := resolveProviderURL(pageURL, href)
 		linkHTML := rawHTML[m[0]:m[1]]
 		title := firstNonEmpty(extractAttr(linkHTML, "title", "aria-label"), cleanText(linkHTML))
 		key := aiEpisodeKey(href, sourceID)
 		if key == "" {
-			key = fmt.Sprintf("auto-%d", len(episodes)+1)
+			// 自链接（/video/{sourceID}/）：仅在没有任何分集链接时兜底为单集
+			if !seen[fullURL] {
+				seen[fullURL] = true
+				selfLinks = append(selfLinks, providerEpisode{Key: "1", Title: title, URL: fullURL})
+			}
+			continue
 		}
 		if seen[key] || seen[fullURL] {
 			continue
 		}
 		seen[key] = true
 		seen[fullURL] = true
-		idx := episodeIndex(title, 0)
+		// 集序号优先取自链接键（ep-3 → 3），标题没有集号时退到位置序
+		idx := aiMapKeyNumber(key)
+		if idx <= 0 {
+			idx = episodeIndex(title, 0)
+		}
 		if idx <= 0 {
 			idx = len(episodes) + 1
 		}
@@ -643,8 +700,35 @@ func parseHuangguoAIEpisodes(rawHTML, pageURL, sourceID string) []providerEpisod
 		usedIndex[idx] = true
 		episodes = append(episodes, providerEpisode{Key: key, Title: title, URL: fullURL, Index: idx})
 	}
+	if len(episodes) > 0 && len(selfLinks) > 0 {
+		// 分集链接从 ep-2 起、详情页自身即第 1 集时补位（链接列表无 Index 1）
+		hasFirst := false
+		for _, ep := range episodes {
+			if ep.Index == 1 {
+				hasFirst = true
+				break
+			}
+		}
+		if !hasFirst {
+			episodes = append([]providerEpisode{{Key: "1", Title: selfLinks[0].Title, URL: selfLinks[0].URL, Index: 1}}, episodes...)
+		}
+	}
+	if len(episodes) == 0 && len(selfLinks) > 0 {
+		episodes = append(episodes, providerEpisode{Key: "1", Title: selfLinks[0].Title, URL: selfLinks[0].URL, Index: 1})
+	}
 	sortProviderEpisodes(episodes)
 	return episodes
+}
+
+// aiEpisodeLinkBelongsTo 判断 /video/ 链接是否属于当前视频（自身或其分集）。
+func aiEpisodeLinkBelongsTo(href, sourceID string) bool {
+	u, err := url.Parse(html.UnescapeString(href))
+	path := href
+	if err == nil {
+		path = u.Path
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, "/video/"), "/"), "/")
+	return len(parts) > 0 && parts[0] == sourceID
 }
 
 func parseAIVideoURL(rawHTML, pageURL string) string {
@@ -710,6 +794,80 @@ func parseDataHLS(rawHTML, pageURL string) string {
 		return normalizeProviderMediaURL(pageURL, m[1])
 	}
 	return ""
+}
+
+// parseAIEpisodeMediaMap 从详情页 videoInitialData JSON 的 epPlaySrcs 提取全集
+// 播放地址（key=集序号字符串）。2026-10-20 起单集页（/video/{epID}/）在全部镜像
+// 入口上要么 301 死循环要么跳「最新地址」发布页，播放地址只随详情页下发。
+func parseAIEpisodeMediaMap(rawHTML, pageURL string) map[string]string {
+	re := regexp.MustCompile(`(?is)<script\b[^>]*id=["']videoInitialData["'][^>]*>(.*?)</script>`)
+	m := re.FindStringSubmatch(rawHTML)
+	if len(m) < 2 {
+		return nil
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(html.UnescapeString(m[1])), &data); err != nil {
+		return nil
+	}
+	eps, _ := data["epPlaySrcs"].(map[string]any)
+	if len(eps) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(eps))
+	for key, value := range eps {
+		if media := normalizeProviderMediaURL(pageURL, fmt.Sprint(value)); media != "" {
+			out[key] = media
+		}
+	}
+	return out
+}
+
+// mergeAIEpisodeMedia 把详情页 epPlaySrcs 全集地址并入剧集列表：先按
+// Key/Index 回填已解析的剧集，再为映射里未被覆盖的序号补齐缺集
+// （详情页只有自链接或分集链接不全的多集剧）。epPlaySrcs 是全集地址
+// 的权威来源；映射未覆盖的集保留 PageURL，由 resolve 走 ep-N 页面按需解析。
+func mergeAIEpisodeMedia(episodes []providerEpisode, mediaMap map[string]string, detailURL string) []providerEpisode {
+	if len(mediaMap) == 0 {
+		return episodes
+	}
+	for i := range episodes {
+		if episodes[i].HLS != "" {
+			continue
+		}
+		if media, found := mediaMap[episodes[i].Key]; found {
+			episodes[i].HLS = media
+			continue
+		}
+		if media, found := mediaMap[strconv.Itoa(episodes[i].Index)]; found {
+			episodes[i].HLS = media
+		}
+	}
+	claimed := map[int]bool{}
+	for i := range episodes {
+		if episodes[i].HLS != "" {
+			claimed[episodes[i].Index] = true
+		}
+	}
+	keys := make([]string, 0, len(mediaMap))
+	for key := range mediaMap {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		return aiMapKeyNumber(keys[i]) < aiMapKeyNumber(keys[j])
+	})
+	for _, key := range keys {
+		num := aiMapKeyNumber(key)
+		if num <= 0 {
+			num = len(episodes) + 1
+		}
+		if claimed[num] {
+			continue
+		}
+		claimed[num] = true
+		episodes = append(episodes, providerEpisode{Key: key, Title: fmt.Sprintf("第%s集", key), URL: detailURL, Index: num, HLS: mediaMap[key]})
+	}
+	sortProviderEpisodes(episodes)
+	return episodes
 }
 
 func sortProviderEpisodes(episodes []providerEpisode) {
@@ -790,12 +948,26 @@ func aiEpisodeKey(href, sourceID string) string {
 	path = strings.Trim(strings.TrimPrefix(path, "/video/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) > 1 && parts[0] == sourceID {
+		// 分集链接末段形如 ep-3（/video/{id}/ep-3/ 即第 3 集），归一成
+		// 纯数字才能与 epPlaySrcs 的键（"1","2",...）对齐——否则第 2 集
+		// 会经 Index 兜底错配到第 1 集的播放地址（2026-10-20 真网实测）。
+		if m := reAIEpisodeSlug.FindStringSubmatch(parts[len(parts)-1]); len(m) > 1 {
+			return m[1]
+		}
 		return cleanID(parts[len(parts)-1])
 	}
 	if len(parts) == 1 && parts[0] == sourceID {
 		return ""
 	}
 	return cleanID(strings.Join(parts, "-"))
+}
+
+// aiMapKeyNumber 把 epPlaySrcs 键解析成集序号（"3"→3；"第3集"→3；其余 0）。
+func aiMapKeyNumber(key string) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(key)); err == nil && n > 0 {
+		return n
+	}
+	return episodeIndex(key, 0)
 }
 
 func detailIDFromString(s string) string {

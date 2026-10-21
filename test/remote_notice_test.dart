@@ -70,15 +70,34 @@ const RemoteNoticeConfig _announceWithImage = RemoteNoticeConfig(
   ),
 );
 
+const Map<String, dynamic> _sourceConfig = <String, dynamic>{
+  'huangguoAIMirrors': <String>[
+    'https://a.example.com',
+    'https://b.example.com',
+  ],
+  'dongpiandiBaseURL': 'https://dp.example.com',
+};
+
+const RemoteNoticeConfig _announceWithSourceConfig = RemoteNoticeConfig(
+  announcement: RemoteNoticeAnnouncement(
+    title: '公告标题',
+    message: '公告正文内容',
+    button: '我知道了',
+  ),
+  sourceConfig: _sourceConfig,
+);
+
 RemoteNoticeTrigger _host({
   required String version,
   RemoteNoticeConfig? config,
   RemoteConfigFetcher? fetcher,
+  Future<void> Function(Map<String, dynamic> config)? applySourceConfig,
 }) {
   return RemoteNoticeTrigger(
     version: version,
     debugConfig: config,
     debugFetcher: fetcher,
+    debugApplySourceConfig: applySourceConfig,
     child: const Scaffold(body: Center(child: Text('home-body'))),
   );
 }
@@ -224,6 +243,58 @@ void main() {
       expect(RemoteNoticeConfig.tryParse('{oops'), isNull);
       expect(RemoteNoticeConfig.tryParse('[]'), isNull);
       expect(RemoteNoticeConfig.tryParse('null'), isNull);
+    });
+  });
+
+  group('sourceConfig 解析', () {
+    Map<String, dynamic>? parseWith(Object? raw) {
+      return RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'sourceConfig': raw,
+      }))?.sourceConfig;
+    }
+
+    test('合法段解析进配置（值保持原生类型）', () {
+      final config = RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'sourceConfig': <String, Object?>{
+          'huangguoAIMirrors': <String>[
+            'https://a.example.com',
+            'https://b.example.com',
+          ],
+          'dongpiandiBaseURL': 'https://dp.example.com',
+        },
+        'announcement': <String, Object?>{
+          'enabled': true,
+          'title': 'T',
+          'message': 'M',
+        },
+      }));
+      expect(config, isNotNull);
+      final sc = config!.sourceConfig;
+      expect(sc, isNotNull);
+      expect(sc!['huangguoAIMirrors'],
+          <String>['https://a.example.com', 'https://b.example.com']);
+      expect(sc['dongpiandiBaseURL'], 'https://dp.example.com');
+      // 其余段不受 sourceConfig 影响。
+      expect(config.announcement?.title, 'T');
+    });
+
+    test('非 Map / 空 Map / null / 缺失时段为 null', () {
+      expect(parseWith(<String>['not-a-map']), isNull);
+      expect(parseWith('str'), isNull);
+      expect(parseWith(3), isNull);
+      expect(parseWith(<String, Object?>{}), isNull);
+      expect(parseWith(null), isNull);
+      expect(RemoteNoticeConfig.tryParse('{}')?.sourceConfig, isNull);
+    });
+
+    test('仅 sourceConfig 段也构成有效配置（转发不依赖弹窗段）', () {
+      final config = RemoteNoticeConfig.tryParse(jsonEncode(<String, Object?>{
+        'sourceConfig': _sourceConfig,
+      }));
+      expect(config, isNotNull);
+      expect(config!.announcement, isNull);
+      expect(config.update, isNull);
+      expect(config.sourceConfig, isNotNull);
     });
   });
 
@@ -444,6 +515,93 @@ void main() {
       await tester.pump();
       expect(find.text('公告标题'), findsNothing);
       expect(find.textContaining('发现新版本'), findsNothing);
+    });
+  });
+
+  group('sourceConfig 转发', () {
+    testWidgets('弹公告卡时转发站源配置给核心桥桩', (tester) async {
+      final List<Map<String, dynamic>> calls = <Map<String, dynamic>>[];
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          config: _announceWithSourceConfig,
+          applySourceConfig: (config) async {
+            calls.add(config);
+          },
+        ),
+      );
+      expect(calls, hasLength(1));
+      expect(calls.single['huangguoAIMirrors'],
+          <String>['https://a.example.com', 'https://b.example.com']);
+      expect(calls.single['dongpiandiBaseURL'], 'https://dp.example.com');
+      // 转发不阻塞弹窗链路。
+      expect(find.text('公告标题'), findsOneWidget);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+      expect(find.text('公告标题'), findsNothing);
+    });
+
+    testWidgets('纯 sourceConfig 段不弹卡但仍转发', (tester) async {
+      var calls = 0;
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          config: RemoteNoticeConfig(sourceConfig: _sourceConfig),
+          applySourceConfig: (_) async => calls++,
+        ),
+      );
+      expect(calls, 1);
+      expect(find.text('公告标题'), findsNothing);
+      expect(find.textContaining('发现新版本'), findsNothing);
+      expect(find.text('home-body'), findsOneWidget);
+    });
+
+    testWidgets('无 sourceConfig 段时不转发', (tester) async {
+      var calls = 0;
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          config: _announceOnly,
+          applySourceConfig: (_) async => calls++,
+        ),
+      );
+      expect(calls, 0);
+      expect(find.text('公告标题'), findsOneWidget);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('转发抛错静默，公告卡照常弹出', (tester) async {
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          config: _announceWithSourceConfig,
+          applySourceConfig: (_) async => throw Exception('bridge down'),
+        ),
+      );
+      expect(find.text('公告标题'), findsOneWidget);
+      await tester.tap(find.text('我知道了'));
+      await tester.pumpAndSettle();
+      expect(find.text('公告标题'), findsNothing);
+      expect(find.text('home-body'), findsOneWidget);
+    });
+
+    testWidgets('拉取失败时无转发', (tester) async {
+      var calls = 0;
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          fetcher: () async => null,
+          applySourceConfig: (_) async => calls++,
+        ),
+      );
+      expect(calls, 0);
+      expect(find.text('home-body'), findsOneWidget);
     });
   });
 }

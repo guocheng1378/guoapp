@@ -19,6 +19,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'app_build.dart';
 import 'app_icons.dart';
+import 'core_bridge.dart';
 import 'folme.dart';
 import 'glass.dart';
 
@@ -70,10 +71,19 @@ class RemoteNoticeUpdate {
 
 /// 远程配置模型：防御性解析，任何结构性错误只丢弃对应段而非整体失败。
 class RemoteNoticeConfig {
-  const RemoteNoticeConfig({this.announcement, this.update});
+  const RemoteNoticeConfig({
+    this.announcement,
+    this.update,
+    this.sourceConfig,
+  });
 
   final RemoteNoticeAnnouncement? announcement;
   final RemoteNoticeUpdate? update;
+
+  /// 站源配置段（sourceConfig）：原样转发核心热更（黄果AI 镜像表 / 真果·鉴
+  /// 根地址）。字段级校验（scheme、去重、上限）由核心 config.source 权威执行，
+  /// 非法段会被整体拒绝并保持当前生效值；此处仅做结构防御。
+  final Map<String, dynamic>? sourceConfig;
 
   /// 解析失败（坏 JSON / 根不是对象）返回 null；未知键（如 `_说明`）忽略。
   static RemoteNoticeConfig? tryParse(String body) {
@@ -87,6 +97,7 @@ class RemoteNoticeConfig {
     return RemoteNoticeConfig(
       announcement: _parseAnnouncement(decoded['announcement']),
       update: _parseUpdate(decoded['update']),
+      sourceConfig: _parseSourceConfig(decoded['sourceConfig']),
     );
   }
 
@@ -133,6 +144,14 @@ class RemoteNoticeConfig {
       notes: raw['notes']?.toString() ?? '',
       url: raw['url']?.toString() ?? '',
     );
+  }
+
+  /// sourceConfig 段防御解析：仅要求是 Map 且非空，原样透传（值保持
+  /// jsonDecode 出来的原生类型）。字段级合法性由核心侧权威校验，此处不重复
+  /// 规则，避免两端规则漂移。
+  static Map<String, dynamic>? _parseSourceConfig(Object? raw) {
+    if (raw is! Map || raw.isEmpty) return null;
+    return Map<String, dynamic>.from(raw);
   }
 }
 
@@ -188,13 +207,15 @@ void resetRemoteNoticeSessionForTest() => _noticeAttempted = false;
 /// 启动弹窗入口：拉取配置并按内容弹一次玻璃卡（更新段优先级与公告段
 /// 同卡展示）；配置不可用 / 无可弹内容时静默返回。
 ///
-/// [debugConfig] / [debugFetcher] 仅测试注入用；注入时跳过 FLUTTER_TEST
-/// 直通守卫。
+/// [debugConfig] / [debugFetcher] / [debugApplySourceConfig] 仅测试注入用；
+/// 注入前两者时跳过 FLUTTER_TEST 直通守卫，注入 [debugApplySourceConfig]
+/// 时以桩替代核心桥转发（避免测试真调 FFI）。
 Future<void> maybeShowRemoteNotice(
   BuildContext context, {
   required String currentVersion,
   RemoteNoticeConfig? debugConfig,
   RemoteConfigFetcher? debugFetcher,
+  Future<void> Function(Map<String, dynamic> config)? debugApplySourceConfig,
 }) async {
   if (_noticeAttempted) return;
   _noticeAttempted = true;
@@ -218,7 +239,19 @@ Future<void> maybeShowRemoteNotice(
       return;
     }
   }
-  if (config == null || !context.mounted) return;
+  if (config == null) return;
+
+  // sourceConfig 段与弹窗内容无关：无论是否弹卡都先转发核心热更；失败
+  // 静默（核心校验拒绝 / 桥不可用都保持当前生效值），不阻塞弹窗链路。
+  final sourceConfig = config.sourceConfig;
+  if (sourceConfig != null && sourceConfig.isNotEmpty) {
+    try {
+      await (debugApplySourceConfig ?? applyNativeSourceConfig)(sourceConfig);
+    } on Object {
+      // 尽力而为。
+    }
+  }
+  if (!context.mounted) return;
 
   final update = config.update;
   final localBuild = parseBuildNumber(currentVersion);
@@ -533,6 +566,7 @@ class RemoteNoticeTrigger extends StatefulWidget {
     required this.child,
     this.debugConfig,
     this.debugFetcher,
+    this.debugApplySourceConfig,
   });
 
   /// 当前安装版本串（AppDevice channel 提供，格式 `0.2.96+2129`）。
@@ -541,16 +575,22 @@ class RemoteNoticeTrigger extends StatefulWidget {
   final RemoteNoticeConfig? debugConfig;
   final RemoteConfigFetcher? debugFetcher;
 
+  /// sourceConfig 转发桩（仅测试注入，避免真调核心桥）。
+  final Future<void> Function(Map<String, dynamic> config)?
+      debugApplySourceConfig;
+
   @override
   State<RemoteNoticeTrigger> createState() => _RemoteNoticeTriggerState();
 }
 
 class _RemoteNoticeTriggerState extends State<RemoteNoticeTrigger> {
+  Timer? _pending;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future<void>.delayed(const Duration(milliseconds: 1500), () {
+      _pending = Timer(const Duration(milliseconds: 1500), () {
         if (!mounted) return;
         unawaited(
           maybeShowRemoteNotice(
@@ -558,10 +598,17 @@ class _RemoteNoticeTriggerState extends State<RemoteNoticeTrigger> {
             currentVersion: widget.version,
             debugConfig: widget.debugConfig,
             debugFetcher: widget.debugFetcher,
+            debugApplySourceConfig: widget.debugApplySourceConfig,
           ),
         );
       });
     });
+  }
+
+  @override
+  void dispose() {
+    _pending?.cancel();
+    super.dispose();
   }
 
   @override
