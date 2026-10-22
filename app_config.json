@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2171,
-    "notes": "本次更新：\n· 挖孔屏适配：横屏时左侧不再出现黑条，画面与界面完整铺满全屏\n· 界面布局随横屏沉浸同步延伸到屏幕边缘",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2171/zhenguojian-0.2.96+2171-arm64-v8a.apk"
+    "build": 2172,
+    "notes": "本次更新：\n· 修复红果源试看约 10 秒自动卡停的问题，长按倍速可正常恢复播放\n· 挖孔屏适配：横屏时左侧不再出现黑条，画面与界面完整铺满全屏\n· 界面布局随横屏沉浸同步延伸到屏幕边缘",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2172/zhenguojian-0.2.96+2172-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
