@@ -9,6 +9,8 @@ import 'about_card.dart';
 import 'app_bottom_navigation.dart';
 import 'core_bridge.dart';
 import 'folme.dart';
+import 'fog_tint_sampler.dart';
+import 'fog_tuning.dart';
 import 'glass.dart';
 import 'glass_menu.dart';
 import 'catalog_filters.dart';
@@ -24,6 +26,7 @@ import 'downloads_screen.dart';
 import 'featured_catalog.dart';
 import 'local_store.dart';
 import 'lan_screen.dart';
+import 'live_screen.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
@@ -38,10 +41,14 @@ import 'drama_actions.dart';
 import 'library_updater.dart';
 import 'saved_library.dart';
 import 'app_icons.dart';
+import 'follow_updates.dart';
 import 'motion.dart';
 
 /// 手机/iOS 悬浮玻璃底栏的内容底部避让高度（栏高 68 + 浮动下边距 12 + 余量）。
 const _floatingNavInset = 96.0;
+
+/// 站源长按菜单与 TV 站源菜单中「电视直播」条目的哨兵值。
+const _liveEntryChoice = '__live_tv__';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.repository, required this.store});
@@ -56,6 +63,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _search = TextEditingController();
   final _scroll = ScrollController();
   Timer? _debounce;
+  // 手机横屏沉浸当前态（_syncImmersive 幂等守卫；dispose 时恢复）。
+  bool _immersive = false;
   late SourceSite _source;
   List<Drama> _items = [];
   bool _loading = true;
@@ -74,13 +83,33 @@ class _HomeScreenState extends State<HomeScreen> {
   final _changedSources = <String>{};
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
+  Timer? _sweepTimer;
+  // 首页继续观看条每次启动提醒一次：条目真正出现起 8 秒无操作自动收起，
+  // 点条目去播放或点「不再提醒」立即收起，收起后本会话不再出现。
+  bool _resumeDismissed = false;
+  Timer? _resumeHideTimer;
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
 
   // 回顶雾面钮（FogFab）：滚动方向点亮/熄灭，过渡由组件内弹簧完成。
+  // 停止滚动 2s 后自动隐藏（每次滚动事件重置计时）。
   double _fabPrevPixels = 0;
   bool _fabShown = false;
   bool _fabLit = false;
+  Timer? _fabHideTimer;
+
+  /// 接近度信号（demo 真值）：滚动距离/50 clamp 0..1，驱动顶栏雾玻璃
+  /// 岛与分类胶囊白描边亮起；滚回顶部（px=0）熄灭。同值不通知。
+  final ValueNotifier<double> _prox = ValueNotifier<double>(0);
+
+  /// 雾面动态取色采样色（null=纯白雾）：FogTintSampler 节流采样内容
+  /// 区像素平均色，驱动 _pinnedFiltersBar 与其他 tab 顶部的 TopFog
+  /// 染色（调参台 tintMix 控制浓度，0=现状纯白）。
+  final ValueNotifier<Color?> _fogTint = ValueNotifier<Color?>(null);
+  // 调参台「雾面高度」延伸量：吸顶头 extent 与雾面挂点高度随之加
+  // 高（0=现状）。仅此参数需要整页 rebuild（extent 变化），其余调
+  // 参维度由 TopFog 内部监听自行重建。
+  double _fogHeight = 0;
   bool _showRecommendations = false;
   bool _catalogLoadScheduled = false;
   final _filtersKey = GlobalKey<RemoteRowState>();
@@ -270,25 +299,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// 长按站源岛：弹出分类选择菜单，点选一类即切到该类第一个源。
+  /// 长按站源岛：弹出分类选择菜单，点选一类即切到该类第一个源；
+  /// 末尾固定附「电视直播」条目（直播不进站源体系，见 _openLiveScreen）。
   Future<void> _pickSourceCategory() async {
     final categories = _sourceCategories;
-    if (categories.length <= 1) return;
-    final picked = await showGlassMenu<SourceGroup>(
+    final picked = await showGlassMenu<Object>(
       context: context,
       anchorKey: _sourceMenuKey,
       entries: [
         for (final category in categories)
-          GlassMenuEntry(
+          GlassMenuEntry<Object>(
             category,
             category.name,
             checked: category.sources.any((source) => source.id == _source.id),
           ),
+        GlassMenuEntry<Object>(_liveEntryChoice, '电视直播'),
       ],
     );
-    if (picked != null && picked.sources.isNotEmpty) {
+    if (picked == _liveEntryChoice) {
+      _openLiveScreen();
+      return;
+    }
+    if (picked is SourceGroup && picked.sources.isNotEmpty) {
       _changeSource(picked.sources.first);
     }
+  }
+
+  /// 打开电视直播页；自填直播源从本地配置读出经 liveUrls 传给 Go 核心合并。
+  void _openLiveScreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LiveScreen(
+          repository: widget.repository,
+          liveUrls: widget.store.liveSourceUrls,
+        ),
+      ),
+    );
   }
 
   /// 手机端站源切换玻璃菜单（TV 端走 PopupMenuButton 实底保焦点导航）。
@@ -396,12 +442,12 @@ class _HomeScreenState extends State<HomeScreen> {
       // 颗间距 10px：四颗是独立胶囊岛（对齐小米主题商店顶栏图标钮），
       // 之前 left:4 等于没有间隙，三颗贴死读作一坨。
       padding: const EdgeInsets.only(left: 10),
-      child: GlassSurface(
-        radius: 24,
-        topHighlight: true,
-        // 统一滑动栏瓷面档：微透白瓷（默认 dark 0.08/light 0.72）
-        // + 白描边，与分类胶囊同材质语言。
-        // Folme 果冻按压：按下 0.96、松手弹簧弹回（轻过冲）。
+      // demo 雾玻璃配方（FogPill）：σ18 真磨砂 + 半透玻璃底 + 白描边
+      // 随滚动亮起（回顶熄灭）。不再用瓷面岛——瓷面半透白瓷（0.72 白）
+      // 叠在雾面上读作一层透明膜，也让顶栏区域雾感与分类条不一致。
+      // Folme 果冻按压：按下 0.96、松手弹簧弹回（轻过冲）。
+      child: FogPill(
+        prox: _prox,
         child: FolmePress(child: child),
       ),
     );
@@ -634,19 +680,63 @@ class _HomeScreenState extends State<HomeScreen> {
     )..addListener(_updateChanged);
     _updater.startWatching();
     widget.repository.catalogUpdates.addListener(_metadataChanged);
+    // 启动同步：调参台 load() 在首页构建前已写入保存值，监听器只报
+    // 「变化」——不先取当前值，雾面高度启动永远停在 0（用户症状根因）。
+    _fogHeight = FogTuningStore.state.value.fogHeight;
+    FogTuningStore.state.addListener(_onFogTuning);
     if (widget.store.sources.isNotEmpty) {
       _load(useCache: true);
       _loadCategories();
     } else {
       _loading = false;
     }
+    // 追剧更新主动检测：启动让路 6s 后台 sweep，「N 集更新」角标自动
+    // 亮起。测试环境（Motion.inTest）不启动——避免 fake-async Pending
+    // Timer 与网络依赖；真实场景 Timer 已在 dispose 中取消。
+    if (!Motion.inTest) {
+      _sweepTimer = Timer(const Duration(seconds: 6), () async {
+        final updated = await sweepFollowUpdates(
+          widget.repository,
+          widget.store,
+        );
+        if (updated <= 0 || !mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('追剧有 $updated 部更新'),
+            action: SnackBarAction(
+              label: '去看看',
+              onPressed: () => _changeTab(1),
+            ),
+          ),
+        );
+      });
+    }
+  }
+
+  /// 手机横屏沉浸+紧凑化同步：进入横屏切 immersiveSticky（状态栏隐藏、
+  /// 下滑临时呼出），回竖屏恢复 edgeToEdge。幂等，可在 build 中每帧调用。
+  void _syncImmersive(bool compact) {
+    if (_immersive == compact) return;
+    _immersive = compact;
+    // try/catch 包装而非 catchError：Future<void>.catchError 的 handler
+    // 返回 null 在部分运行时会抛 ArgumentError（fake_async 实测）。
+    unawaited(() async {
+      try {
+        await SystemChrome.setEnabledSystemUIMode(
+          compact ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+        );
+      } catch (_) {}
+    }());
   }
 
   @override
   void dispose() {
+    if (_immersive) _syncImmersive(false);
     _updater.removeListener(_updateChanged);
     _updater.dispose();
     _cacheRefreshTimer?.cancel();
+    _sweepTimer?.cancel();
+    _resumeHideTimer?.cancel();
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
     _generation++;
     _categoryGeneration++;
@@ -656,7 +746,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _search.dispose();
     _scroll.removeListener(_onCatalogScroll);
     _scroll.removeListener(_onFabScroll);
+    _fabHideTimer?.cancel();
     _scroll.dispose();
+    _prox.dispose();
+    _fogTint.dispose();
+    FogTuningStore.state.removeListener(_onFogTuning);
     _appBarFocus.dispose();
     _selectionFocus.dispose();
     super.dispose();
@@ -691,6 +785,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 回顶雾面钮：滚出首屏（>400px）浮现；上行点亮、下行熄灭，
   /// 方向量带 ±4px 迟滞防抖，明暗过渡交给 FogFab 内部弹簧。
+  /// 滚动中常显；最后一次滚动事件 2s 后自动隐藏，再滚立即重现。
+  /// 调参台「雾面高度」变化回调：值变了才 setState（extent 与雾面
+  /// 挂点高度需整页 rebuild）；拖动其它滑块零开销。
+  void _onFogTuning() {
+    final h = FogTuningStore.state.value.fogHeight;
+    if (h != _fogHeight && mounted) setState(() => _fogHeight = h);
+  }
+
+  /// 雾面挂点实际高度：负档收窄（底缘上移），clamp≥0 防负高度断言。
+  double _fogBandHeight(double base) {
+    final h = base + _fogHeight;
+    return h < 0 ? 0 : h;
+  }
+
   void _onFabScroll() {
     if (!_scroll.hasClients) return;
     final pixels = _scroll.position.pixels;
@@ -703,11 +811,30 @@ class _HomeScreenState extends State<HomeScreen> {
       lit = false;
     }
     final shown = pixels > 400;
+    // 停止滚动计时：滚出首屏期间每次滚动事件都重置，2s 静默后隐藏；
+    // 滚回首屏内直接取消（按钮随即隐藏，无需计时）。
+    _fabHideTimer?.cancel();
+    if (shown) {
+      _fabHideTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted || !_fabShown) return;
+        setState(() => _fabShown = false);
+      });
+    }
     if (shown == _fabShown && lit == _fabLit) return;
     setState(() {
       _fabShown = shown;
       _fabLit = lit;
     });
+  }
+
+  /// 接近度信号更新（demo 真值）：滚动距离/50 clamp 0..1。50px 内
+  /// 线性点亮全部顶栏岛与分类胶囊描边，回顶熄灭；ValueNotifier 同值
+  /// 不通知，滚动稳态零开销。走 ScrollNotification 冒泡——全部 tab
+  /// 的滚动（首页/追剧/最近/下载）都驱动同一信号；横滑列表过滤掉。
+  bool _onBodyScroll(ScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    _prox.value = (n.metrics.pixels / 50).clamp(0.0, 1.0);
+    return false;
   }
 
   void _backToTop() {
@@ -868,11 +995,13 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 当前目录上有效的排序项（含源站服务端排序能力）。
   Set<CatalogSort> _catalogSortSupport() {
     final supported = catalogSortSupport(_items);
-    // 剧果「全部」页由源站排序（sort=hot/new），热度/上线日期不受客户端字段限制。
-    if (_group.sources.any((source) => source.id == 'huangju')) {
-      supported
-        ..add(CatalogSort.heat)
-        ..add(CatalogSort.date);
+    // 剧果「全部」页由源站按热度序返回（sort=hot），条目本身无热度
+    // 字段，客户端排序靠 tie-break 保持该顺序——热度语义只在「全部」
+    // 分类成立；其它分类与搜索态源站既不按热度也不按日期返回（且
+    // 条目无 heat/onlineDate 字段），宣称支持会造成假排序，故收窄。
+    if (_category.isEmpty &&
+        _group.sources.any((source) => source.id == 'huangju')) {
+      supported.add(CatalogSort.heat);
     }
     return supported;
   }
@@ -881,16 +1010,29 @@ class _HomeScreenState extends State<HomeScreen> {
     // TV 保留底部弹层：遥控焦点导航可靠 + 「应用」确认步骤；
     // 手机改锚定 ≡ 岛的轻量筛选浮卡，点选即生效，不再占半屏大玻璃。
     final supported = _catalogSortSupport();
-    // 地区/年份选项由当前已加载条目动态聚合；无该字段数据的源
-    // （短剧类/青空等）选项为空，面板对应节整体隐藏。
-    final options = catalogFilterOptions(_items);
+    // 筛选选项按「当前其它过滤态下选中必有内容」聚合：浏览池已含
+    // 分类/搜索/VIP/站源开关过滤，聚合某维度选项时跳过该维度自身、
+    // 其余筛选维度照常生效——显示的每个选项选中后都不会得到空列表；
+    // 无该字段数据的源（短剧类/青空等）选项为空，面板对应节整体隐藏。
+    final view = widget.store.catalogView;
+    final browsable = _browsableItems;
+    final areaOptions = catalogFilterOptions(
+      filterCatalog(browsable, view, skipArea: true),
+    ).areas;
+    final yearOptions = catalogFilterOptions(
+      filterCatalog(browsable, view, skipYear: true),
+    ).years;
+    final releaseOptions = catalogReleaseOptions(
+      filterCatalog(browsable, view, skipRelease: true),
+    );
     if (AppLayout.isTelevision(context)) {
       final selected = await chooseCatalogView(
         context,
-        widget.store.catalogView,
+        view,
         supported: supported,
-        areaOptions: options.areas,
-        yearOptions: options.years,
+        areaOptions: areaOptions,
+        yearOptions: yearOptions,
+        releaseOptions: releaseOptions,
       );
       if (selected != null && mounted) {
         final previous = widget.store.catalogView;
@@ -907,10 +1049,11 @@ class _HomeScreenState extends State<HomeScreen> {
     await showCatalogFilterMenu(
       context: context,
       anchorKey: _sortMenuKey,
-      current: widget.store.catalogView,
+      current: view,
       supported: supported,
-      areaOptions: options.areas,
-      yearOptions: options.years,
+      areaOptions: areaOptions,
+      yearOptions: yearOptions,
+      releaseOptions: releaseOptions,
       onChanged: (view) async {
         final previous = widget.store.catalogView;
         await saveUserChange(
@@ -968,7 +1111,86 @@ class _HomeScreenState extends State<HomeScreen> {
     _tab = tab;
     _selectionMode = false;
     _selectedDramas.clear();
+    // 新 tab 尚无滚动帧，残留的旧 tab 接近度会让描边虚亮——复位。
+    _prox.value = 0;
   });
+
+  /// 首页继续观看条：最近一条还没看完的观看记录（history 已按时间倒序）。
+  /// 判定式与追剧页 continue-watching 卡一致。
+  WatchEntry? get _resumeEntry {
+    if (_resumeDismissed || _searchVisible) return null;
+    return widget.store.history
+        .where(
+          (entry) =>
+              !entry.finished ||
+              entry.drama.episodes <= 0 ||
+              entry.episode < entry.drama.episodes,
+        )
+        .firstOrNull;
+  }
+
+  /// 追剧/最近卡片菜单「换个源找」：回发现页用剧名触发全源搜索。
+  void _findSourceFor(String title) {
+    _changeTab(0);
+    setState(() => _searchVisible = true);
+    _submitSearch(title);
+  }
+
+  /// 继续观看条自动收起时长：出现后无操作 8 秒即收，不常驻占版面。
+  static const _resumeAutoHideDelay = Duration(seconds: 8);
+
+  /// 首次真正渲染出条目才开始计时——history 异步就绪，若从 initState
+  /// 起算，冷启动加载耗时会把倒计时耗在条目出现之前。
+  void _scheduleResumeAutoHide() {
+    if (_resumeHideTimer != null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _resumeDismissed || _resumeHideTimer != null) return;
+      _resumeHideTimer = Timer(_resumeAutoHideDelay, () {
+        _resumeHideTimer = null;
+        if (mounted && !_resumeDismissed) {
+          setState(() => _resumeDismissed = true);
+        }
+      });
+    });
+  }
+
+  /// 立即收起（点「不再提醒」/点条目去播放）：取消自动收起计时。
+  void _dismissResume() {
+    _resumeHideTimer?.cancel();
+    _resumeHideTimer = null;
+    setState(() => _resumeDismissed = true);
+  }
+
+  Widget _continueWatchingCard() {
+    final entry = _resumeEntry;
+    if (entry == null) return const SizedBox.shrink();
+    _scheduleResumeAutoHide();
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        key: const ValueKey('home-continue-watching'),
+        leading: AppIcon(AppIcons.playCircle),
+        title: Text(
+          '继续观看 · ${entry.drama.title}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          '第 ${entry.episode} 集 · ${formatPosition(entry.position)}',
+        ),
+        trailing: IconButton(
+          tooltip: '不再提醒',
+          onPressed: _dismissResume,
+          icon: AppIcon(AppIcons.close, size: 20),
+        ),
+        onTap: () {
+          // 提醒已响应：收起后去播放，回到首页不再常驻此条。
+          _dismissResume();
+          _openDrama(entry.drama, resume: true);
+        },
+      ),
+    );
+  }
 
   void _cancelSelection() => setState(() {
     _selectionMode = false;
@@ -1074,6 +1296,41 @@ class _HomeScreenState extends State<HomeScreen> {
       _group.sources.any((source) => source.id == 'huangdou');
   bool get _hideVip => _supportsVipFilter && widget.store.hideVip;
 
+  /// 浏览可见性判定（站源开关 + 分类 local 过滤 + VIP 隐藏 + 搜索词），
+  /// _visible 与筛选面板选项聚合（_browsableItems）共用——保证聚合出的
+  /// 选项在当前浏览态下选中必有内容。
+  bool _passesBrowseFilters(Drama drama, String query) {
+    if (!widget.store.allowsSource(drama.source)) return false;
+    if (_category.startsWith('local:')) {
+      final isLong = _category == localLongCategory
+          ? true
+          : _category == localShortCategory
+          ? false
+          : null;
+      if (isLong != null) {
+        // 短剧/长剧档：按单集时长（>10 分钟=长剧）全源统一判定。
+        if (dramaIsLongDrama(drama, SourceSite.byId(drama.source)) != isLong) {
+          return false;
+        }
+      } else if (!matchesLocalGenre(drama, _category.substring(6))) {
+        return false;
+      }
+    }
+    if (_hideVip && drama.source == 'huangdou' && drama.vip) {
+      return false;
+    }
+    return _onlineSearch || query.isEmpty || matchesDramaQuery(drama, query);
+  }
+
+  /// 当前浏览过滤态下的条目池（站源开关+分类+VIP+搜索词，不含筛选
+  /// 维度），供排序与筛选面板聚合「选中必有内容」的选项用。
+  List<Drama> get _browsableItems {
+    final query = _search.text.trim().toLowerCase();
+    return _items
+        .where((drama) => _passesBrowseFilters(drama, query))
+        .toList();
+  }
+
   List<Drama>? _visibleCache;
   String? _visibleKey;
 
@@ -1082,12 +1339,20 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 失效点枚举，杜绝「改了输入忘了清缓存」；单次 build 内多次调用
   /// （items 与 _searchGroups）只排一次序。
   List<Drama> get _visible {
+    // catalogView getter 每次访问都 jsonDecode 新建实例，这里只取一次；
+    // key 必须展开字段值——CatalogView 若以默认 toString 进 join 会恒为
+    // "Instance of 'CatalogView'"，排序/筛选变化全部不失效缓存（真 bug）。
+    final view = widget.store.catalogView;
     final key = [
       identityHashCode(_items),
       _category,
       _search.text,
       _onlineSearch,
-      widget.store.catalogView,
+      view.sort.name,
+      view.release,
+      view.area,
+      view.year,
+      view.allSources,
       _hideVip,
       for (final source in _group.sources)
         widget.store.allowsSource(source.id),
@@ -1096,20 +1361,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (cached != null && _visibleKey == key) return cached;
     final query = _search.text.trim().toLowerCase();
     final result = sortCatalog(
-      _items.where((drama) {
-        if (!widget.store.allowsSource(drama.source)) return false;
-        if (_category.startsWith('local:') &&
-            !matchesLocalGenre(drama, _category.substring(6))) {
-          return false;
-        }
-        if (_hideVip && drama.source == 'huangdou' && drama.vip) {
-          return false;
-        }
-        return _onlineSearch ||
-            query.isEmpty ||
-            matchesDramaQuery(drama, query);
-      }),
-      widget.store.catalogView,
+      _items.where((drama) => _passesBrowseFilters(drama, query)),
+      view,
     );
     _visibleKey = key;
     _visibleCache = result;
@@ -1181,7 +1434,10 @@ class _HomeScreenState extends State<HomeScreen> {
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final television = AppLayout.isTelevision(context);
-        final desktop = constraints.maxWidth >= 840;
+        // 宽屏布局含高度门槛（同 detail_screen）：手机横屏逻辑高度 <600
+        // （如折叠屏展开态 869x400），旋转后仍保持手机布局。
+        final desktop =
+            constraints.maxWidth >= 840 && constraints.maxHeight >= 600;
         // 悬浮玻璃底栏只在手机/iOS 出现；开启 extendBody 让内容透到玻璃后被模糊。
         final floatingNav = !desktop && !television;
         final navEntries = <(int, Widget, String)>[
@@ -1190,15 +1446,20 @@ class _HomeScreenState extends State<HomeScreen> {
           (2, AppIcon(AppIcons.history), '最近观看'),
           if (widget.store.canDownload) (3, AppIcon(AppIcons.download), '下载'),
         ];
+        // 手机横屏紧凑档：顶栏 56→44；沉浸后 padding.top=0 自动让位。
+        final compactLandscape =
+            floatingNav && AppLayout.landscapePhone(context);
+        _syncImmersive(compactLandscape);
         final topInset = floatingNav
-            ? MediaQuery.paddingOf(context).top + 56.0
+            ? MediaQuery.paddingOf(context).top +
+                  (compactLandscape ? 44.0 : 56.0)
             : 0.0;
-        final scaffold = Scaffold(
+        Widget scaffold = Scaffold(
           extendBody: floatingNav,
           // 手机端顶栏悬浮玻璃：内容延伸到顶栏后方，滚动时从玻璃后穿过。
           extendBodyBehindAppBar: floatingNav,
           appBar: AppBar(
-            toolbarHeight: television ? 64 : null,
+            toolbarHeight: television ? 64 : (compactLandscape ? 44 : null),
             titleSpacing: floatingNav ? 8 : 12,
             title: _selectionMode
                 ? _navPill(
@@ -1214,17 +1475,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   )
                 : _tab == 0
                 ? television
-                      ? PopupMenuButton<SourceSite>(
+                      ? PopupMenuButton<Object>(
                           key: const ValueKey('source-switch'),
                           tooltip: '切换站源',
-                          enabled: _sourceCategories.expand((c) => c.sources).length > 1,
-                          onSelected: _changeSource,
+                          onSelected: (value) {
+                            if (value == _liveEntryChoice) {
+                              _openLiveScreen();
+                            } else if (value is SourceSite) {
+                              _changeSource(value);
+                            }
+                          },
                           itemBuilder: (_) => [
                             for (final category in _sourceCategories) ...[
                               if (category != _sourceCategories.first)
                                 const PopupMenuDivider(),
                               ...category.sources.map(
-                                (source) => PopupMenuItem<SourceSite>(
+                                (source) => PopupMenuItem<Object>(
                                   value: source,
                                   child: Row(
                                     children: [
@@ -1236,6 +1502,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             ],
+                            const PopupMenuDivider(),
+                            const PopupMenuItem<Object>(
+                              value: _liveEntryChoice,
+                              child: Row(
+                                children: [
+                                  Icon(Icons.live_tv, size: 20),
+                                  SizedBox(width: 8),
+                                  Text('电视直播'),
+                                ],
+                              ),
+                            ),
                           ],
                           child: SizedBox(
                             height: 48,
@@ -1486,44 +1763,91 @@ class _HomeScreenState extends State<HomeScreen> {
                   const VerticalDivider(width: 1, thickness: 1),
                 ],
                 Expanded(
-                  child: _tab == 0
-                      ? widget.store.sources.isEmpty
-                            ? const StatusPanel(
-                                title: '暂无可用站源',
-                                message: '请联系管理员为当前用户开放站源。',
-                              )
-                            : _catalog(
-                                selectionInBody: desktop || television,
+                  // 接近度信号覆盖全部 tab：任何 tab 的滚动通知都驱动
+                  // _prox（顶栏岛/分类胶囊白描边亮起），只听首页
+                  // ScrollController 的旧实现让其他 tab 滚动时描边不亮。
+                  // FogTintSampler 同样覆盖全 tab：节流采样内容区像素
+                  // 平均色驱动雾面染色（行带避开顶部雾面自身，防反馈
+                  // 循环；测试环境整体禁用）。
+                  child: FogTintSampler(
+                    tint: _fogTint,
+                    sampleBandStart: 0.30,
+                    sampleBandEnd: 0.62,
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: _onBodyScroll,
+                    child: Stack(
+                      children: [
+                        _tab == 0
+                            ? widget.store.sources.isEmpty
+                                  ? const StatusPanel(
+                                      title: '暂无可用站源',
+                                      message: '请联系管理员为当前用户开放站源。',
+                                    )
+                                  : _catalog(
+                                      selectionInBody: desktop || television,
+                                      topInset: topInset,
+                                    )
+                            : _tab == 3
+                            ? DownloadsScreen(
+                                repository: widget.repository,
+                                store: widget.store,
+                                embedded: true,
+                                bottomInset: floatingNav
+                                    ? _floatingNavInset
+                                    : 0,
                                 topInset: topInset,
                               )
-                      : _tab == 3
-                      ? DownloadsScreen(
-                          repository: widget.repository,
-                          store: widget.store,
-                          embedded: true,
-                          bottomInset: floatingNav ? _floatingNavInset : 0,
-                          topInset: topInset,
-                        )
-                      : SavedLibrary(
-                          key: ValueKey('saved-tab-$_tab'),
-                          repository: widget.repository,
-                          store: widget.store,
-                          bottomInset: floatingNav ? _floatingNavInset : 0,
-                          topInset: topInset,
-                          history: _tab == 2,
-                          remoteAutofocus: television,
-                          onExitLeft: television
-                              ? () => _navKey.currentState?.focusCurrent()
-                              : null,
-                          onOpen: _openDrama,
-                          onContinue: (drama) =>
-                              _openDrama(drama, resume: true),
-                          onDownload:
-                              widget.repository.supportsDownloads &&
-                                  widget.store.canDownload
-                              ? (drama) => _openDrama(drama, download: true)
-                              : null,
-                        ),
+                            : SavedLibrary(
+                                key: ValueKey('saved-tab-$_tab'),
+                                repository: widget.repository,
+                                store: widget.store,
+                                bottomInset: floatingNav
+                                    ? _floatingNavInset
+                                    : 0,
+                                topInset: topInset,
+                                history: _tab == 2,
+                                remoteAutofocus: television,
+                                onExitLeft: television
+                                    ? () =>
+                                          _navKey.currentState?.focusCurrent()
+                                    : null,
+                                onOpen: _openDrama,
+                                onContinue: (drama) =>
+                                    _openDrama(drama, resume: true),
+                                onDownload:
+                                    widget.repository.supportsDownloads &&
+                                    widget.store.canDownload
+                                    ? (drama) =>
+                                          _openDrama(drama, download: true)
+                                    : null,
+                                onFindSource: allSourcesEnabled
+                                    ? _findSourceFor
+                                    : null,
+                              ),
+                        // 其他三个 tab（追剧/最近/下载）没有首页那条 pinned
+                        // 雾面带——雾面挂在 _catalog 内部只随 tab0 存在。
+                        // 在 body 顶部补同一条 σ46 雾面（高度=顶栏整体），
+                        // 滚动内容穿顶时同样糊化提亮、色跟内容走；底缘由
+                        // tint painter 内置羽化自然消散。
+                        if (_tab != 0 && topInset > 0)
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: SizedBox(
+                              // 「雾面高度」正档向下延伸、负档收窄（糊化
+                              // /染色/雾形/羽化整体跟随）；clamp≥0 防负高度。
+                              height: _fogBandHeight(topInset),
+                              child: ValueListenableBuilder<Color?>(
+                                valueListenable: _fogTint,
+                                builder: (_, tint, _) => TopFog(tint: tint),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  ),
                 ),
               ],
             ),
@@ -1535,6 +1859,7 @@ class _HomeScreenState extends State<HomeScreen> {
               : AppBottomNavigation(
                   selectedIndex: _tab,
                   onDestinationSelected: _changeTab,
+                  compact: compactLandscape,
                   destinations: [
                     NavigationDestination(
                       icon: AppIcon(AppIcons.explore),
@@ -1559,6 +1884,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
         );
+        // 横屏沉浸：窗口已延伸进挖孔区（MainActivity SHORT_EDGES），
+        // 移除左右系统避让（挖孔/手势条 inset），内容跟着延伸到边缘；
+        // 否则窗口覆盖了但 UI 仍从挖孔右侧开始，左侧只留一条背景。
+        if (compactLandscape) {
+          scaffold = MediaQuery.removePadding(
+            context: context,
+            removeLeft: true,
+            removeRight: true,
+            child: scaffold,
+          );
+        }
         if (!television && !_selectionMode) return scaffold;
         return PopScope(
           canPop:
@@ -1646,6 +1982,11 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: EdgeInsets.only(top: topInset),
           child: _catalogFilters(televisionFocus: true),
         ),
+        if (!television && !_showRecommendations && _category.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: _continueWatchingCard(),
+          ),
         if (_showRecommendations)
           Expanded(
             child: GestureDetector(
@@ -1738,7 +2079,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         final padding = constraints.maxWidth < 600
                             ? 16.0
                             : 24.0;
-                        final navInset = constraints.maxWidth >= 840
+                        final navInset =
+                            (constraints.maxWidth >= 840 &&
+                                constraints.maxHeight >= 600)
                             ? 0.0
                             : _floatingNavInset;
                         final searchGroups = _searchGroups;
@@ -1746,15 +2089,15 @@ class _HomeScreenState extends State<HomeScreen> {
                           context,
                           constraints.maxWidth - 2 * padding,
                         );
-                        return RefreshIndicator(
+                        return FogRefresh(
                           onRefresh: () {
                             // 下拉触发刷新时给一次中档震动（主题同款手感）。
                             HapticFeedback.mediumImpact();
                             return _refreshCatalog();
                           },
-                          // anywhere：页面顶部边缘之外（如轮播卡上方空隙）
-                          // 起手的下拉也计入刷新，真机手感更宽容。
-                          triggerMode: RefreshIndicatorTriggerMode.anywhere,
+                          // 胶囊停在视口顶 6px：经典布局视口顶在筛选条之下，
+                          // 内容上缘即视口顶，小间隙即可。
+                          displacement: 6,
                           child: CustomScrollView(
                             controller: _scroll,
                             physics: const AlwaysScrollableScrollPhysics(),
@@ -1866,6 +2209,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   // 胶囊停在分类条之下：顶栏+吸顶分类条总高再留 6px 间隙，
                   // 刷新胶囊的雾面矩形不罩到分类胶囊（MIUI 同款位置）。
                   displacement: topInset + _filtersExtent + 6,
+                  // 分类条吸顶层：钉在原位不随下拉平移（真机定调「分组
+                  // 不跟着下来，刷新图标在白区」）——下拉时只有内容层
+                  // 下滑让位，分类条下方露出白区，环落在白区里；刷新全
+                  // 程分类条不动，动画做完内容才回去。
+                  header: _searchVisible
+                      ? null
+                      : _pinnedFiltersBar(context, topInset),
+                  headerExtent: _searchVisible
+                      ? 0
+                      : topInset +
+                            _filtersExtent +
+                            (_fogHeight > 0 ? _fogHeight : 0),
                   onRefresh: () {
                     // 下拉触发刷新时给一次中档震动（主题同款手感）。
                     HapticFeedback.mediumImpact();
@@ -1874,7 +2229,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: LayoutBuilder(
                 builder: (context, constraints) {
                   final padding = constraints.maxWidth < 600 ? 16.0 : 24.0;
-                  final navInset = constraints.maxWidth >= 840
+                  final navInset =
+                      (constraints.maxWidth >= 840 &&
+                          constraints.maxHeight >= 600)
                       ? 0.0
                       : _floatingNavInset;
                   final gridDelegate = dramaGridDelegate(
@@ -1955,21 +2312,29 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                      // 分类条吸顶：固定在顶栏玻璃正下方，不随内容滚走；
-                      // 搜索态改随搜索岛一起滚动（见下方滚动分支）。
+                      // 分类条已挪到 FogRefresh.header 吸顶层（钉在原位
+                      // 不随下拉平移）；视口内留等高占位，首屏内容仍从
+                      // 分类条下方起排，滚动语义不变。搜索态无吸顶条
+                      // （改随搜索岛一起滚动，见下方滚动分支）。
                       if (!_searchVisible)
-                        SliverPersistentHeader(
-                          pinned: true,
-                          delegate: _PinnedFiltersDelegate(
-                            extent: topInset + _filtersExtent,
-                            builder: (context) =>
-                                _pinnedFiltersBar(context, topInset),
+                        SliverToBoxAdapter(
+                          child: SizedBox(
+                            height: topInset +
+                                _filtersExtent +
+                                (_fogHeight > 0 ? _fogHeight : 0),
                           ),
                         ),
                       if (_searchVisible)
                         SliverToBoxAdapter(
                           // 搜索岛已避让顶栏，筛选岛紧随其后。
                           child: _catalogFilters(),
+                        ),
+                      if (!_searchVisible && _category.isEmpty)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                            child: _continueWatchingCard(),
+                          ),
                         ),
                       // 轮播只在「全部」分类出现；选择具体分类/题材后
                       // 隐藏，把首屏留给筛选结果。
@@ -2121,6 +2486,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     duration: MotionDurations.micro,
                     curve: MotionCurves.press,
                     child: AnimatedOpacity(
+                      key: const ValueKey('home-fab-opacity'),
                       opacity: _fabShown ? 1 : 0,
                       duration: MotionDurations.micro,
                       child: IgnorePointer(
@@ -2143,9 +2509,10 @@ class _HomeScreenState extends State<HomeScreen> {
   double get _filtersExtent =>
       CatalogFilters.barHeight(context, extra: 12);
 
-  /// 吸顶分类条：不做整条底板/雾面，分类胶囊本身是独立瓷面小岛
-  /// （带 Folme 果冻按压），剧照直接从胶囊间隙与条后穿过，保持
-  /// 「一枚枚胶囊浮在内容上」的形态。顶栏不再挂贴顶雾面层。
+  /// 吸顶分类条：雾面整条盖住吸顶头（状态栏→顶栏→分类条均匀一块，
+  /// σ4.5 + 白蒙，底缘硬切），内容上滑穿过时整块糊在雾面后、无明暗
+  /// 分界（用户定调「不要凹凸感」）；分类胶囊仍是独立瓷面小岛（带
+  /// Folme 果冻按压），浮在雾面之上。
   /// 分类条构造（TV 列表/搜索岛/吸顶条三处共用）：差异仅在电视焦点
   /// 出口回调，由 [televisionFocus] 开关。
   Widget _catalogFilters({bool televisionFocus = false}) {
@@ -2163,6 +2530,7 @@ class _HomeScreenState extends State<HomeScreen> {
           : null,
       onCategory: _changeCategory,
       onRetry: () => _loadCategories(force: true),
+      proxListenable: _prox,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2187,10 +2555,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _pinnedFiltersBar(BuildContext context, double topInset) {
     return SizedBox(
-      height: topInset + _filtersExtent,
-      child: Padding(
-        padding: EdgeInsets.only(top: topInset),
-        child: _catalogFilters(),
+      // 布局高度只随正档增长（负档只缩雾，不裁分类 chips）。
+      height: topInset + _filtersExtent + (_fogHeight > 0 ? _fogHeight : 0),
+      child: Stack(
+        children: [
+          // 雾面整条盖满吸顶头（状态栏→顶栏→分类条均匀一整块，底缘
+          // 硬切）：用户定调「不要凹凸感」——只垫上沿会在雾面与清晰
+          // 内容之间留一条明暗分界台阶；整块糊化后无分界。TopFog 按
+          // 自身高度自适应（玻璃开关总控，关闭即完全穿透）。
+          // 动态取色：采样色经调参台 tintMix 混入提亮层（null=纯白）。
+          // 雾面定高：负档时雾短于吸顶头（分类 chips 区露出来）。
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: _fogBandHeight(topInset + _filtersExtent),
+            child: ValueListenableBuilder<Color?>(
+              valueListenable: _fogTint,
+              builder: (_, tint, _) => TopFog(tint: tint),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(top: topInset),
+            child: _catalogFilters(),
+          ),
+        ],
       ),
     );
   }
@@ -2259,9 +2648,9 @@ class _HomeScreenState extends State<HomeScreen> {
           return GlassSurface(
             variant: GlassVariant.surface,
             radius: GlassTokens.radiusBar,
-            topHighlight: true,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            tint: GlassTint.bar,
+            // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+            tint: GlassTint.pill,
             child: content,
           );
         },
@@ -2294,27 +2683,4 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// 首页分类条吸顶代理：固定在顶栏玻璃正下方，内容从其后方穿过。
-class _PinnedFiltersDelegate extends SliverPersistentHeaderDelegate {
-  const _PinnedFiltersDelegate({required this.builder, required this.extent});
 
-  final WidgetBuilder builder;
-  final double extent;
-
-  @override
-  double get maxExtent => extent;
-
-  @override
-  double get minExtent => extent;
-
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) => builder(context);
-
-  @override
-  bool shouldRebuild(covariant _PinnedFiltersDelegate oldDelegate) =>
-      oldDelegate.extent != extent || oldDelegate.builder != builder;
-}
