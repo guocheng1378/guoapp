@@ -61,13 +61,16 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 	if got := (&Downloader{cfg: defaultConfig()}).providerBaseURL(sourceYeguo); got != "https://www.yeguodj.com" {
 		t.Fatalf("unexpected default yeguo endpoint: %s", got)
 	}
-	if !isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") {
+	if !isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") ||
+		!isYeguoActiveSite("https://adviser.awlaxemk.cc/") || !isYeguoActiveSite("https://dsf23.vuenadqi.cc/") {
 		t.Fatal("yeguo active-site whitelist lost the current line families")
 	}
 	for _, address := range []string{
 		"https://analyze.buxefaex.cc/",
 		"https://some-line.buxefaex.cc/drama/video/1/",
 		"https://some-backup.fzchosdi.cc/drama/video/1/",
+		"https://adviser.awlaxemk.cc/drama/video/1/",
+		"https://dsf23.vuenadqi.cc/drama/video/1/",
 		"https://delta.ygrwdsgt.cc/",
 		"https://yeguodj.com/",
 		"https://www.yeguodj.com/",
@@ -85,6 +88,8 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 		"www.yeguodj.com",
 		"ygdj7.com",
 		"ocdjlxow.cc",
+		"awlaxemk.cc",
+		"vuenadqi.cc",
 	} {
 		if got := canonicalProviderSource(alias); got != sourceYeguo {
 			t.Fatalf("yeguo source alias was not canonicalized: %s -> %s", alias, got)
@@ -98,10 +103,13 @@ words = 'abandon,ability,analyze,chair'.split(',');
 lineAry = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.buxefaex.cc' });
 backupLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.fzchosdi.cc'; });
 mirrorLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.ocdjlxow.cc'; });
+freshLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.awlaxemk.cc' });
+newLine = Vx.map(Vx.range(1, 3), function () { return location.protocol + '//' + words.random() + '.vuenadqi.cc'; });
 </script>`))
 	sites := yeguoTransitSites(`<script>document.write(Base64.decode("` + encoded + `"));</script>`)
 	want := []string{"https://analyze.buxefaex.cc", "https://ability.buxefaex.cc", "https://abandon.buxefaex.cc",
-		"https://analyze.fzchosdi.cc", "https://analyze.ocdjlxow.cc"}
+		"https://analyze.fzchosdi.cc", "https://analyze.ocdjlxow.cc",
+		"https://analyze.awlaxemk.cc", "https://analyze.vuenadqi.cc"}
 	for _, site := range want {
 		found := false
 		for _, candidate := range sites {

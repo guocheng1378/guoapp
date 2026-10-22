@@ -35,10 +35,10 @@ const (
 
 var (
 	huangguoAIBaseURL = "https://huangguoai.com"
-	// 2026-10-20 实测：hgai5 目录可用但详情页 404，pages.dev 是空壳；
-	// ksb6/agdkczeyx 目录、详情、播放地址齐全，置于候选前两位。
-	// 内置值保留作兜底；可经 config.source（applySourceConfig）远程热更。
-	huangguoAIBaseMirrors = []string{"https://ksb6.pu84h97k.cc", "https://www.agdkczeyx.cc", "https://hgai5.com", "https://huangguoai.pages.dev"}
+	// 2026-10-22 探活：ksb6 连接超时（域名失效，恢复后仍可被轮到），
+	// agdkczeyx/hgai5/pages.dev 存活；agdkczeyx 目录、详情、播放地址齐全，升首位。
+	// pages.dev 历史上是空壳，垫底兜底。可经 config.source（applySourceConfig）远程热更。
+	huangguoAIBaseMirrors = []string{"https://www.agdkczeyx.cc", "https://hgai5.com", "https://ksb6.pu84h97k.cc", "https://huangguoai.pages.dev"}
 
 	// huangguoWebUserAgent 黄果AI 网页（目录/详情/单集页）只放行桌面浏览器 UA：
 	// 2026-10-20 实测 iPhone UA 会被镜像 301 踢到互相死循环的「移动版」域名

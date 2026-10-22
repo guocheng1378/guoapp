@@ -114,6 +114,8 @@ func isYeguoActiveSite(raw string) bool {
 	switch {
 	case host == "analyze.buxefaex.cc" || strings.HasSuffix(host, ".buxefaex.cc"),
 		strings.HasSuffix(host, ".fzchosdi.cc"),
+		strings.HasSuffix(host, ".awlaxemk.cc"),
+		strings.HasSuffix(host, ".vuenadqi.cc"),
 		host == "yeguodj.com" || host == "www.yeguodj.com" || strings.HasSuffix(host, ".yeguodj.com"),
 		host == "ocdjlxow.cc" || strings.HasSuffix(host, ".ocdjlxow.cc"):
 		return true
@@ -187,6 +189,7 @@ func yeguoTransitSites(body string) []string {
 		if parsed, err := url.Parse(match); err == nil {
 			host := strings.ToLower(parsed.Hostname())
 			if strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") ||
+				strings.HasSuffix(host, ".awlaxemk.cc") || strings.HasSuffix(host, ".vuenadqi.cc") ||
 				strings.HasSuffix(host, ".yeguodj.com") || strings.HasSuffix(host, ".ocdjlxow.cc") {
 				add(match)
 			}

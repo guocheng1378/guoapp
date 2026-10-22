@@ -38,6 +38,8 @@ func TestForHostResolvesExactAndSuffixRules(t *testing.T) {
 		"node.agdkczeyx.cc":       SourceHuangguoAI,
 		"line1.buxefaex.cc":       SourceYeguo,
 		"mirror.fzchosdi.cc":      SourceYeguo,
+		"adviser.awlaxemk.cc":     SourceYeguo,
+		"dsf23.vuenadqi.cc":       SourceYeguo,
 		"line.ocdjlxow.cc":        SourceYeguo,
 		"caiji.moduapi.cc":        SourceModu,
 		"dash-agdkczeyx.cc":       "",

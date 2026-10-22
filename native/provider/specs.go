@@ -82,8 +82,8 @@ var sourceEntries = []sourceEntry{
 	},
 	{
 		spec:    Spec{ID: SourceYeguo, Name: "野果", Base: "https://www.yeguodj.com", Kind: "api", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, Searcher: true, Paged: true, RequiresAllSources: true},
-		aliases: []string{"yeguo", "ygdj7.com", "www.ygdj7.com", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", "ocdjlxow.cc", "www.ocdjlxow.cc"},
-		hosts:   []string{"ygdj7.com", "www.ygdj7.com", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", ".buxefaex.cc", ".fzchosdi.cc", "ocdjlxow.cc", "www.ocdjlxow.cc", ".ocdjlxow.cc"},
+		aliases: []string{"yeguo", "ygdj7.com", "www.ygdj7.com", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", "ocdjlxow.cc", "www.ocdjlxow.cc", "awlaxemk.cc", "vuenadqi.cc"},
+		hosts:   []string{"ygdj7.com", "www.ygdj7.com", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", ".buxefaex.cc", ".fzchosdi.cc", ".awlaxemk.cc", ".vuenadqi.cc", "ocdjlxow.cc", "www.ocdjlxow.cc", ".ocdjlxow.cc"},
 	},
 	{
 		spec:    Spec{ID: SourceYaguo, Name: "芽果", Base: "https://app.whjzjx.cn", Kind: "api", Category: CategoryShortDrama, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
