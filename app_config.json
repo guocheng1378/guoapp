@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2176,
-    "notes": "本次更新：\n· 直播净化补漏：拉黑 metshop.top 片名伪频道源站（周星驰电影/人在囧途等约 66 个伪频道）\n· 直播列表缓存升级后自动净化，老用户无需清理数据",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2176/zhenguojian-0.2.96+2176-arm64-v8a.apk"
+    "build": 2178,
+    "notes": "本次更新：\n· 全新「星微精选」直播列表：835 频道测速精选，设为默认列表\n· 直播订阅自托管仓库直发，双镜像兜底更稳\n· 每频道自动选最快前 3 条线路",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2178/zhenguojian-0.2.96+2178-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
