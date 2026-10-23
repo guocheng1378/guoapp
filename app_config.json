@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2174,
-    "notes": "本次更新：\n· 修复直播死链卡黑屏：拉流超过 12 秒不出画面自动切下一条线路\n· 切线前增加 1.2 秒确认窗，短暂卡顿不再频繁跳线\n· 拉流加载期显示频道名与线路号提示；全部线路失败可一键重试",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2174/zhenguojian-0.2.96+2174-arm64-v8a.apk"
+    "build": 2176,
+    "notes": "本次更新：\n· 直播净化补漏：拉黑 metshop.top 片名伪频道源站（周星驰电影/人在囧途等约 66 个伪频道）\n· 直播列表缓存升级后自动净化，老用户无需清理数据",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2176/zhenguojian-0.2.96+2176-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
