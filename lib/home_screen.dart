@@ -41,7 +41,7 @@ import 'drama_actions.dart';
 import 'library_updater.dart';
 import 'saved_library.dart';
 import 'app_icons.dart';
-import 'follow_updates.dart';
+import 'follow_updater.dart';
 import 'motion.dart';
 
 /// 手机/iOS 悬浮玻璃底栏的内容底部避让高度（栏高 68 + 浮动下边距 12 + 余量）。
@@ -51,9 +51,17 @@ const _floatingNavInset = 96.0;
 const _liveEntryChoice = '__live_tv__';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository, required this.store});
+  const HomeScreen({
+    super.key,
+    required this.repository,
+    required this.store,
+    this.backClock,
+  });
   final AppRepository repository;
   final LocalStore store;
+
+  /// 二次退出窗口的时钟源（测试注入，缺省系统时钟）。
+  final DateTime Function()? backClock;
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -83,13 +91,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final _changedSources = <String>{};
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
-  Timer? _sweepTimer;
+  FollowUpdater? _followUpdater;
   // 首页继续观看条每次启动提醒一次：条目真正出现起 8 秒无操作自动收起，
   // 点条目去播放或点「不再提醒」立即收起，收起后本会话不再出现。
   bool _resumeDismissed = false;
   Timer? _resumeHideTimer;
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
+  // 手机端二次退出保护：首次按返回的时间戳，2 秒内再按才真正退出。
+  DateTime? _lastBackAt;
 
   // 回顶雾面钮（FogFab）：滚动方向点亮/熄灭，过渡由组件内弹簧完成。
   // 停止滚动 2s 后自动隐藏（每次滚动事件重置计时）。
@@ -379,8 +389,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (value == 'display') {
       _chooseDisplayMode();
     } else if (value == 'about') {
-      // 手机端：锚定 ⋯ 岛的轻量信息浮卡——无 barrier 压暗、点空白关闭，
-      // 与排序筛选浮卡同族；TV 保留玻璃弹窗（遥控焦点导航可靠）。
+      // 手机端：屏幕居中的轻量信息浮卡——无 barrier 压暗、点空白关闭，
+      // 含检查更新入口；TV 保留玻璃弹窗（遥控焦点导航可靠）。
       if (AppLayout.isTelevision(context)) {
         showDialog<void>(
           context: context,
@@ -690,26 +700,29 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       _loading = false;
     }
-    // 追剧更新主动检测：启动让路 6s 后台 sweep，「N 集更新」角标自动
-    // 亮起。测试环境（Motion.inTest）不启动——避免 fake-async Pending
-    // Timer 与网络依赖；真实场景 Timer 已在 dispose 中取消。
+    // 追剧更新后台巡检：启动让路 30s 后首轮，之后每 30 分钟一轮
+    // （每轮最多 10 部、6h 去重、失败指数退避），「N 集更新」角标
+    // 自动亮起。测试环境（Motion.inTest）不启动——避免 fake-async
+    // Pending Timer 与网络依赖；真实场景 Timer 已在 dispose 中取消。
     if (!Motion.inTest) {
-      _sweepTimer = Timer(const Duration(seconds: 6), () async {
-        final updated = await sweepFollowUpdates(
-          widget.repository,
-          widget.store,
-        );
-        if (updated <= 0 || !mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('追剧有 $updated 部更新'),
-            action: SnackBarAction(
-              label: '去看看',
-              onPressed: () => _changeTab(1),
+      _followUpdater = FollowUpdater(
+        widget.repository,
+        widget.store,
+        onUpdated: (updated) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('追剧有 $updated 部更新'),
+              action: SnackBarAction(
+                label: '去看看',
+                onPressed: () => _changeTab(1),
+              ),
+              // 右侧 X：用户不想现在看时可直接关闭
+              showCloseIcon: true,
             ),
-          ),
-        );
-      });
+          );
+        },
+      )..start();
     }
   }
 
@@ -735,7 +748,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _updater.removeListener(_updateChanged);
     _updater.dispose();
     _cacheRefreshTimer?.cancel();
-    _sweepTimer?.cancel();
+    _followUpdater?.dispose();
     _resumeHideTimer?.cancel();
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
     _generation++;
@@ -1895,23 +1908,45 @@ class _HomeScreenState extends State<HomeScreen> {
             child: scaffold,
           );
         }
-        if (!television && !_selectionMode) return scaffold;
-        return PopScope(
-          canPop:
-              !_selectionMode &&
-              (!television || _tab == 0 && _search.text.isEmpty),
-          onPopInvokedWithResult: (didPop, result) {
-            if (!didPop) _televisionBack();
-          },
-          child: CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.escape): () =>
-                  Navigator.of(context).maybePop(),
-              const SingleActivator(LogicalKeyboardKey.goBack): () =>
-                  Navigator.of(context).maybePop(),
+        if (television || _selectionMode) {
+          return PopScope(
+            canPop:
+                !_selectionMode &&
+                (!television || _tab == 0 && _search.text.isEmpty),
+            onPopInvokedWithResult: (didPop, result) {
+              if (!didPop) _televisionBack();
             },
-            child: scaffold,
-          ),
+            child: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.escape): () =>
+                    Navigator.of(context).maybePop(),
+                const SingleActivator(LogicalKeyboardKey.goBack): () =>
+                    Navigator.of(context).maybePop(),
+              },
+              child: scaffold,
+            ),
+          );
+        }
+        // 手机端二次退出保护：首次返回弹提示，2 秒内再按才真正退出，
+        // 防止误触一次返回直接丢掉整个应用。
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) {
+            if (didPop) return;
+            final now =
+                widget.backClock?.call() ?? DateTime.now();
+            final last = _lastBackAt;
+            if (last != null &&
+                now.difference(last) < const Duration(seconds: 2)) {
+              unawaited(SystemNavigator.pop());
+              return;
+            }
+            _lastBackAt = now;
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(const SnackBar(content: Text('再按一次返回键退出')));
+          },
+          child: scaffold,
         );
       },
     ),
