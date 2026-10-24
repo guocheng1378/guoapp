@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2180,
-    "notes": "本次更新：\n· 真果·鉴播放器支持线路切换：线路按钮显示资源站真名，点开可自选线路\n· 真果·鉴起播前预拉线路表，卡顿时随时可换线\n· 真果·鉴评论时评弹幕：播放时按时间轴飘出站内评论\n· 真果·鉴搜索接入站内建议词（输入时下拉提示）\n· 分集去重与选集修复",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2180/zhenguojian-0.2.96+2180-arm64-v8a.apk"
+    "build": 2181,
+    "notes": "本次更新：\n· 真果·鉴官方线路修复：官方线现在可正常播放（自动兑换真实播放地址）\n· 线路择优增强：起播前实测各线路速度，自动选最快的线路",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2181/zhenguojian-0.2.96+2181-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
