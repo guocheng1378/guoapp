@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2181,
-    "notes": "本次更新：\n· 真果·鉴官方线路修复：官方线现在可正常播放（自动兑换真实播放地址）\n· 线路择优增强：起播前实测各线路速度，自动选最快的线路",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2181/zhenguojian-0.2.96+2181-arm64-v8a.apk"
+    "build": 2182,
+    "notes": "本次更新：\n· 真果·鉴线路修复：不再误选片头/预告线路，彻底解决切线路后播放失败\n· 全预告集的剧集不再给出无效线路，提示改为「无有效播放地址」",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2182/zhenguojian-0.2.96+2182-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
