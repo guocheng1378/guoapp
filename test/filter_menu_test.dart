@@ -293,6 +293,122 @@ void main() {
     );
   });
 
+  test('sortCatalog 字段型排序无字段支撑时降级为源站顺序', () {
+    // 切源后持久化的排序请求可能悬空（热度选中状态切到无热度字段的
+    // 源）：所有条目对应字段全空时，排序只会靠 tie-break 原样返回，
+    // 造成「已选中但列表假排序」——应诚实降级为源站顺序。
+    final plain = [
+      const Drama(id: 'a', source: 's', title: '甲'),
+      const Drama(id: 'b', source: 's', title: '乙'),
+      const Drama(id: 'c', source: 's', title: '丙'),
+    ];
+    final sourceOrder = plain.map((d) => d.id).toList();
+    expect(
+      sortCatalog(
+        List.of(plain),
+        const CatalogView(sort: CatalogSort.heat),
+      ).map((d) => d.id),
+      sourceOrder,
+    );
+    expect(
+      sortCatalog(
+        List.of(plain),
+        const CatalogView(sort: CatalogSort.date),
+      ).map((d) => d.id),
+      sourceOrder,
+    );
+    // 部分条目有值时正常排序（无值排尾），不触发降级。
+    final mixed = [
+      ...plain,
+      const Drama(id: 'd', source: 's', title: '丁', heat: '12.3万次播放'),
+    ];
+    expect(
+      sortCatalog(mixed, const CatalogView(sort: CatalogSort.heat)).map(
+        (d) => d.id,
+      ),
+      ['d', 'a', 'b', 'c'],
+    );
+    // 标题型排序（名称/季号）不依赖字段，不受降级影响。
+    // 名称序 = normalizedSearchText 字典序：丙(4E19) < 乙(4E59) < 甲(7532)。
+    expect(
+      sortCatalog(
+        List.of(plain.reversed),
+        const CatalogView(sort: CatalogSort.name),
+      ).map((d) => d.id),
+      ['c', 'b', 'a'],
+    );
+    // 降级只跳过排序，地区/年份筛选仍生效。
+    final filtered = [
+      const Drama(id: 'a', source: 's', title: '甲', area: '内地'),
+      const Drama(id: 'b', source: 's', title: '乙', area: '香港'),
+    ];
+    expect(
+      sortCatalog(
+        filtered,
+        const CatalogView(sort: CatalogSort.heat, area: '内地'),
+      ).map((d) => d.id),
+      ['a'],
+    );
+  });
+
+  test('filterCatalog skip* 只放行对应维度，供选项聚合使用', () {
+    final items = [
+      const Drama(
+        id: 'a',
+        source: 's',
+        title: '甲',
+        area: '内地',
+        year: '2025',
+        releaseStatus: 'finished',
+      ),
+      const Drama(
+        id: 'b',
+        source: 's',
+        title: '乙',
+        area: '香港',
+        year: '2024',
+        releaseStatus: 'finished',
+      ),
+      const Drama(id: 'c', source: 's', title: '丙', area: '内地', year: '2024'),
+    ];
+    const view = CatalogView(area: '内地', year: '2024', release: 'finished');
+    // 三维全生效：无一条同时满足（选了必空的组合）。
+    expect(filterCatalog(items, view), isEmpty);
+    // 聚合地区选项时跳过地区、其余照常：乙（香港/2024/完结）入围。
+    expect(filterCatalog(items, view, skipArea: true).map((d) => d.id), ['b']);
+    // 聚合年份选项时跳过年份：甲（内地/2025/完结）入围。
+    expect(filterCatalog(items, view, skipYear: true).map((d) => d.id), ['a']);
+    // 聚合状态选项时跳过状态：丙（内地/2024/无状态）入围。
+    expect(filterCatalog(items, view, skipRelease: true).map((d) => d.id), [
+      'c',
+    ]);
+  });
+
+  test('catalogReleaseOptions 只保留有命中的状态键', () {
+    final options = catalogReleaseOptions([
+      const Drama(id: 'a', source: 's', title: '甲', releaseStatus: 'ongoing'),
+      const Drama(id: 'b', source: 's', title: '乙'),
+    ]);
+    expect(options, contains(''));
+    expect(options, contains('ongoing'));
+    expect(options, contains('unknown'));
+    expect(options, isNot(contains('finished')));
+    // completed 归一为 finished 命中。
+    expect(
+      catalogReleaseOptions([
+        const Drama(
+          id: 'c',
+          source: 's',
+          title: '丙',
+          releaseStatus: 'completed',
+        ),
+      ]),
+      contains('finished'),
+    );
+    // 空池恒含「全部」。
+    expect(catalogReleaseOptions(const <Drama>[]), <String>{''});
+  });
+
   test('catalogFilterOptions 地区按数量降序、年份数字降序取前 10', () {
     final items = [
       for (var i = 0; i < 5; i++)
@@ -326,6 +442,33 @@ void main() {
     expect(restored.area, '香港');
     expect(restored.year, '2024');
     expect(restored.allSources, isTrue);
+  });
+
+  test('CatalogView 值相等语义（缓存失效判定依赖）', () {
+    // LocalStore.catalogView getter 每次 jsonDecode 新建实例，任何按实例
+    // 判等的缓存键都会永远失效或永远命中（曾致筛选不生效的真 bug）。
+    final a = CatalogView.fromJson(const {
+      'sort': 'score',
+      'release': 'finished',
+      'area': '香港',
+      'year': '2024',
+      'allSources': true,
+    });
+    final b = CatalogView.fromJson(const {
+      'sort': 'score',
+      'release': 'finished',
+      'area': '香港',
+      'year': '2024',
+      'allSources': true,
+    });
+    expect(a, equals(b));
+    expect(a.hashCode, b.hashCode);
+    expect(a, isNot(equals(const CatalogView())));
+    expect(a, isNot(equals(b.copyWith(area: '内地'))));
+    expect(a, isNot(equals(b.copyWith(year: '2025'))));
+    expect(a, isNot(equals(b.copyWith(release: ''))));
+    expect(a, isNot(equals(b.copyWith(allSources: false))));
+    expect(a, isNot(equals(b.copyWith(sort: CatalogSort.name))));
   });
 
   testWidgets('地区年份选项渲染且点选生效、可叠加', (tester) async {
@@ -428,5 +571,61 @@ void main() {
     expect(find.text('地区'), findsNothing);
     expect(find.text('年份'), findsNothing);
     expect(updates, isEmpty);
+  });
+
+  testWidgets('releaseOptions 过滤无命中的剧集状态选项', (tester) async {
+    final updates = <CatalogView>[];
+    final anchorKey = GlobalKey(debugLabel: 'anchor');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              Align(
+                alignment: Alignment.topRight,
+                child: SizedBox(
+                  key: anchorKey,
+                  width: 48,
+                  height: 48,
+                  child: const ColoredBox(color: Colors.red),
+                ),
+              ),
+              Builder(
+                builder: (context) => Center(
+                  child: FilledButton(
+                    onPressed: () => showCatalogFilterMenu(
+                      context: context,
+                      anchorKey: anchorKey,
+                      current: const CatalogView(),
+                      // 面板外聚合结果：池中只有连载中与状态未知的内容。
+                      releaseOptions: const {'', 'ongoing', 'unknown'},
+                      onChanged: updates.add,
+                    ),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('filter-release-finished')),
+      findsNothing,
+      reason: '无命中状态不下发',
+    );
+    expect(find.text('连载中'), findsOneWidget);
+    expect(find.text('状态未知'), findsOneWidget);
+    expect(find.byKey(const ValueKey('filter-release-all')), findsOneWidget);
+
+    await tester.tap(find.text('连载中'));
+    await tester.pumpAndSettle();
+    expect(updates, hasLength(1));
+    expect(updates.single.release, 'ongoing');
   });
 }

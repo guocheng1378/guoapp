@@ -11,6 +11,7 @@ class DeferredRepository extends FixtureRepository {
   final pending = <int, Completer<PlaybackPlan>>{};
   final released = <String>[];
   Completer<PlaybackPlan>? alternate;
+  Completer<PlaybackPlan>? selected;
   int cancellations = 0;
 
   @override
@@ -28,6 +29,12 @@ class DeferredRepository extends FixtureRepository {
   Future<PlaybackPlan> fallback(PlaybackPlan current) {
     alternate = Completer<PlaybackPlan>();
     return alternate!.future;
+  }
+
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) {
+    selected = Completer<PlaybackPlan>();
+    return selected!.future;
   }
 
   @override

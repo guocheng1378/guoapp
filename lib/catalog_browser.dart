@@ -56,6 +56,31 @@ bool matchesLocalGenre(Drama drama, String genre) {
   return drama.title.contains(genre) || drama.description.contains(genre);
 }
 
+/// 短剧/长剧的分界：单集时长超过 10 分钟（600 秒）即长剧。
+/// 全源统一规则，与站源注册分类无关。
+const int longDramaThresholdSeconds = 600;
+
+/// 「长剧/短剧」本地分类 id。local: 前缀走本地过滤，但与题材词
+/// （'local:<词>'）不同源，home_screen 侧需先按这两个 id 分流。
+const String localLongCategory = 'local:kind:long';
+const String localShortCategory = 'local:kind:short';
+
+/// 判定条目是长剧还是短剧：
+/// 1. 有单集时长数据 → 时长 >600 秒即长剧；
+/// 2. 无时长数据 → 条目短剧信号兜底（分类/标签含「短剧」，如真果·鉴
+///    的 short_drama 条目与 maccms 短剧频道）；
+/// 3. 仍无信号 → 站源注册分类（短剧源→短剧），最后默认长剧
+///    （视频类内容以电视剧/电影为主，宁判长不冒充短剧）。
+bool dramaIsLongDrama(Drama drama, SourceSite? site) {
+  if (drama.duration > 0) return drama.duration > longDramaThresholdSeconds;
+  if (drama.category.contains('短剧')) return false;
+  for (final tag in drama.tags) {
+    if (tag.contains('短剧')) return false;
+  }
+  if (site != null && site.isShortDrama) return false;
+  return true;
+}
+
 class _CatalogChoice {
   _CatalogChoice(this.category);
   final CatalogCategory category;
@@ -83,6 +108,11 @@ class CatalogBrowser {
   final _sessions = <String, _CatalogSession>{};
   int _generation = 0;
 
+  /// 条目池版本号：_remember/updateDramas 改动库时递增，让内容命中
+  /// 缓存（_contentfulCache）失效重算，避免 build 期全量重复匹配。
+  int _libraryEpoch = 0;
+  final _contentfulCache = <String, (int, Set<String>)>{};
+
   Future<void> cancel() {
     _generation++;
     for (final session in _sessions.values) {
@@ -92,6 +122,7 @@ class CatalogBrowser {
   }
 
   void _remember(String source, Iterable<Drama> items) {
+    _libraryEpoch++;
     final library = _library.putIfAbsent(source, () => {});
     for (final drama in items) {
       if (drama.source == source) {
@@ -105,6 +136,8 @@ class CatalogBrowser {
   }
 
   void updateDramas(Iterable<Drama> dramas) {
+    // 详情回填可能改变时长/分类/标签，内容命中判定随之变化。
+    _libraryEpoch++;
     final updates = {for (final drama in dramas) drama.id: drama};
     for (final drama in updates.values) {
       final library = _library[drama.source];
@@ -185,21 +218,59 @@ class CatalogBrowser {
     return choices.values.toList();
   }
 
+  /// 组内条目池上有内容的 local 类目 id 集合（长剧/短剧档 + 题材词）。
+  /// 判定与 home_screen._visible 的 local 过滤同源
+  /// （dramaIsLongDrama/matchesLocalGenre），保证显示的分组点进去必有内容。
+  Set<String> _contentfulLocals(SourceGroup group) {
+    final key = group.sources.map((source) => source.id).join('|');
+    final cached = _contentfulCache[key];
+    if (cached != null && cached.$1 == _libraryEpoch) return cached.$2;
+    final genres = genreCatalogFor(group);
+    final hits = <String>{};
+    for (final source in group.sources) {
+      for (final drama in _library[source.id]?.values ?? const <Drama>[]) {
+        final site = SourceSite.byId(drama.source);
+        hits.add(
+          dramaIsLongDrama(drama, site)
+              ? localLongCategory
+              : localShortCategory,
+        );
+        for (final genre in genres) {
+          if (matchesLocalGenre(drama, genre)) hits.add('local:$genre');
+        }
+      }
+    }
+    _contentfulCache[key] = (_libraryEpoch, hits);
+    return hits;
+  }
+
   List<CatalogCategory> categories(SourceGroup group) {
     final known = _choices(group)
         .map((choice) => choice.category.name)
         .toSet()
       // 「未分类」是空 category 的兜底名，不算源站自带分组。
       ..remove(categoryName(''));
+    // 本地兜底组（长剧/短剧档与题材词）的内容完全来自条目池，按池命中
+    // 过滤：没有对应内容的分组不下发（点进去必空），条目到达后自然出现。
+    // category: 源站上报组不在此列——其内容在服务端，本地浏览缓存只是
+    // 冰山一角，按池判定会误杀。
+    final hits = _contentfulLocals(group);
     return [
       CatalogCategory.all,
+      // 短剧/长剧固定档：按单集时长（>10 分钟=长剧）全源统一划分，
+      // 不依赖源站分类上报，与题材词兜底互不冲突。
+      if (hits.contains(localLongCategory))
+        const CatalogCategory(localLongCategory, '长剧', local: true),
+      if (hits.contains(localShortCategory))
+        const CatalogCategory(localShortCategory, '短剧', local: true),
       for (final choice in _choices(group)) choice.category,
       // 固定题材词表只作兜底：源站自己上报过分类（条目带分类字段）时
       // 不再追加提示词分组，避免与源自带分组重复/冲突；完全无分类的
       // 源（如部分 maccms 采集站）才下发词表。
       if (known.isEmpty)
         for (final genre in genreCatalogFor(group))
-          CatalogCategory('local:$genre', genre, local: true),
+          if (hits.contains('local:$genre'))
+            CatalogCategory('local:$genre', genre, local: true),
     ];
   }
 

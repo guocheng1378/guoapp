@@ -82,17 +82,30 @@ class _StaggeredListItemState extends State<StaggeredListItem>
     curve: MotionCurves.standard,
   );
 
+  bool _armed = false;
+
   @override
-  void initState() {
-    super.initState();
-    if (!Motion.inTest) {
-      final delay = Duration(
-        milliseconds: math.min(widget.index * 30, 240),
-      );
-      Future<void>.delayed(delay, () {
-        if (mounted) _controller.forward();
-      });
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_armed) return;
+    _armed = true;
+    if (Motion.inTest) return;
+    // 列表 item 滚出视口会被回收、拉回时重建。若此刻重播入场动画，
+    // 快速滚动时路过的卡片会反复闪动；滚动进行中新建的 item 直接
+    // 以完成态渲染，只有页面静止时的首次构建才播错峰入场。
+    final scrolling =
+        Scrollable.maybeOf(context)?.position.isScrollingNotifier.value ??
+            false;
+    if (scrolling) {
+      _controller.value = 1;
+      return;
     }
+    final delay = Duration(
+      milliseconds: math.min(widget.index * 30, 240),
+    );
+    Future<void>.delayed(delay, () {
+      if (mounted) _controller.forward();
+    });
   }
 
   @override

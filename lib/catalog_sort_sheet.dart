@@ -10,12 +10,15 @@ import 'app_icons.dart';
 /// [supported] 为当前条目集上有效的排序项；null 表示不降级（全部可用）。
 /// [areaOptions]/[yearOptions] 为当前条目集上动态聚合的筛选选项；
 /// null 或空列表时对应筛选节整体隐藏（源不带该字段，如短剧类）。
+/// [releaseOptions] 为有内容的剧集状态键集合（'' 恒含）；null 表示
+/// 全部显示，非 null 时无命中的状态不渲染（选中后不会得到空列表）。
 Future<CatalogView?> chooseCatalogView(
   BuildContext context,
   CatalogView current, {
   Set<CatalogSort>? supported,
   List<String>? areaOptions,
   List<String>? yearOptions,
+  Set<String>? releaseOptions,
 }) {
   // 选中态挂在函数级：bottom sheet 的 builder 在 viewInsets/主题变化时会
   // 整体重跑，变量写在 builder 内会被重置回打开时快照（同下浮卡）。
@@ -96,13 +99,17 @@ Future<CatalogView?> chooseCatalogView(
                 runSpacing: 8,
                 children: [
                   for (final entry in _releaseOptions.entries)
-                    ChoiceChip(
-                      label: Text(entry.value),
-                      selected: selected.release == entry.key,
-                      onSelected: (_) => update(
-                        () => selected = selected.copyWith(release: entry.key),
+                    if (releaseOptions == null ||
+                        releaseOptions.contains(entry.key))
+                      ChoiceChip(
+                        label: Text(entry.value),
+                        selected: selected.release == entry.key,
+                        onSelected: (_) => update(
+                          () => selected = selected.copyWith(
+                            release: entry.key,
+                          ),
+                        ),
                       ),
-                    ),
                 ],
               ),
               if (areaOptions != null && areaOptions.isNotEmpty) ...[
@@ -175,6 +182,8 @@ const _releaseOptions = <String, String>{
 /// 手机端：锚定 ≡ 岛的轻量筛选浮卡。
 /// 与玻璃胶囊菜单同族——每枚选项一片独立玻璃胶囊，无整块面板底、
 /// barrier 全透明，点选立即生效且浮层保持打开，点空白处关闭。
+/// [releaseOptions] 为有内容的剧集状态键集合（'' 恒含）；null 表示
+/// 全部显示，非 null 时无命中的状态不渲染。
 Future<void> showCatalogFilterMenu({
   required BuildContext context,
   required GlobalKey anchorKey,
@@ -183,6 +192,7 @@ Future<void> showCatalogFilterMenu({
   Set<CatalogSort>? supported,
   List<String>? areaOptions,
   List<String>? yearOptions,
+  Set<String>? releaseOptions,
 }) async {
   final anchorContext = anchorKey.currentContext;
   final overlayBox =
@@ -283,24 +293,26 @@ Future<void> showCatalogFilterMenu({
                           runSpacing: 6,
                           children: [
                             for (final entry in _releaseOptions.entries)
-                              _filterChip(
-                                key: ValueKey(
-                                  'filter-release-'
-                                  '${entry.key.isEmpty ? 'all' : entry.key}',
+                              if (releaseOptions == null ||
+                                  releaseOptions.contains(entry.key))
+                                _filterChip(
+                                  key: ValueKey(
+                                    'filter-release-'
+                                    '${entry.key.isEmpty ? 'all' : entry.key}',
+                                  ),
+                                  context: dialogContext,
+                                  dark: dark,
+                                  label: entry.value,
+                                  checked: selected.release == entry.key,
+                                  onTap: () {
+                                    update(
+                                      () => selected = selected.copyWith(
+                                        release: entry.key,
+                                      ),
+                                    );
+                                    onChanged(selected);
+                                  },
                                 ),
-                                context: dialogContext,
-                                dark: dark,
-                                label: entry.value,
-                                checked: selected.release == entry.key,
-                                onTap: () {
-                                  update(
-                                    () => selected = selected.copyWith(
-                                      release: entry.key,
-                                    ),
-                                  );
-                                  onChanged(selected);
-                                },
-                              ),
                           ],
                         ),
                         if (areaOptions != null && areaOptions.isNotEmpty) ...[

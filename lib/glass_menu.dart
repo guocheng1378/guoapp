@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 class GlassMenuEntry<T> {
   const GlassMenuEntry(
@@ -146,8 +145,8 @@ Future<T?> showGlassMenu<T>({
                       else
                         GlassSurface(
                         radius: 24,
-                        topHighlight: true,
-                        // 统一滑动栏瓷面档：微透白瓷+白描边。
+                        // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+                        tint: GlassTint.pill,
                         child: _GlassMenuTile(
                           entry: entry,
                           onTap: entry.enabled

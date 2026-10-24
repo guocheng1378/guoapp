@@ -22,6 +22,8 @@ class FixtureRepository extends AppRepository {
     title: '测试短剧',
     episodes: 2,
     category: '合成数据',
+    // 20 分钟 > 600 秒：显式定性长剧，保播放器存量用例走旧分支。
+    duration: 1200,
   );
   static const vip = Drama(
     id: 'huangdou:200',
@@ -29,6 +31,7 @@ class FixtureRepository extends AppRepository {
     title: '会员测试剧',
     episodes: 4,
     vip: true,
+    duration: 1200,
   );
   @override
   Future<void> initialize() async {}
@@ -107,6 +110,9 @@ class FixtureRepository extends AppRepository {
   @override
   Future<PlaybackPlan> fallback(PlaybackPlan current) async =>
       throw AppFailure('没有备用线路');
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) async =>
+      throw AppFailure('测试桩不支持选线');
   @override
   Future<void> cancelPlayback() async {}
   @override

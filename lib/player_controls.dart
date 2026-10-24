@@ -4,12 +4,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 
+import 'danmaku_controller.dart';
 import 'lan_controller.dart';
 import 'player_interactions.dart';
 import 'widgets.dart';
 import 'video_enhancement.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 class PlayerControls extends StatefulWidget {
   const PlayerControls({
@@ -20,9 +20,10 @@ class PlayerControls extends StatefulWidget {
     required this.fullscreen,
     required this.showOnPlaybackReady,
     this.onFullscreen,
+    this.portraitRotate = false,
+    this.forceLandscape = false,
+    this.onPortraitRotate,
     required this.onBack,
-    required this.onPrevious,
-    required this.onNext,
     required this.title,
     required this.onTogglePlayback,
     required this.onEpisodes,
@@ -33,9 +34,10 @@ class PlayerControls extends StatefulWidget {
     required this.onFocusSurface,
     this.routeLabel,
     this.onRoute,
+    this.onDisplayOptions,
     this.showDanmaku = false,
     this.danmakuEnabled = false,
-    this.danmakuStatus = '',
+    this.danmaku,
     this.swipeEnabled = false,
     this.panelOpen = false,
     this.onSeek,
@@ -52,9 +54,12 @@ class PlayerControls extends StatefulWidget {
   final bool fullscreen;
   final bool showOnPlaybackReady;
   final VoidCallback? onFullscreen;
+
+  /// 短剧竖屏播放：全屏顶栏显示旋转按钮（竖屏 ⇄ 横屏）。
+  final bool portraitRotate;
+  final bool forceLandscape;
+  final VoidCallback? onPortraitRotate;
   final VoidCallback onBack;
-  final VoidCallback? onPrevious;
-  final VoidCallback? onNext;
   final String title;
   final VoidCallback onTogglePlayback;
   final Future<void> Function() onEpisodes;
@@ -65,9 +70,12 @@ class PlayerControls extends StatefulWidget {
   final VoidCallback onFocusSurface;
   final String? routeLabel;
   final Future<void> Function()? onRoute;
+
+  /// 画面比例与音轨入口（玻璃菜单）。
+  final Future<void> Function()? onDisplayOptions;
   final bool showDanmaku;
   final bool danmakuEnabled;
-  final String danmakuStatus;
+  final DanmakuController? danmaku;
   final bool swipeEnabled;
   final bool panelOpen;
   final Future<void> Function(Duration)? onSeek;
@@ -86,6 +94,16 @@ class _PlayerControlsState extends State<PlayerControls> {
   Timer? _hideTimer;
   bool _visible = true;
 
+  /// 中间 HUD（中央播放/暂停按钮）独立于上下控制栏管理：
+  /// 同一次唤出时一起出现，但先收起（1.5s vs 上下 2.5s），
+  /// 且倍速、手势、缓冲、切集中强制隐藏，不挡画面。
+  bool _centerVisible = true;
+
+  /// 中间 HUD 淡出 180ms 窗口内保持，结束后下线停绘。
+  bool _centerFading = true;
+  Timer? _centerTimer;
+  Timer? _centerFadeTimer;
+
   /// 控制栏子树是否在树上：淡出 180ms 窗口内保持，结束后下线停绘。
   bool _fading = true;
   Timer? _fadeTimer;
@@ -98,13 +116,13 @@ class _PlayerControlsState extends State<PlayerControls> {
   void initState() {
     super.initState();
     _visible = widget.showOnPlaybackReady;
+    _centerVisible = widget.showOnPlaybackReady;
     _lastPlaying = widget.player.state.playing;
     // position/duration/buffer 是播放中最高频的流（~4 次/秒），不再
     // 在这里整树 setState——由 _progressRow 内的 StreamBuilder 自行
     // 订阅 position 局部重建；duration/buffer 变化稀少，跟随其事件
     // 顺带刷新即可（episode 切换时 position 必然跳动）。
     for (final stream in [
-      widget.player.stream.playing,
       widget.player.stream.buffering,
       widget.player.stream.volume,
     ]) {
@@ -118,10 +136,10 @@ class _PlayerControlsState extends State<PlayerControls> {
       widget.player.stream.playing.listen((playing) {
         final wasPlaying = _lastPlaying;
         _lastPlaying = playing;
-        if (!mounted || !widget.enabled) return;
+        if (mounted) setState(() {});
         // 暂停与恢复播放都不再主动弹出控制栏（旧逻辑在这里 _show()，
         // 导致「做什么它都出来」）；只在恢复播放时重新安排一次自动隐藏
-        if (playing && !wasPlaying) {
+        if (playing && !wasPlaying && widget.enabled) {
           _scheduleHide();
         }
       }),
@@ -142,18 +160,26 @@ class _PlayerControlsState extends State<PlayerControls> {
       // 隐藏则等淡出结束后把子树下线。
       _fading = true;
       if (!widget.enabled && oldWidget.enabled) {
-        // 播放出错进入错误面板时收起控制栏
+        // 播放出错/切集（enabled=false）时收起控制栏与中间按钮
         _visible = false;
+        _centerVisible = false;
       }
       if (widget.enabled && !oldWidget.enabled) {
-        // 播放就绪只提示一次；暂停恢复不再自动弹工具栏，避免中央三按钮常驻
+        // 播放就绪只提示一次；暂停恢复不再自动弹工具栏，避免中央按钮常驻
         _visible = widget.showOnPlaybackReady;
+        _centerVisible = widget.showOnPlaybackReady;
       } else if (widget.panelOpen != oldWidget.panelOpen ||
           widget.fullscreen != oldWidget.fullscreen) {
         _visible = true;
+        _centerVisible = true;
       }
       if (!_visible) _scheduleControlsOffline();
       _scheduleHide();
+      if (_centerVisible) {
+        _syncCenterTimer();
+      } else {
+        _scheduleCenterOffline();
+      }
     }
   }
 
@@ -164,8 +190,11 @@ class _PlayerControlsState extends State<PlayerControls> {
       if (_visible) _setVisible(false);
       return;
     }
+    // 长按倍速只弹提示胶囊，不把工具栏顶出来（否则倍速全程 HUD 挡画面）；
     // 刚滑完进度的一小段时间里，提示照弹但不把工具栏唤出来
-    if (widget.interactions.feedback.isNotEmpty && !widget.interactions.quiet) {
+    if (widget.interactions.feedback.isNotEmpty &&
+        !widget.interactions.boosting &&
+        !widget.interactions.quiet) {
       _show();
     }
   }
@@ -173,19 +202,20 @@ class _PlayerControlsState extends State<PlayerControls> {
   void _scheduleHide() {
     _hideTimer?.cancel();
     // 暂停中也要照常收起：以前这里把「暂停」当成不隐藏的条件，
-    // 结果点了暂停后中央三按钮就长期杵在画面上
+    // 结果点了暂停后中央按钮就长期杵在画面上
     if (!widget.enabled || widget.panelOpen || _seekValue != null) {
       return;
     }
-    _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted &&
-          widget.enabled &&
-          !widget.panelOpen &&
-          !widget.player.state.buffering &&
-          !widget.interactions.boosting &&
-          _seekValue == null) {
-        _setVisible(false);
+    _hideTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (!mounted ||
+          !widget.enabled ||
+          widget.panelOpen ||
+          _seekValue != null) {
+        return;
       }
+      // 倍速/缓冲中直接收起，不再续期：倍速有提示胶囊、缓冲有中央转圈，
+      // 控制栏继续杵着只会挡画面
+      _setVisible(false);
     });
   }
 
@@ -197,19 +227,54 @@ class _PlayerControlsState extends State<PlayerControls> {
     });
   }
 
+  /// 中间 HUD 的 1.5s 独立计时：显示中就排收起，收起后下线停绘。
+  void _syncCenterTimer() {
+    _centerTimer?.cancel();
+    if (!_centerVisible) {
+      _scheduleCenterOffline();
+      return;
+    }
+    _centerTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      setState(() => _centerVisible = false);
+      _scheduleCenterOffline();
+    });
+  }
+
+  /// 中间 HUD 淡出动画结束（180ms + 20ms 余量）后下线停绘。
+  void _scheduleCenterOffline() {
+    _centerFadeTimer?.cancel();
+    _centerFadeTimer = Timer(const Duration(milliseconds: 200), () {
+      if (mounted && !_centerVisible) setState(() => _centerFading = false);
+    });
+  }
+
   /// 统一切换控制栏可见性：显示即上线，隐藏等淡出结束后下线。
+  /// 中间 HUD 跟随同一次唤出：一起出现但 1.5s 先收，隐藏时立即走。
   void _setVisible(bool value) {
     if (!mounted) return;
     setState(() {
       _visible = value;
       _fading = true;
+      _centerVisible = value;
     });
-    if (!value) _scheduleControlsOffline();
+    if (!value) {
+      _scheduleControlsOffline();
+      _scheduleCenterOffline();
+    } else {
+      _syncCenterTimer();
+    }
   }
 
   void _show() {
     if (!mounted) return;
-    if (!_visible) _setVisible(true);
+    if (!_visible) {
+      _setVisible(true);
+    } else if (!_centerVisible) {
+      // 已显示但中间按钮已被独立收起（如倍速/缓冲结束后）：重新唤出
+      setState(() => _centerVisible = true);
+      _syncCenterTimer();
+    }
     _scheduleHide();
   }
 
@@ -296,6 +361,8 @@ class _PlayerControlsState extends State<PlayerControls> {
   void dispose() {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
+    _centerTimer?.cancel();
+    _centerFadeTimer?.cancel();
     widget.interactions.removeListener(_interactionChanged);
     for (final subscription in _subscriptions) {
       subscription.cancel();
@@ -305,15 +372,21 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   @override
   Widget build(BuildContext context) {
-    final state = widget.player.state;
-    // 手势进行中（滑动调进度/亮度/音量/切集）强制隐藏控制栏：
-    // 滑动 seek 会冻结预览（临时暂停），不能因「未播放」把中间按钮顶出来挡 HUD
-    final gestureActive =
-        widget.interactions.hudState.type != SwipeAction.none;
-    // 只有用户主动唤出或面板打开时才显示：暂停、缓冲都不再自动弹出，
-    // 否则中央的上一集/播放/下一集会常驻在画面上（很突兀）
-    final visible = (_visible || widget.panelOpen) && !gestureActive;
-    return MouseRegion(
+    // 手势 HUD 的显隐（gestureActive）逐帧变化，把依赖 interactions 的
+    // 可见性判断收进 ListenableBuilder：手势期间只重建控制层子树，
+    // 而不是让整个播放页每帧 setState 重建。
+    return ListenableBuilder(
+      listenable: widget.interactions,
+      builder: (context, _) {
+        final state = widget.player.state;
+        // 手势进行中（滑动调进度/亮度/音量/切集）强制隐藏控制栏：
+        // 滑动 seek 会冻结预览（临时暂停），不能因「未播放」把中间按钮顶出来挡 HUD
+        final gestureActive =
+            widget.interactions.hudState.type != SwipeAction.none;
+        // 只有用户主动唤出或面板打开时才显示：暂停、缓冲都不再自动弹出，
+        // 否则中央的上一集/播放/下一集会常驻在画面上（很突兀）
+        final visible = (_visible || widget.panelOpen) && !gestureActive;
+        return MouseRegion(
       onHover: (_) => _show(),
       cursor: visible ? SystemMouseCursors.basic : SystemMouseCursors.none,
       child: LayoutBuilder(
@@ -356,11 +429,16 @@ class _PlayerControlsState extends State<PlayerControls> {
                   final width = widget.interactions.viewWidth;
                   if (origin != null && width > 0 && widget.onSeek != null) {
                     final back = origin.dx < width * 0.5;
-                    final target = Duration(
-                      seconds:
-                          widget.player.state.position.inSeconds + (back ? -10 : 10),
-                    );
-                    unawaited(widget.onSeek!(target));
+                    final state = widget.player.state;
+                    final durationSec = state.duration.inSeconds;
+                    var target =
+                        state.position.inSeconds + (back ? -10 : 10);
+                    if (durationSec > 0) {
+                      target = target.clamp(0, durationSec);
+                    } else if (target < 0) {
+                      target = 0;
+                    }
+                    unawaited(widget.onSeek!(Duration(seconds: target)));
                     widget.interactions.hint(back ? '快退 10 秒' : '快进 10 秒');
                     _spawnRipple(origin, forward: !back);
                     _show();
@@ -416,14 +494,6 @@ class _PlayerControlsState extends State<PlayerControls> {
                               child: Stack(
                                 children: [
                                   if (widget.fullscreen) _topBar(),
-                                  if (!state.buffering &&
-                                      widget.enabled &&
-                                      constraints.maxHeight >=
-                                          (widget.swipeEnabled ? 168 : 220))
-                                    _centerPlayback(
-                                      state.playing,
-                                      showSkip: true,
-                                    ),
                                   _sideDanmakuControl(),
                                   _bottomControls(
                                     constraints: constraints,
@@ -448,10 +518,31 @@ class _PlayerControlsState extends State<PlayerControls> {
                   child: _feedTopBar(),
                 ),
               ),
+            // 中间 HUD：独立于上下控制栏的生命周期（1.5s 先收），
+            // 倍速/手势/缓冲/切集（enabled=false）中强制隐藏，不挡画面
+            if ((_centerVisible || _centerFading) &&
+                !gestureActive &&
+                !widget.interactions.boosting &&
+                !state.buffering &&
+                widget.enabled &&
+                constraints.maxHeight >= (widget.swipeEnabled ? 168 : 220))
+              IgnorePointer(
+                ignoring: !_centerVisible,
+                child: ExcludeFocus(
+                  excluding: !_centerVisible,
+                  child: AnimatedOpacity(
+                    opacity: _centerVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _centerPlayback(state.playing),
+                  ),
+                ),
+              ),
             _gestureFeedback(),
           ],
         ),
       ),
+        );
+      },
     );
   }
 
@@ -517,6 +608,18 @@ class _PlayerControlsState extends State<PlayerControls> {
                 ),
               ),
             ),
+            // 短剧竖屏全屏：手动旋转竖屏 ⇄ 横屏。
+            if (widget.portraitRotate && widget.onPortraitRotate != null)
+              _overlayIconButton(
+                tooltip: widget.forceLandscape ? '转回竖屏' : '旋转到横屏',
+                onPressed: widget.onPortraitRotate,
+                icon: AppIcon(
+                  AppIcons.screenRotate,
+                  color: widget.forceLandscape
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.white,
+                ),
+              ),
           ],
         ),
       ),
@@ -538,36 +641,17 @@ class _PlayerControlsState extends State<PlayerControls> {
     ),
   );
 
-  Widget _centerPlayback(bool playing, {required bool showSkip}) => Center(
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (showSkip) ...[
-          IconButton(
-            tooltip: '上一集',
-            onPressed: widget.onPrevious,
-            icon: AppIcon(AppIcons.skipPrevious),
-          ),
-          const SizedBox(width: 12),
-        ],
-        IconButton.filledTonal(
-          tooltip: playing ? '暂停播放' : '开始播放',
-          iconSize: 38,
-          onPressed: () {
-            widget.onTogglePlayback();
-            _show();
-          },
-          icon: playing ? AppIcon(AppIcons.pause) : AppIcon(AppIcons.play),
-        ),
-        if (showSkip) ...[
-          const SizedBox(width: 12),
-          IconButton(
-            tooltip: '下一集',
-            onPressed: widget.onNext,
-            icon: AppIcon(AppIcons.skipNext),
-          ),
-        ],
-      ],
+  /// 中间 HUD 只保留播放/暂停大按钮：切集走中间竖滑手势和底部选集，
+  /// 两侧的上一集/下一集按钮挡画面还占唤出时间。
+  Widget _centerPlayback(bool playing) => Center(
+    child: IconButton.filledTonal(
+      tooltip: playing ? '暂停播放' : '开始播放',
+      iconSize: 38,
+      onPressed: () {
+        widget.onTogglePlayback();
+        _show();
+      },
+      icon: playing ? AppIcon(AppIcons.pause) : AppIcon(AppIcons.play),
     ),
   );
 
@@ -639,13 +723,16 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   double _topChromeInset() {
+    // 用 viewPadding 而不是 padding：视频画面在手机横屏是铺到屏幕边缘的
+    // （外层不再让位给状态栏），顶栏的可点区域得自己按系统栏高度退让。
+    final top = MediaQuery.viewPaddingOf(context).top;
     if (widget.fullscreen) {
-      final top = MediaQuery.paddingOf(context).top;
       if (top <= 0) return 16;
       return (top + 16).clamp(40.0, 80.0);
     }
     if (widget.swipeEnabled) {
-      return 10;
+      if (top <= 0) return 10;
+      return (top + 8).clamp(18.0, 60.0);
     }
     return 0;
   }
@@ -862,26 +949,31 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   Widget _lanPushTool(Key key) {
-    final link = LanController.current;
-    if (link == null) return const SizedBox.shrink();
-    return AnimatedBuilder(
-      animation: link,
-      builder: (context, _) => _toolButton(
-        key: key,
-        tooltip: link.connection == null
-            ? '推送'
-            : '推送到 ${link.connection!.peer.name}',
-        onPressed: widget.enabled ? () => _panel(widget.onPush!) : null,
-        child: link.pushing
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : link.connection == null
-                ? AppIcon(AppIcons.cast, size: 22)
-                : AppIcon(AppIcons.castConnected, size: 22),
-      ),
+    return ValueListenableBuilder<LanController?>(
+      key: key,
+      valueListenable: LanController.currentLink,
+      builder: (context, link, _) {
+        if (link == null) return const SizedBox.shrink();
+        return AnimatedBuilder(
+          animation: link,
+          builder: (context, _) => _toolButton(
+            key: key,
+            tooltip: link.connection == null
+                ? '推送'
+                : '推送到 ${link.connection!.peer.name}',
+            onPressed: widget.enabled ? () => _panel(widget.onPush!) : null,
+            child: link.pushing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : link.connection == null
+                    ? AppIcon(AppIcons.cast, size: 22)
+                    : AppIcon(AppIcons.castConnected, size: 22),
+          ),
+        );
+      },
     );
   }
 
@@ -905,8 +997,7 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// 弹幕状态徽标：状态原本只挂在 tooltip 上，而真机上长按工具按钮会被
   /// 视频区的长按手势抢走（触发倍速播放），用户永远看不到弹幕到底怎么了。
   /// 这里把关键状态压缩成两三个字常驻显示在按钮上方。
-  String? _danmakuBadge() {
-    final status = widget.danmakuStatus;
+  String? _danmakuBadge(String status) {
     if (status.isEmpty) return null;
     const labels = {
       '本集暂不支持弹幕': '不支持',
@@ -924,32 +1015,49 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   Widget _danmakuTool() {
-    final button = _toolButton(
-      key: const ValueKey('player-danmaku-toggle'),
-      tooltip: widget.danmakuStatus.isEmpty
-          ? (widget.danmakuEnabled ? '关闭弹幕' : '打开弹幕')
-          : widget.danmakuStatus,
-      visualWidth: 36,
-      selected: widget.danmakuEnabled,
-      onPressed: widget.enabled
-          ? () => _panel(widget.onRetryDanmaku ?? widget.onDanmaku!)
-          : null,
-      child: widget.onRetryDanmaku != null
-          ? AppIcon(AppIcons.refresh, size: 21)
-          : Text(
-              '弹',
-              style: TextStyle(
-                fontSize: 14,
-                height: 1,
-                fontWeight: FontWeight.w800,
-                color: widget.danmakuEnabled
-                    ? Theme.of(context).colorScheme.primary
-                    : Colors.white.withValues(alpha: .86),
-              ),
-            ),
+    final danmaku = widget.danmaku;
+    if (danmaku == null) return const SizedBox.shrink();
+    // 弹幕状态（加载中/已载入 N 条/可重试…）随播放进度频繁变化：
+    // 在这里局部监听，只重建徽标与按钮，不惊动整个播放页。
+    return ListenableBuilder(
+      listenable: danmaku,
+      builder: (context, _) {
+        final status = danmaku.status;
+        final retryable = danmaku.canRetry && widget.onRetryDanmaku != null;
+        final button = _toolButton(
+          key: const ValueKey('player-danmaku-toggle'),
+          tooltip: status.isEmpty
+              ? (widget.danmakuEnabled ? '关闭弹幕' : '打开弹幕')
+              : status,
+          visualWidth: 36,
+          selected: widget.danmakuEnabled,
+          onPressed: widget.enabled
+              ? () => _panel(retryable
+                    ? widget.onRetryDanmaku!
+                    : widget.onDanmaku!)
+              : null,
+          child: retryable
+              ? AppIcon(AppIcons.refresh, size: 21)
+              : Text(
+                  '弹',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1,
+                    fontWeight: FontWeight.w800,
+                    color: widget.danmakuEnabled
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.white.withValues(alpha: .86),
+                  ),
+                ),
+        );
+        final badge = _danmakuBadge(status);
+        if (badge == null) return button;
+        return _danmakuBadgeColumn(badge, button);
+      },
     );
-    final badge = _danmakuBadge();
-    if (badge == null) return button;
+  }
+
+  Widget _danmakuBadgeColumn(String badge, Widget button) {
     final alert = badge == '重试' || badge == '不支持';
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1080,6 +1188,13 @@ class _PlayerControlsState extends State<PlayerControls> {
           label: widget.routeLabel!,
           onPressed: widget.enabled ? () => _panel(widget.onRoute!) : null,
           width: 62,
+        ),
+      if (widget.onDisplayOptions != null)
+        _toolIcon(
+          key: const ValueKey('player-display'),
+          tooltip: '画面比例与音轨',
+          icon: AppIcon(AppIcons.tune, size: 22),
+          onPressed: widget.enabled ? () => _panel(widget.onDisplayOptions!) : null,
         ),
       if (widget.onPush != null)
         _lanPushTool(const ValueKey('fullscreen-lan-push')),
@@ -1256,10 +1371,11 @@ class _PlayerControlsState extends State<PlayerControls> {
     builder: (context, _) {
       final feedback = widget.interactions.feedback;
       if (feedback.isEmpty) return const SizedBox.shrink();
-      // 长按倍速这类常驻提示要克制：半透明小胶囊 + 上移，避免整块黑幕压画面
+      // 长按倍速这类常驻提示要克制：半透明小胶囊 + 贴近画面上缘，
+      // 避免压住画面中心的内容（倍速期间画面要留着看剧情）
       return IgnorePointer(
         child: Align(
-          alignment: const Alignment(0, -.62),
+          alignment: const Alignment(0, -.82),
           child: AnimatedOpacity(
             opacity: feedback.contains('松开恢复') ? .72 : .9,
             duration: const Duration(milliseconds: 180),

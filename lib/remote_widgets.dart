@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'search_input.dart';
+import 'search_suggestion.dart';
 import 'app_layout.dart';
 import 'package:flutter/services.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 /// 遥控区域之间的方向越界出口：没有接管者时保持默认焦点遍历行为。
 KeyEventResult _remoteExit(VoidCallback? action, {bool handled = false}) {
@@ -27,6 +27,58 @@ void ensureTelevisionFocus(BuildContext context) {
     if (scope.hasFocus) return;
     scope.nextFocus();
   });
+}
+
+/// 电视模式下包装 TextField（移植自 Xanerix/guoapp c805425，修复
+/// issue #21 同类问题）：观看记录/追剧/下载页的搜索框获得焦点后，
+/// 遥控上下键移出搜索框、确认键重新唤起输入法、返回键收起输入法
+/// 并移出焦点；非电视模式原样透传，零行为变化。
+class RemoteTextInput extends StatelessWidget {
+  const RemoteTextInput({super.key, required this.child});
+
+  final Widget child;
+
+  KeyEventResult _key(FocusNode node, KeyEvent event) {
+    final focus = FocusManager.instance.primaryFocus;
+    final editable = focus?.context?.findAncestorStateOfType<EditableTextState>();
+    if (editable == null ||
+        (event is! KeyDownEvent && event is! KeyRepeatEvent)) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowUp) {
+      focus!.focusInDirection(TraversalDirection.up);
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      focus!.focusInDirection(TraversalDirection.down);
+    } else if (key == LogicalKeyboardKey.escape ||
+        key == LogicalKeyboardKey.goBack) {
+      if (event is KeyDownEvent &&
+          !focus!.focusInDirection(TraversalDirection.down) &&
+          !focus.focusInDirection(TraversalDirection.up)) {
+        return KeyEventResult.ignored;
+      }
+    } else if (event is KeyDownEvent &&
+        [
+          LogicalKeyboardKey.select,
+          LogicalKeyboardKey.enter,
+          LogicalKeyboardKey.numpadEnter,
+        ].contains(key)) {
+      editable.requestKeyboard();
+    } else {
+      return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) => AppLayout.isTelevision(context)
+      ? Focus(
+          canRequestFocus: false,
+          skipTraversal: true,
+          onKeyEvent: _key,
+          child: child,
+        )
+      : child;
 }
 
 class RemoteTarget extends StatefulWidget {
@@ -992,7 +1044,7 @@ class TelevisionSearchDialog extends StatefulWidget {
     this.recentSearches = const [],
     this.onCancel,
   });
-  final Future<List<String>> Function(String)? suggestions;
+  final Future<List<SearchSuggestion>> Function(String)? suggestions;
   final List<String> recentSearches;
   final VoidCallback? onCancel;
   final String initialValue;

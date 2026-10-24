@@ -12,9 +12,10 @@ import (
 //
 // 场景：上一集还在播时对下一集做预加载（nativePrefetch），随后播放器发起
 // 第一个 Range 请求。分三段量：
-//   A 直连源站的首字节（对照：源站排队的代价）
-//   B 预读在飞行中时，播放器请求的首字节
-//   C 预读完成后，播放器请求的首字节（命中本地，应当是毫秒级）
+//
+//	A 直连源站的首字节（对照：源站排队的代价）
+//	B 预读在飞行中时，播放器请求的首字节
+//	C 预读完成后，播放器请求的首字节（命中本地，应当是毫秒级）
 func TestHongguoSwitchLatencyProbe(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: requires network")
@@ -29,11 +30,12 @@ func TestHongguoSwitchLatencyProbe(t *testing.T) {
 	}
 	const seriesID = "7698628892759706686"
 	const videoID = "7698630719496522776"
-	address := d.hongguoPublicMediaAddress(seriesID, videoID)
-	if address == "" {
-		t.Skip("no public address")
+	media, merr := d.resolveHongguoProtectedMedia(ctx, seriesID, videoID)
+	if merr != nil {
+		t.Skipf("protected media unavailable: %v", merr)
 	}
-	referer := d.providerBaseURL(sourceHongguo) + "/"
+	address := media.URL
+	referer := ""
 
 	start := time.Now()
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)

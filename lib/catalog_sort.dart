@@ -45,6 +45,20 @@ class CatalogView {
     allSources: allSources ?? this.allSources,
   );
 
+  // 值相等语义：LocalStore.catalogView 每次 getter 都从 JSON 新建实例，
+  // 任何按实例比较（==/集合键/缓存失效判定）都必须按字段值判等。
+  @override
+  bool operator ==(Object other) =>
+      other is CatalogView &&
+      other.sort == sort &&
+      other.release == release &&
+      other.area == area &&
+      other.year == year &&
+      other.allSources == allSources;
+
+  @override
+  int get hashCode => Object.hash(sort, release, area, year, allSources);
+
   Map<String, dynamic> toJson() => {
     'sort': sort.name,
     'release': release,
@@ -244,21 +258,54 @@ int _descending(num? a, num? b) => a == null
     ? -1
     : b.compareTo(a);
 
+/// 上线状态筛选匹配（'' = 全部）。
+bool matchesReleaseStatus(Drama drama, String release) {
+  if (release.isEmpty) return true;
+  final status = drama.releaseStatus == 'completed'
+      ? 'finished'
+      : drama.releaseStatus;
+  // 「状态未知」= 站源没有给出完结状态的条目（空/unknown）。
+  // 不填 releaseStatus 的源在此筛选下等于全量，语义与「全部」重合属预期。
+  return release == 'unknown'
+      ? status.isEmpty || status == 'unknown'
+      : status == release;
+}
+
+/// 按 view 的筛选维度过滤（不含排序）。skip* 供筛选选项聚合使用：
+/// 聚合某维度的选项时跳过该维度自身、其余维度照常生效——保证面板上
+/// 显示的每个选项在当前其它过滤态下选中必有内容（选了不出空列表）。
+List<Drama> filterCatalog(
+  Iterable<Drama> rows,
+  CatalogView view, {
+  bool skipArea = false,
+  bool skipYear = false,
+  bool skipRelease = false,
+}) => rows.where((drama) {
+  // 地区/年份为精确匹配筛选（选项来自已加载条目，值域与字段一致）。
+  if (!skipArea && view.area.isNotEmpty && drama.area.trim() != view.area) {
+    return false;
+  }
+  if (!skipYear && view.year.isNotEmpty && drama.year.trim() != view.year) {
+    return false;
+  }
+  return skipRelease || matchesReleaseStatus(drama, view.release);
+}).toList();
+
+/// 当前条目池上有内容的上线状态选项集合（'' 恒含；键值与
+/// catalog_sort_sheet 的 _releaseOptions 对应），供筛选面板隐藏
+/// 无命中的状态（如全是连载的源不显示「已完结」）。
+Set<String> catalogReleaseOptions(Iterable<Drama> items) {
+  final pool = items.toList();
+  return {
+    for (final release in const ['', 'ongoing', 'finished', 'unknown'])
+      if (release.isEmpty ||
+          pool.any((drama) => matchesReleaseStatus(drama, release)))
+        release,
+  };
+}
+
 List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
-  final items = rows.where((drama) {
-    // 地区/年份为精确匹配筛选（选项来自已加载条目，值域与字段一致）。
-    if (view.area.isNotEmpty && drama.area.trim() != view.area) return false;
-    if (view.year.isNotEmpty && drama.year.trim() != view.year) return false;
-    if (view.release.isEmpty) return true;
-    final release = drama.releaseStatus == 'completed'
-        ? 'finished'
-        : drama.releaseStatus;
-    // 「状态未知」= 站源没有给出完结状态的条目（空/unknown）。
-    // 不填 releaseStatus 的源在此筛选下等于全量，语义与「全部」重合属预期。
-    return view.release == 'unknown'
-        ? release.isEmpty || release == 'unknown'
-        : release == view.release;
-  }).toList();
+  final items = filterCatalog(rows, view);
   if (view.sort == CatalogSort.source) return items;
   final positions = {for (final entry in items.indexed) entry.$2.id: entry.$1};
   final metrics = <String, num?>{
@@ -273,6 +320,21 @@ List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
         _ => null,
       },
   };
+  // 字段型排序（热度/播放/评分/日期）在所有条目都没有对应字段值时
+  // 自动降级为源站顺序：切源后持久化的排序请求可能悬空（如热度选中
+  // 状态切到无热度字段的源），此时强行排序只会靠 tie-break 原样返回
+  // 源站顺序，造成「已选中但列表无变化」的假象——直接诚实降级。
+  // 剧果「全部」页源站本就按热度序返回，降级后结果与语义一致。
+  final metricDriven = switch (view.sort) {
+    CatalogSort.heat ||
+    CatalogSort.views ||
+    CatalogSort.score ||
+    CatalogSort.date => true,
+    _ => false,
+  };
+  if (metricDriven && metrics.values.every((value) => value == null)) {
+    return items;
+  }
   items.sort((a, b) {
     final comparison = switch (view.sort) {
       CatalogSort.source => 0,

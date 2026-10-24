@@ -78,9 +78,31 @@ class _DoubanPickCache {
 
 final Map<String, _DoubanPickCache> _doubanCaches = {};
 
+/// 轮播的「按类取榜」卡：[drama] 是榜单条目本身（带真实源，可直接播放；
+/// 豆瓣条目无播放链路），[boardLabel] 是左上角来源徽章（如「豆瓣」「红果榜」
+/// 「黄果榜」），[tag] 是评分/热度摘要（豆瓣取评分，其它类可空）。
+class RankingPick {
+  const RankingPick(this.drama, {this.boardLabel = '', this.tag = ''});
+  final Drama drama;
+  final String boardLabel;
+  final String tag;
+}
+
+class _CategoryPickCache {
+  const _CategoryPickCache(this.picks);
+  final List<RankingPick> picks;
+}
+
+/// 「按类取榜」会话缓存（仿 [_doubanCaches]）：按「当天|锚点」落键。
+final Map<String, _CategoryPickCache> _categoryCaches = {};
+
 /// 测试专用：清空豆瓣选片会话缓存（生产路径按天自然失效）。
 @visibleForTesting
 void clearDoubanPicksCache() => _doubanCaches.clear();
+
+/// 测试专用：清空按类取榜会话缓存。
+@visibleForTesting
+void clearCategoryPicksCache() => _categoryCaches.clear();
 
 String _doubanDayKey() {
   final now = DateTime.now();
@@ -96,6 +118,16 @@ String doubanBoardForToday() => doubanCarouselBoard;
 bool doubanPicksFill(int need, SourceSite anchor) {
   if (anchor.inHuangguoCategory) return false;
   final cached = _doubanCaches['${_doubanDayKey()}|${anchor.id}'];
+  return cached != null && cached.picks.length >= need;
+}
+
+/// 轮播取片是否已能填满 [need] 张：视频类走豆瓣缓存判定；其它大类走
+/// 按类取榜缓存判定（不再对黄果类恒返回 false——黄果类现在也拉自家榜）。
+bool categoryPicksFill(int need, SourceSite anchor) {
+  if (anchor.classKey == SourceSite.douban.classKey) {
+    return doubanPicksFill(need, anchor);
+  }
+  final cached = _categoryCaches['${_doubanDayKey()}|${anchor.id}'];
   return cached != null && cached.picks.length >= need;
 }
 
@@ -133,6 +165,64 @@ Future<List<DoubanPick>> _searchDoubanPicks(
       if (title.isEmpty) continue;
       if (!seenTitles.add(_normalizeTitle(title))) continue;
       picks.add(DoubanPick(item.drama, item.metric.split(' · ').first.trim()));
+      if (picks.length >= doubanMatchCount) break;
+    }
+    return List.unmodifiable(picks);
+  } catch (_) {
+    // 榜单拉取失败静默：首页主体是剧卡流，不打扰。
+    return const [];
+  }
+}
+
+/// 轮播按大类取榜：视频类复用豆瓣选片（用户定调「视频类的不用改」），其余
+/// 大类直接播该大类自己的榜单（取首个归属当前 classKey 的榜，主热播榜），
+/// 条目带真实源、点按直接进详情/播放。任何失败返回空 → 轮播静默回退当前
+/// 源条目。
+Future<List<RankingPick>> loadCategoryRankingPicks(
+  AppRepository repository,
+  LocalStore store,
+  SourceSite anchor,
+) async {
+  // 视频类：保持豆瓣选片（零改动复用），徽章标「豆瓣」+ 评分摘要。
+  if (anchor.classKey == SourceSite.douban.classKey) {
+    final picks = await loadDoubanPicks(repository, store, anchor);
+    return [
+      for (final pick in picks)
+        RankingPick(pick.drama, boardLabel: '豆瓣', tag: pick.tag),
+    ];
+  }
+  final cacheKey = '${_doubanDayKey()}|${anchor.id}';
+  final cached = _categoryCaches[cacheKey];
+  if (cached != null) return cached.picks;
+  final picks = await _searchCategoryPicks(repository, anchor);
+  _categoryCaches[cacheKey] = _CategoryPickCache(picks);
+  return picks;
+}
+
+/// 按锚点大类取首个匹配榜的条目：与榜单页「按内容类型」口径一致。
+Future<List<RankingPick>> _searchCategoryPicks(
+  AppRepository repository,
+  SourceSite anchor,
+) async {
+  try {
+    final boards = await repository.rankingBoards();
+    // 取首个归属当前大类的榜（主热播榜）；按类隔离与榜单页同口径。
+    final matches = boards.where(
+      (b) => SourceSite.byId(b.source)?.classKey == anchor.classKey,
+    );
+    final board = matches.isEmpty ? null : matches.first;
+    if (board == null) return const [];
+    final page = await repository.rankings(board.id);
+    final picks = <RankingPick>[];
+    final seenTitles = <String>{};
+    final label = '${SourceSite.byId(board.source)?.name ?? board.source}榜';
+    for (final item in page.items) {
+      final title = item.drama.title.trim();
+      if (title.isEmpty) continue;
+      if (!seenTitles.add(_normalizeTitle(title))) continue;
+      // 与榜单页 _rankingMetricLabel 同口径：站源榜条目也展示 item.metric
+      // （红果原始热度数字、黄豆「X热度」等），空 metric 时只显示来源徽章。
+      picks.add(RankingPick(item.drama, boardLabel: label, tag: item.metric.trim()));
       if (picks.length >= doubanMatchCount) break;
     }
     return List.unmodifiable(picks);

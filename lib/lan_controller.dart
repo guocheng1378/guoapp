@@ -28,6 +28,10 @@ class LanController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   static LanController? current;
+  /// current 的变化通知：profile 切换会重建实例，已打开的播放页
+  /// 靠它感知重建（直接读 current 的 build 不会因此刷新）。
+  static final ValueNotifier<LanController?> currentLink =
+      ValueNotifier(null);
   static const serviceType = '_zgj-link._tcp';
   final AppRepository repository;
   final LocalStore store;
@@ -941,6 +945,8 @@ class LanController extends ChangeNotifier with WidgetsBindingObserver {
     _disposed = true;
     _run++;
     _syncTicket++;
+    if (identical(currentLink.value, this)) currentLink.value = null;
+    if (identical(current, this)) current = null;
     store.removeListener(_storeChanged);
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();

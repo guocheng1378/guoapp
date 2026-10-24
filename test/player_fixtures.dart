@@ -11,28 +11,41 @@ class ScriptedPlayer extends PlatformPlayer {
   final played = <bool>[];
   bool disposed = false;
   final rates = <double>[];
-
+  int stops = 0;
+  int pauses = 0;
+  /// 模拟死链：url 含 'dead' 时 open 后只发 START_FILE（playing+buffering），
+  /// 之后无任何事件（不缓冲完成、不出画、不报错）——用于 12s watchdog 用例。
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     final media = playable as Media;
     opened.add(media);
     played.add(play);
-    final failed = media.uri.contains('broken');
+    // 模拟 MPV_EVENT_START_FILE：拉流前先发 playing=true + buffering=true，
+    // 直到真正解码出画（core-idle=0）才落 buffering=false。
+    final hang = media.uri.contains('dead');
+    final failed = !hang && media.uri.contains('broken');
     state = state.copyWith(
       position: failed ? Duration.zero : media.start ?? Duration.zero,
       duration: failed ? Duration.zero : const Duration(minutes: 2),
       playing: play,
       completed: false,
-      buffering: false,
+      buffering: true,
       width: failed ? 0 : 320,
       height: failed ? 0 : 180,
     );
     positionController.add(state.position);
     durationController.add(state.duration);
     playingController.add(play);
+    bufferingController.add(true);
+    if (hang) {
+      return;
+    }
     if (failed) {
       fail();
+      return;
     }
+    state = state.copyWith(buffering: false);
+    bufferingController.add(false);
   }
 
   void fail() {
@@ -40,8 +53,15 @@ class ScriptedPlayer extends PlatformPlayer {
     errorController.add('synthetic decoder failure');
   }
 
+  /// 模拟媒体事件：出画（buffering=false）。包装 protected 流，测试注入用。
+  void injectBuffering(bool buffering) {
+    state = state.copyWith(buffering: buffering);
+    bufferingController.add(buffering);
+  }
+
   @override
   Future<void> stop() async {
+    stops++;
     state = state.copyWith(
       position: Duration.zero,
       duration: Duration.zero,
@@ -92,6 +112,7 @@ class ScriptedPlayer extends PlatformPlayer {
 
   @override
   Future<void> pause() async {
+    pauses++;
     state = state.copyWith(playing: false);
     playingController.add(false);
   }
@@ -118,21 +139,34 @@ class ScriptedPlayer extends PlatformPlayer {
 class RouteRepository extends FixtureRepository {
   int primaryCalls = 0;
   int fallbackCalls = 0;
+  int selectCalls = 0;
   final requestedQualities = <int>[];
   final requestedEpisodes = <int>[];
+  final selectedRoutes = <int>[];
   bool broken = false;
   bool deferFallback = false;
+  bool deferResolve = false;
+  bool deferSelect = false;
   final active = <String>{};
   Completer<PlaybackPlan>? pending;
+  Completer<PlaybackPlan>? pendingResolve;
 
-  PlaybackPlan plan(bool alternate) {
-    final session = 'route-${primaryCalls + fallbackCalls}';
+  /// 线路表可由用例覆写：默认两条无官方标记的线路（面板平铺），
+  /// 需要验证官方/第三方分组时改成带 routeOfficial 的多线表。
+  List<String> routeLabels = const ['无水印资源', '索尼资源'];
+  List<bool> routeOfficial = const [];
+
+  PlaybackPlan plan(bool alternate, {int route = -1}) {
+    final session = 'route-${primaryCalls + fallbackCalls + selectCalls}';
     active.add(session);
+    final index = route >= 0 ? route : (alternate ? 1 : 0);
     return PlaybackPlan(
       url: 'https://media.test/${broken ? 'broken' : 'working'}-$session.mp4',
       session: session,
-      routeIndex: alternate ? 1 : 0,
-      routeCount: 2,
+      routeIndex: index,
+      routeCount: routeLabels.length,
+      routeLabels: routeLabels,
+      routeOfficial: routeOfficial,
       quality: 1080,
       qualities: const [1080, 720],
     );
@@ -147,7 +181,16 @@ class RouteRepository extends FixtureRepository {
     primaryCalls++;
     requestedQualities.add(quality);
     requestedEpisodes.add(episode.number);
+    if (deferResolve) {
+      pendingResolve = Completer<PlaybackPlan>();
+      return pendingResolve!.future;
+    }
     return plan(false);
+  }
+
+  /// 放行被 deferResolve 挂起的解析。
+  void completePendingPlan() {
+    pendingResolve?.complete(plan(false));
   }
 
   @override
@@ -158,6 +201,17 @@ class RouteRepository extends FixtureRepository {
       return pending!.future;
     }
     return plan(true);
+  }
+
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) async {
+    selectCalls++;
+    selectedRoutes.add(route);
+    if (deferSelect) {
+      pending = Completer<PlaybackPlan>();
+      return pending!.future;
+    }
+    return plan(false, route: route);
   }
 
   @override

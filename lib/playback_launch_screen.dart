@@ -10,7 +10,6 @@ import 'models.dart';
 import 'player_screen.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 /// 点剧卡进播放：立即推透明启动浮层——底下首页保持可见，只在中央淡入
 /// 一个小转圈（无整页白底）；详情解析、续播集计算、VIP 确认都在浮层内
@@ -175,7 +174,6 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final error = _error;
     return Scaffold(
       // 透明背景浮层：底下首页可见，只有中央小圆片/错误卡叠加。
@@ -191,7 +189,8 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
                       // 白瓷面小圆片：亮色海报上转圈仍可辨，无整页底色。
                       child: GlassSurface(
                         radius: 999,
-                        // 统一滑动栏瓷面档：微透白瓷+白描边。
+                        // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+                        tint: GlassTint.pill,
                         child: const Padding(
                           padding: EdgeInsets.all(16),
                           child: SizedBox(

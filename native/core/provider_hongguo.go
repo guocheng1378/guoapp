@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -226,13 +226,17 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
 		return providerMedia{}, fmt.Errorf("红果章节 ID 无效，请重新获取章节")
 	}
-	// 快速通道：直链形态固定且剧集 ID 已知，直接构造地址返回。
-	// 实测走完整链（App 取流已失效 → 网页播放页 → 直链预热探测）要 8 秒以上，
-	// 切一集等这么久正是「卡」的主因。直链是否就绪由本机流代理的预读与
-	// 重签兜底：不可用时会带着强制标记重走完整链换一条真实地址。
-	if media, ok := d.hongguoFastMedia(ctx, seriesID, videoID); ok {
+	// 红果已把公开 SEO 直链降级为 10 秒试看片段（播放页元数据仍谎报完整时长），
+	// 完整播放必须走受保护的 play-info 接口拿签名全量地址。
+	media, protectedErr := d.resolveHongguoProtectedMedia(ctx, seriesID, videoID)
+	if protectedErr == nil {
 		return media, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return providerMedia{}, err
+	}
+	// 兜底：App 取流 / 网页播放页 / Playback API。公开直链已失效，这些路径仅在
+	// play-info 接口整体不可用时作为最后手段，不会把试看片段冒充整集。
 	media, nativeErr := d.resolveHongguoAppMedia(ctx, videoID)
 	if nativeErr == nil {
 		return media, nil
@@ -251,7 +255,7 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if apiErr == nil {
 		return media, nil
 	}
-	return providerMedia{}, fmt.Errorf("红果 App 取流失败：%v；网页取流失败：%v；备用取流失败：%w", publicError(nativeErr), publicError(pageErr), apiErr)
+	return providerMedia{}, fmt.Errorf("红果取流失败：受保护接口 %v；App %v；网页 %v；备用 %w", publicError(protectedErr), publicError(nativeErr), publicError(pageErr), apiErr)
 }
 
 // hongguoWebUserAgent 站点网页路由（详情/播放页）只放行桌面浏览器 UA，
@@ -274,9 +278,6 @@ func hongguoWebMediaUserAgent(address string) string {
 
 // hongguoRouterPageAttempts 站点会对网页请求随机返回 404，拉取后需重试再判定失败。
 const hongguoRouterPageAttempts = 3
-
-// hongguoMediaWarmAttempts 媒体直链的随机 404 率明显高于网页，预热需要更多次重试。
-const hongguoMediaWarmAttempts = 5
 
 // fetchHongguoRouterPage 拉取红果网页并解析 _ROUTER_DATA，
 // 使用浏览器 UA 并对站点随机返回的 404 做有限重试。
@@ -338,7 +339,9 @@ func (d *Downloader) resolveHongguoWebMedia(ctx context.Context, seriesID, video
 }
 
 // hongguoPublicSEOMedia 解析新版播放页的公开播放信息。
-// 站点播放器对 available 的剧集使用 /video/public/{vid}/360p.mp4 直链（仅 360p）。
+// 站点播放器对 available 的剧集原使用 /video/public/{vid}/360p.mp4 直链，但已被
+// 降级为 10 秒试看片段；真实全量地址改由受保护的 play-info 接口给出，这里只做
+// 剧集匹配与可用性校验，再把取流交给 resolveHongguoProtectedMedia。
 func (d *Downloader) hongguoPublicSEOMedia(ctx context.Context, base string, seo map[string]any, seriesID, videoID string) (providerMedia, error) {
 	if mapString(seo, "seriesId") != seriesID || mapString(seo, "itemId") != videoID {
 		return providerMedia{}, fmt.Errorf("红果网页未返回所请求的剧集，可能仅允许网页试看；请在站点确认该集的访问权限")
@@ -346,60 +349,14 @@ func (d *Downloader) hongguoPublicSEOMedia(ctx context.Context, base string, seo
 	if !hongguoSEOAvailable(seo) {
 		return providerMedia{}, fmt.Errorf("红果该集未开放公开播放，可能需要登录或 App 授权；不会将试看集冒充该集下载")
 	}
-	address := base + hongguoPublicVideoPath(videoID)
-	if address == "" {
-		return providerMedia{}, fmt.Errorf("红果该集的公开播放地址无效")
-	}
-	if err := d.hongguoWarmPublicMedia(ctx, base, address); err != nil {
-		return providerMedia{}, err
-	}
-	duration, _ := strconv.ParseFloat(mapString(seo, "durationSeconds"), 64)
-	media := providerMedia{URL: address, Referer: base + "/", Duration: time.Duration(duration * float64(time.Second)), Quality: 360}
-	media.Variants = []providerMedia{media}
-	return media, nil
+	// 公开 SEO 直链已降级为 10 秒试看片段，真实地址改由受保护 play-info 接口给出。
+	return d.resolveHongguoProtectedMedia(ctx, seriesID, videoID)
 }
 
-// hongguoWarmPublicMedia 站点对媒体直链的首次请求会随机 404（CDN 未就绪），
-// 播放器自身不会重试，这里先探测并重试至缓存就绪，再交给播放器。
-func (d *Downloader) hongguoWarmPublicMedia(ctx context.Context, base, address string) error {
-	var lastErr error
-	for attempt := 1; attempt <= hongguoMediaWarmAttempts; attempt++ {
-		if attempt > 1 {
-			timer := time.NewTimer(time.Duration(attempt) * 400 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-		if err != nil {
-			return err
-		}
-		request.Header.Set("User-Agent", hongguoWebUserAgent)
-		request.Header.Set("Referer", base+"/")
-		request.Header.Set("Range", "bytes=0-0")
-		response, err := d.client.Do(request)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		status := response.StatusCode
-		response.Body.Close()
-		if status == http.StatusOK || status == http.StatusPartialContent {
-			return nil
-		}
-		if status == http.StatusNotFound || status >= 500 {
-			lastErr = fmt.Errorf("红果公开媒体暂不可用（HTTP %d）", status)
-			continue
-		}
-		return fmt.Errorf("红果公开媒体不可访问（HTTP %d）", status)
-	}
-	return lastErr
-}
-
-// hongguoPublicVideoPath 站点播放器对公开剧集使用的 SEO 直链路径（固定 360p）。
+// hongguoPublicVideoPath 站点播放器曾用于公开剧集的 SEO 直链路径（固定 360p）。
+//
+// 该直链现已被站点降级为 10 秒试看片段（播放页元数据仍谎报完整时长），不再用于
+// 取流；保留此函数仅作路径构造参考，完整地址改由 resolveHongguoProtectedMedia 取得。
 func hongguoPublicVideoPath(videoID string) string {
 	if !hongguoNumericID.MatchString(videoID) {
 		return ""
@@ -407,73 +364,103 @@ func hongguoPublicVideoPath(videoID string) string {
 	return "/video/public/" + videoID + "/360p.mp4"
 }
 
-// hongguoFastMedia 尝试零网络拼出公开直链。
+// hongguoProtectedPlayInfoPath 红果受保护播放信息接口路径。站点把完整剧集地址收敛
+// 到这里，公开 SEO 直链已降级为 10 秒试看片段。
+const hongguoProtectedPlayInfoPath = "/api/video/protected/play-info"
+
+// resolveHongguoProtectedMedia 经受保护的 play-info 接口取回完整签名地址。
 //
-// 返回 ok=false 表示应走完整取流链（带强制标记，或剧集 ID 不合法）。
-func (d *Downloader) hongguoFastMedia(ctx context.Context, seriesID, videoID string) (providerMedia, bool) {
-	if hongguoRequiresFullResolve(ctx) {
-		return providerMedia{}, false
+// 该接口对公开剧集返回全量 mp4（而非 SEO 直链的 10 秒试看）。站点偶发随机 404，
+// 这里做有限重试，与网页/直链预热行为保持一致。
+func (d *Downloader) resolveHongguoProtectedMedia(ctx context.Context, seriesID, videoID string) (providerMedia, error) {
+	if !hongguoNumericID.MatchString(seriesID) || !hongguoNumericID.MatchString(videoID) {
+		return providerMedia{}, fmt.Errorf("红果播放请求缺少有效的剧集 ID")
 	}
-	address := d.hongguoPublicMediaAddress(seriesID, videoID)
-	if address == "" {
-		return providerMedia{}, false
+	base := d.providerBaseURL(sourceHongguo)
+	payload, err := json.Marshal(map[string]string{
+		"series_id":  seriesID,
+		"item_id":    videoID,
+		"definition": "720p",
+	})
+	if err != nil {
+		return providerMedia{}, err
 	}
-	media := providerMedia{URL: address, Referer: d.providerBaseURL(sourceHongguo) + "/", Quality: 360}
-	media.Variants = []providerMedia{media}
-	// 后台预热：源站对公开直链的首次请求会随机 404（CDN 缓存未就绪），
-	// 提前探几路让 CDN 就绪，播放的第一个请求就能直接 200，不必在
-	// 播放线程里等重试或重签。
-	d.hongguoWarmMediaAsync(ctx, d.providerBaseURL(sourceHongguo), address)
-	return media, true
-}
-
-// hongguoWarmMediaAsync 并发做几路轻量探测，命中即停。
-// 不阻塞调用方：解析已经返回地址，这里只负责把 CDN 焐热。
-func (d *Downloader) hongguoWarmMediaAsync(ctx context.Context, base, address string) {
-	warmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	var group sync.WaitGroup
-	for attempt := 0; attempt < 3; attempt++ {
-		group.Add(1)
-		go func(attempt int) {
-			defer group.Done()
+	var lastErr error
+	for attempt := 1; attempt <= hongguoRouterPageAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(time.Duration(attempt) * 400 * time.Millisecond)
 			select {
-			case <-warmCtx.Done():
-				return
-			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			case <-ctx.Done():
+				timer.Stop()
+				return providerMedia{}, ctx.Err()
+			case <-timer.C:
 			}
-			request, err := http.NewRequestWithContext(warmCtx, http.MethodGet, address, nil)
-			if err != nil {
-				return
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			base+hongguoProtectedPlayInfoPath+"?aid=8662", bytes.NewReader(payload))
+		if err != nil {
+			return providerMedia{}, err
+		}
+		request.Header.Set("User-Agent", hongguoWebUserAgent)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		response, err := d.client.Do(request)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("红果受保护播放接口返回 HTTP %d", response.StatusCode)
+			if response.StatusCode == http.StatusNotFound || response.StatusCode >= 500 {
+				continue
 			}
-			request.Header.Set("User-Agent", hongguoWebUserAgent)
-			request.Header.Set("Referer", base+"/")
-			request.Header.Set("Range", "bytes=0-0")
-			response, err := d.client.Do(request)
-			if err != nil {
-				return
-			}
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
-			response.Body.Close()
-			cancel()
-		}(attempt)
+			return providerMedia{}, lastErr
+		}
+		media, parseErr := parseHongguoProtectedPlayInfo(body)
+		if parseErr != nil {
+			lastErr = parseErr
+			continue
+		}
+		return media, nil
 	}
-	go func() {
-		group.Wait()
-		cancel()
-	}()
+	if lastErr == nil {
+		lastErr = errors.New("红果受保护播放接口未返回可用地址")
+	}
+	return providerMedia{}, lastErr
 }
 
-// hongguoPublicMediaAddress 拼出公开剧集的 360p 直链（零网络解析用）。
-func (d *Downloader) hongguoPublicMediaAddress(seriesID, videoID string) string {
-	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
-		return ""
+// parseHongguoProtectedPlayInfo 解析受保护播放信息接口响应，提取完整媒体地址。
+func parseHongguoProtectedPlayInfo(body []byte) (providerMedia, error) {
+	var envelope struct {
+		LegacyPlayInfo struct {
+			MainURL  string  `json:"main_url"`
+			Height   string  `json:"height"`
+			Duration float64 `json:"duration"`
+		} `json:"legacy_play_info"`
 	}
-	path := hongguoPublicVideoPath(videoID)
-	if path == "" {
-		return ""
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&envelope); err != nil {
+		return providerMedia{}, errors.New("红果受保护播放接口返回了无效数据")
 	}
-	return d.providerBaseURL(sourceHongguo) + path
+	address := strings.TrimSpace(envelope.LegacyPlayInfo.MainURL)
+	if address == "" || len(address) > 8192 || !isProviderHTTPMediaURL(address) {
+		return providerMedia{}, errors.New("红果受保护播放接口返回的媒体地址无效")
+	}
+	quality, _ := strconv.Atoi(hongguoQualityNumber.FindString(envelope.LegacyPlayInfo.Height))
+	media := providerMedia{
+		URL:      address,
+		Quality:  quality,
+		Duration: time.Duration(envelope.LegacyPlayInfo.Duration * float64(time.Second)),
+	}
+	media.Variants = []providerMedia{media}
+	return media, nil
 }
 
 func hongguoSEOAvailable(seo map[string]any) bool {

@@ -77,11 +77,23 @@ func (engine *nativeEngine) loadCatalogCache() {
 	}
 }
 
+// nativeDramaMetadataSchema 剧库条目元数据版本：
+//
+//	1 → 黄豆 VIP 语义迁移
+//	2 → 真果·鉴封面集数改取 playback_groups[].episode_count。此前的版本
+//	    可能把 playback_count（总播放量，量级几十到几千）当集数写盘，
+//	    用户会看到「共 1150 集」这类错值——加载时清零，等下拉刷新/重新
+//	    拉目录后用新数据给出正确集数。
+const nativeDramaMetadataSchema = 2
+
 func migrateNativeDrama(drama nativeDrama) nativeDrama {
 	if drama.MetadataSchema == 0 && drama.Source == sourceHuangdou && drama.VIP != nil && !*drama.VIP {
 		drama.VIP = nil
 	}
-	drama.MetadataSchema = 1
+	if drama.MetadataSchema < nativeDramaMetadataSchema && drama.Source == sourceDongpiandi {
+		drama.Episodes = 0
+	}
+	drama.MetadataSchema = nativeDramaMetadataSchema
 	return drama
 }
 

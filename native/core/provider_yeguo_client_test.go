@@ -94,6 +94,24 @@ func TestYeguoAPIBaseFallsBackToPathinfoEntry(t *testing.T) {
 	}
 }
 
+// 页面不供 apiBaseURL 时从 module 脚本反查 baseURL:xxx() → xxx=()=>"…"
+// （移植自 Xanerix/guoapp 3b24e89）： helper 函数优先于同名干扰项，
+// 带 query/片段的地址一律拒绝。
+func TestYeguoScriptAPIBaseFollowsRequestHelper(t *testing.T) {
+	script := "globalThis.$fetch=Qi.create({baseURL:ta()});ta=()=>ea().baseURL,xud=()=>`https://wrong.example/api.php`," +
+		"ud=()=>`https://api.example/api.php/`;function $(e,t){return u(e,{baseURL:ud(),method:a})}" +
+		"var Bd=(e={},t)=>$(`/api/home/homePage`,e,t)"
+	if got := yeguoScriptAPIBase(script); got != "https://api.example/api.php" {
+		t.Fatalf("api base = %q", got)
+	}
+	if got := yeguoScriptAPIBase("ud=()=>`https://api.example/api.php?x=1`;u(e,{baseURL:ud()})"); got != "" {
+		t.Fatalf("api base with query accepted: %q", got)
+	}
+	if got := yeguoScriptAPIBase("function f(){}"); got != "" {
+		t.Fatalf("script without base call accepted: %q", got)
+	}
+}
+
 func TestYeguoCallAcceptsEncryptedErrcodeEnvelope(t *testing.T) {
 	key, iv := []byte("0123456789abcdef"), []byte("fedcba9876543210")
 	block, err := aes.NewCipher(key)

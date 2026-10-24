@@ -90,15 +90,15 @@ func TestHongguoWebMediaUsesPublicSEOAddress(t *testing.T) {
 			"posterUrl": "https://poster.example.test/x.jpg", "durationSeconds": 91.5,
 		},
 	}}
-	probes := 0
+	protected := 0
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/player/700001/800001":
 			return sourceFixtureResponse(request, 200, hongguoRouterPage(t, page)), nil
-		case "/video/public/800001/360p.mp4":
-			probes++
-			response := sourceFixtureResponse(request, 206, "x")
-			response.Header.Set("Content-Range", "bytes 0-0/1024")
+		case "/api/video/protected/play-info":
+			protected++
+			response := sourceFixtureResponse(request, 200, `{"legacy_play_info":{"main_url":"https://media.example.test/700001-800001-720p.mp4","height":"720","duration":91.5}}`)
+			response.Header.Set("Content-Type", "application/json")
 			return response, nil
 		default:
 			t.Fatalf("unexpected request path: %s", request.URL.Path)
@@ -109,15 +109,16 @@ func TestHongguoWebMediaUsesPublicSEOAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public seo media rejected: %v", err)
 	}
-	want := "https://hongguoduanju.com/video/public/800001/360p.mp4"
-	if media.URL != want || media.Quality != 360 || media.Duration.Seconds() != 91.5 {
+	want := "https://media.example.test/700001-800001-720p.mp4"
+	// 公开 SEO 直链已降级为 10 秒试看，必须从受保护接口取得完整地址而非 360p 片段。
+	if media.URL != want || media.Quality != 720 || media.Duration.Seconds() != 91.5 {
 		t.Fatalf("wrong public seo media: %+v", media)
 	}
 	if len(media.Variants) != 1 || media.Variants[0].URL != want {
 		t.Fatalf("missing variant: %+v", media.Variants)
 	}
-	if probes != 1 {
-		t.Fatalf("expected one warm-up probe, got %d", probes)
+	if protected != 1 {
+		t.Fatalf("expected one protected request, got %d", protected)
 	}
 
 	mismatched := map[string]any{"player_(series_id)/(vid)/page": map[string]any{
@@ -151,18 +152,18 @@ func TestHongguoWebMediaWarmsColdPublicAddress(t *testing.T) {
 	page := map[string]any{"player_(series_id)/(vid)/page": map[string]any{
 		"publicVideoSeo": map[string]any{"available": true, "seriesId": "700001", "itemId": "800001", "durationSeconds": 91.5},
 	}}
-	probes := 0
+	protected := 0
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/player/700001/800001":
 			return sourceFixtureResponse(request, 200, hongguoRouterPage(t, page)), nil
-		case "/video/public/800001/360p.mp4":
-			probes++
-			if probes < hongguoRouterPageAttempts {
+		case "/api/video/protected/play-info":
+			protected++
+			if protected < hongguoRouterPageAttempts {
 				return sourceFixtureResponse(request, 404, "not found"), nil
 			}
-			response := sourceFixtureResponse(request, 206, "x")
-			response.Header.Set("Content-Range", "bytes 0-0/1024")
+			response := sourceFixtureResponse(request, 200, `{"legacy_play_info":{"main_url":"https://media.example.test/700001-800001-720p.mp4","height":"720","duration":91.5}}`)
+			response.Header.Set("Content-Type", "application/json")
 			return response, nil
 		default:
 			t.Fatalf("unexpected request path: %s", request.URL.Path)
@@ -170,28 +171,28 @@ func TestHongguoWebMediaWarmsColdPublicAddress(t *testing.T) {
 		}
 	})
 	media, err := d.resolveHongguoWebMedia(context.Background(), "700001", "800001")
-	if err != nil || media.URL != "https://hongguoduanju.com/video/public/800001/360p.mp4" {
-		t.Fatalf("cold public media not warmed: %+v %v", media, err)
+	if err != nil || media.URL != "https://media.example.test/700001-800001-720p.mp4" {
+		t.Fatalf("cold protected media not warmed: %+v %v", media, err)
 	}
-	if probes != hongguoRouterPageAttempts {
-		t.Fatalf("expected %d probes, got %d", hongguoRouterPageAttempts, probes)
+	if protected != hongguoRouterPageAttempts {
+		t.Fatalf("expected %d protected attempts, got %d", hongguoRouterPageAttempts, protected)
 	}
 
-	probes = 0
+	protected = 0
 	d = sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/player/700001/800001":
 			return sourceFixtureResponse(request, 200, hongguoRouterPage(t, page)), nil
 		default:
-			probes++
+			protected++
 			return sourceFixtureResponse(request, 404, "not found"), nil
 		}
 	})
 	if _, err := d.resolveHongguoWebMedia(context.Background(), "700001", "800001"); err == nil {
 		t.Fatal("persistent 404 media accepted")
 	}
-	if probes != hongguoMediaWarmAttempts {
-		t.Fatalf("expected %d probes, got %d", hongguoMediaWarmAttempts, probes)
+	if protected != hongguoRouterPageAttempts {
+		t.Fatalf("expected %d protected attempts, got %d", hongguoRouterPageAttempts, protected)
 	}
 }
 

@@ -20,6 +20,29 @@ func TestNativeMetadataPreservesIdentityAndCover(t *testing.T) {
 	}
 }
 
+// 短剧/长剧判定依赖单集时长穿过 nativeNormalize 落到 Dart 可读的 duration key。
+func TestNativeNormalizeDuration(t *testing.T) {
+	str := nativeNormalize(Drama{ID: "ss360:1", Title: "时长测试", Duration: "45:12"})
+	if str.Duration != 2712 {
+		t.Fatalf(`字符串时长 "45:12" 应解析为 2712 秒，得到 %v`, str.Duration)
+	}
+	numeric := nativeNormalize(Drama{ID: "ss360:2", Title: "时长测试", Duration: json.Number("630")})
+	if numeric.Duration != 630 {
+		t.Fatalf("数字时长应为 630 秒，得到 %v", numeric.Duration)
+	}
+	empty := nativeNormalize(Drama{ID: "ss360:3", Title: "时长测试"})
+	if empty.Duration != 0 {
+		t.Fatalf("未填时长应为 0（Dart 侧走兜底规则），得到 %v", empty.Duration)
+	}
+	data, err := json.Marshal(numeric)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"duration":630`) {
+		t.Fatalf("json key mismatch for duration: %s", data)
+	}
+}
+
 // 目录筛选（地区/年份/评分）依赖这三项穿过 nativeNormalize 落到 Dart 可读的 JSON key。
 func TestNativeNormalizeAreaYearScore(t *testing.T) {
 	drama := nativeNormalize(Drama{ID: "ss360:1", Title: "筛选测试", Area: "内地", Year: "2026", Score: "8.5"})
@@ -183,13 +206,17 @@ func TestNativeHLSReadsNestedPlaylistKeyAndRanges(t *testing.T) {
 func TestHongguoDetailAndPlayableQuality(t *testing.T) {
 	detail := map[string]any{"series_id": "700001", "series_title": "合成测试", "episode_cnt": 2,
 		"video_list": []any{
-			map[string]any{"vid": "800002", "vid_index": 2, "series_id": "700001"},
+			map[string]any{"vid": "800002", "vid_index": 2, "series_id": "700001", "vertical": false},
 			map[string]any{"vid": "800001", "vid_index": 1, "series_id": "700001"},
 		}}
 	result := map[string]any{"data": map[string]any{"video_data": detail}}
 	entry, err := parseHongguoAppDetail(result, "700001")
 	if err != nil || len(entry.Chapters) != 2 || entry.Chapters[0].VideoURL != "hongguo-cenc://800001" {
 		t.Fatalf("wrong episode ordering: %v", err)
+	}
+	// 横竖屏标记透传：未提供保持 nil，提供的原样带出。
+	if entry.Chapters[0].Vertical != nil || entry.Chapters[1].Vertical == nil || *entry.Chapters[1].Vertical {
+		t.Fatal("episode orientation was not carried over")
 	}
 	if _, err := parseHongguoAppDetail(result, "700002"); err == nil {
 		t.Fatal("wrong drama accepted")

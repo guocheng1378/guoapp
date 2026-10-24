@@ -2,6 +2,7 @@ package maccmsapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -29,8 +30,8 @@ func (f *fakeHost) MediaPlaylist(ctx context.Context, address, referer string) (
 }
 
 const catalogFixture = `{"code":1,"msg":"ok","page":1,"pagecount":2,"total":3,"list":[
-  {"vod_id":11,"vod_name":"剧甲","type_id":46,"type_name":"短剧","vod_pic":"p1","vod_content":"简介","vod_remarks":"已完结","vod_time":1735660800,"vod_area":"香港","vod_year":"2024","vod_score":"9.2"},
-  {"vod_id":12,"vod_name":"剧乙","type_id":46,"type_name":"短剧","vod_pic":"p2","vod_content":"","vod_remarks":"第3集","vod_time":0,"vod_area":"内地","vod_year":2025,"vod_score":8.5},
+  {"vod_id":11,"vod_name":"剧甲","type_id":46,"type_name":"短剧","vod_pic":"p1","vod_content":"简介","vod_remarks":"已完结","vod_time":1735660800,"vod_area":"香港","vod_year":"2024","vod_score":"9.2","vod_duration":"45:12"},
+  {"vod_id":12,"vod_name":"剧乙","type_id":46,"type_name":"短剧","vod_pic":"p2","vod_content":"","vod_remarks":"第3集","vod_time":0,"vod_area":"内地","vod_year":2025,"vod_score":8.5,"vod_duration":2712},
   {"vod_id":13,"vod_name":"剧丙","type_id":46,"type_name":"短剧","vod_pic":"p3","vod_content":"","vod_remarks":"更新至第16集","vod_time":"2026-10-18 18:04:37"}
 ]}`
 
@@ -115,6 +116,47 @@ func TestCatalogSortedMatchesCatalogPage(t *testing.T) {
 			if sorted[i].ID != base[i].ID {
 				t.Fatalf("CatalogPageSorted(%q) 顺序应与源站顺序一致", sort)
 			}
+		}
+	}
+}
+
+// 短剧/长剧判定依赖单集时长穿过 CatalogPage（>600 秒=长剧，全源统一规则）。
+func TestCatalogPageMapsDuration(t *testing.T) {
+	host := &fakeHost{body: catalogFixture}
+	source := newTestSource()
+	items, _, err := source.CatalogPage(context.Background(), host, 1, "", "")
+	if err != nil {
+		t.Fatalf("CatalogPage: %v", err)
+	}
+	if got := items[0].Duration; got != float64(2712) {
+		t.Fatalf(`"45:12" 应解析为 2712 秒，得到 %v`, got)
+	}
+	if got := items[1].Duration; got != float64(2712) {
+		t.Fatalf("数字 vod_duration 应为 2712 秒，得到 %v", got)
+	}
+	if got := items[2].Duration; got != float64(0) {
+		t.Fatalf("缺失 vod_duration 应为 0，得到 %v", got)
+	}
+}
+
+func TestVodDurationSeconds(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want float64
+	}{
+		{`2712`, 2712},      // 数字秒
+		{`"45:12"`, 2712},   // 分:秒
+		{`"1:05:30"`, 3930}, // 时:分:秒
+		{`null`, 0},         // 裸 null
+		{`"null"`, 0},       // 字符串 null
+		{`""`, 0},           // 空串
+		{`"N/A"`, 0},        // 无效文本
+		{`"1:2:3:4"`, 0},    // 超段数
+		{`"45:xx"`, 0},      // 段内非数字
+	}
+	for _, tc := range cases {
+		if got := vodDurationSeconds(json.RawMessage(tc.raw)); got != tc.want {
+			t.Fatalf("vodDurationSeconds(%s) = %v, want %v", tc.raw, got, tc.want)
 		}
 	}
 }

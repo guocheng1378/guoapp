@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
-import 'motion_tokens.dart';
 
-/// 悬浮瓷面底栏：整条是一个微透白瓷胶囊（小米主题商店底栏同款），
-/// 内部每枚导航项等宽分布，选中态以主色淡底小胶囊高亮；
+/// 悬浮玻璃胶囊底栏：整条是未选态白玻璃胶囊（分类条 pill 材质），
+/// 内部每枚导航项等宽分布，选中态以选中态深/白玻璃小胶囊高亮
+/// （双态语言与分类条一致）；
 /// 大字号/窄屏下文字自动缩略，不产生溢出。
 class AppBottomNavigation extends StatelessWidget {
   const AppBottomNavigation({
@@ -12,11 +12,15 @@ class AppBottomNavigation extends StatelessWidget {
     required this.selectedIndex,
     required this.onDestinationSelected,
     required this.destinations,
+    this.compact = false,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
   final List<NavigationDestination> destinations;
+
+  /// 手机横屏紧凑档：底边距/项内边距/图标/字号整体降一档（49 → 37px）。
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -25,15 +29,13 @@ class AppBottomNavigation extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
-        // 整条一个瓷面胶囊（小米同款），内部选中项再浮主色小胶囊；
-        // 不再每项各自瓷面——合体后雾面/内容透出一整条柔光。
+        padding: EdgeInsets.fromLTRB(10, 0, 10, compact ? 6 : 12),
+        // 整条一枚双态玻璃胶囊（未选态白玻璃+σ18 磨砂+白描边），
+        // 内部选中项再浮选中态小胶囊——与分类条同材质语言。
         child: GlassSurface(
           variant: GlassVariant.surface,
           radius: GlassTokens.radiusBar,
-          topHighlight: true,
-          // 横向长条档：浅色与滑动栏胶囊同档（0.72），暗色 0.30 保可读。
-          tint: GlassTint.bar,
+          tint: GlassTint.pill,
           child: Row(
             children: [
               for (final (index, destination) in destinations.indexed)
@@ -44,6 +46,7 @@ class AppBottomNavigation extends StatelessWidget {
                     selected: index == selectedIndex,
                     colors: colors,
                     dark: dark,
+                    compact: compact,
                     onTap: () => onDestinationSelected(index),
                   ),
                 ),
@@ -63,6 +66,7 @@ class _Pill extends StatelessWidget {
     required this.colors,
     required this.dark,
     required this.onTap,
+    this.compact = false,
   });
 
   final Key navKey;
@@ -70,6 +74,7 @@ class _Pill extends StatelessWidget {
   final bool selected;
   final ColorScheme colors;
   final bool dark;
+  final bool compact;
   final VoidCallback onTap;
 
   @override
@@ -87,20 +92,29 @@ class _Pill extends StatelessWidget {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 240),
             curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+            padding: EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: compact ? 7 : 14,
+            ),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(24),
-              // 与滑动栏/排序面板同一套：选中=黑瓷小胶囊（暗色反转白瓷）。
+              // 与分类胶囊同一套双态材质：选中=深玻璃小胶囊（暗色反转
+              // 白玻璃）+白描边；未选项透明无底（直接坐在胶囊底栏上）。
               color: selected
-                  ? GlassChipTokens.selected(dark)
+                  ? GlassChipTokens.pillSelected(dark)
                   : Colors.transparent,
+              border: selected
+                  ? Border.all(
+                      color: GlassChipTokens.pillEdge(dark, selected: true),
+                    )
+                  : null,
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconTheme(
                   data: IconThemeData(
-                    size: 21,
+                    size: compact ? 18 : 21,
                     color: selected
                         ? GlassChipTokens.onSelected(dark)
                         : colors.onSurfaceVariant,
@@ -109,14 +123,14 @@ class _Pill extends StatelessWidget {
                       ? (destination.selectedIcon ?? destination.icon)
                       : destination.icon,
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: compact ? 4 : 6),
                 Flexible(
                   child: Text(
                     destination.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 12.5,
+                      fontSize: compact ? 11.5 : 12.5,
                       fontWeight: FontWeight.w600,
                       color: selected
                           ? GlassChipTokens.onSelected(dark)

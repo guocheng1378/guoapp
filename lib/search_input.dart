@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'app_icons.dart';
+import 'search_suggestion.dart';
 
 class SearchInput extends StatefulWidget {
   const SearchInput({
@@ -14,6 +15,7 @@ class SearchInput extends StatefulWidget {
     required this.onSearch,
     this.onChanged,
     this.suggestions,
+    this.onSuggestionSelected,
     this.onCancel,
     this.autofocus = false,
   });
@@ -21,7 +23,10 @@ class SearchInput extends StatefulWidget {
   final String hint;
   final ValueChanged<String> onSearch;
   final ValueChanged<String>? onChanged;
-  final Future<List<String>> Function(String)? suggestions;
+  final Future<List<SearchSuggestion>> Function(String)? suggestions;
+  /// 富建议点选（如真果·鉴直达播放）：优先走此回调；
+  /// 为空时所有建议都按 submitText 填词搜索。
+  final ValueChanged<SearchSuggestion>? onSuggestionSelected;
   final VoidCallback? onCancel;
   final bool autofocus;
   @override
@@ -31,10 +36,10 @@ class SearchInput extends StatefulWidget {
 class _SearchInputState extends State<SearchInput> {
   final _focus = FocusNode();
   Timer? _timer;
-  Completer<Iterable<String>>? _pending;
+  Completer<Iterable<SearchSuggestion>>? _pending;
   int _generation = 0;
   bool _selected = false;
-  final _cache = <String, List<String>>{};
+  final _cache = <String, List<SearchSuggestion>>{};
 
   void _cancel() {
     _timer?.cancel();
@@ -58,7 +63,7 @@ class _SearchInputState extends State<SearchInput> {
     super.dispose();
   }
 
-  Future<Iterable<String>> _options(TextEditingValue value) async {
+  Future<Iterable<SearchSuggestion>> _options(TextEditingValue value) async {
     _cancel();
     final query = value.text.trim();
     if (query.isEmpty ||
@@ -69,14 +74,14 @@ class _SearchInputState extends State<SearchInput> {
     }
     if (_cache.containsKey(query)) return _cache[query]!;
     final generation = _generation;
-    final pending = Completer<Iterable<String>>();
+    final pending = Completer<Iterable<SearchSuggestion>>();
     _pending = pending;
     _suggestFailed = false;
     _timer = Timer(const Duration(milliseconds: 300), () async {
       try {
         final result = (await widget.suggestions!(
           query,
-        )).where((s) => s.trim().isNotEmpty).toSet().take(10).toList();
+        )).where((s) => s.label.trim().isNotEmpty).take(10).toList();
         if (generation == _generation && mounted) {
           if (_cache.length >= 32) _cache.remove(_cache.keys.first);
           _cache[query] = result;
@@ -100,6 +105,20 @@ class _SearchInputState extends State<SearchInput> {
     );
     _focus.unfocus();
     widget.onSearch(value.trim());
+  }
+
+  /// 建议点选：可直达播放的走富回调，其余填词搜索。
+  void _select(SearchSuggestion suggestion) {
+    _cancel();
+    final direct = widget.onSuggestionSelected;
+    if (direct != null &&
+        suggestion.directPlayable &&
+        suggestion.variantId.isNotEmpty) {
+      _focus.unfocus();
+      direct(suggestion);
+      return;
+    }
+    _submit(suggestion.submitText);
   }
 
   Widget _highlight(String value) {
@@ -134,20 +153,21 @@ class _SearchInputState extends State<SearchInput> {
   bool _suggestFailed = false;
 
   @override
-  Widget build(BuildContext context) => RawAutocomplete<String>(
+  Widget build(BuildContext context) => RawAutocomplete<SearchSuggestion>(
     textEditingController: widget.controller,
     focusNode: _focus,
     optionsBuilder: _options,
-    onSelected: (value) {
+    onSelected: (suggestion) {
       _selected = true;
-      _submit(value);
+      _select(suggestion);
     },
     fieldViewBuilder: (context, controller, focus, submitted) =>
         GlassSurface(
       variant: GlassVariant.surface,
       radius: 28,
       elevated: false,
-      // 统一滑动栏瓷面档：微透白瓷+白描边。
+      // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+      tint: GlassTint.pill,
       child: TextField(
         controller: controller,
         focusNode: focus,
@@ -241,16 +261,31 @@ class _SearchInputState extends State<SearchInput> {
               ),
               child: ListView.builder(
                 padding: EdgeInsets.zero,
-                itemExtent: 48,
                 itemCount: values.length,
-                itemBuilder: (context, index) => ListTile(
-                  key: ValueKey('search-suggestion-$index'),
-                  selected:
-                      AutocompleteHighlightedOption.of(context) == index,
-                  leading: AppIcon(AppIcons.search, size: 18),
-                  title: _highlight(values[index]),
-                  onTap: () => selected(values[index]),
-                ),
+                itemBuilder: (context, index) {
+                  final suggestion = values[index];
+                  return ListTile(
+                    key: ValueKey('search-suggestion-$index'),
+                    selected:
+                        AutocompleteHighlightedOption.of(context) == index,
+                    leading: AppIcon(AppIcons.search, size: 18),
+                    title: _highlight(suggestion.label),
+                    subtitle: suggestion.subtitle.trim().isNotEmpty
+                        ? Text(
+                            suggestion.subtitle.trim(),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                          )
+                        : null,
+                    onTap: () => selected(suggestion),
+                  );
+                },
               ),
             ),
           ),

@@ -67,4 +67,4 @@ func TestHongguoProxyCacheBenefit(t *testing.T) {
 	}
 	defer stream.nativeRelease(token)
 	pullBlocks("PROXY", address, 8)
-} 
+}

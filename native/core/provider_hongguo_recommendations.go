@@ -60,7 +60,7 @@ func (downloader *Downloader) fetchHongguoRecommendations(ctx context.Context, q
 		}
 	}
 	payload := map[string]any{
-		"req_scene": scene, "offset": query.Offset, "limit": 18,
+		"req_scene": scene, "offset": query.Offset, "limit": 54,
 		"req_type": "only_content", "need_selector_panel": false, "client_req_type": 3,
 		"session_id": query.SessionID, "filter_ids": strings.Join(filterIDs, ","),
 		"select_items": map[string]any{

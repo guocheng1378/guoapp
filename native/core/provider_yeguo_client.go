@@ -34,8 +34,11 @@ const (
 )
 
 var (
-	errYeguoDecode        = errors.New("野果接口响应校验或解码失败")
-	yeguoModuleImport     = regexp.MustCompile(`(?s)import\s*\{([^{};]+)\}\s*from\s*["'\x60]([^"'\x60]+)["'\x60]`)
+	errYeguoDecode    = errors.New("野果接口响应校验或解码失败")
+	yeguoModuleImport = regexp.MustCompile(`(?s)import\s*\{([^{};]+)\}\s*from\s*["'\x60]([^"'\x60]+)["'\x60]`)
+	// baseURL:xxx() 调用点：xxx 是返回接口根地址的箭头函数名，
+	// 页面不再直供 apiBaseURL 时从站点脚本里反查该函数定义。
+	yeguoScriptBaseCall   = regexp.MustCompile(`baseURL:([a-zA-Z_$][a-zA-Z0-9_$]*)\(\)`)
 	yeguoPublicField      = regexp.MustCompile(`\b(version|mode|padding|key|iv|sign_key)\s*:\s*(?:[a-zA-Z_$][a-zA-Z0-9_$]*\(\s*)?["'\x60]([^"'\x60\\\r\n]{1,512})["'\x60]`)
 	yeguoTransitBase64    = regexp.MustCompile(`Base64\.decode\(["']([A-Za-z0-9+/=]{128,})["']\)`)
 	yeguoTransitSuffix    = regexp.MustCompile(`(?i)\+\s*["']\.([a-z0-9-]+(?:\.[a-z0-9-]+)+)["']`)
@@ -346,11 +349,35 @@ func yeguoAPIBase(document *html.Node, configured, site string) (string, error) 
 			base = site + "/api.php"
 		}
 	}
+	return yeguoValidAPIBase(base)
+}
+
+// yeguoValidAPIBase 校验接口根地址形态（http(s) 根、无用户信息/查询/片段）。
+func yeguoValidAPIBase(base string) (string, error) {
 	address, err := url.Parse(base)
 	if err != nil || !isProviderHTTPMediaURL(base) || address.User != nil || address.RawQuery != "" || address.Fragment != "" {
 		return "", errors.New("野果页面未提供有效的接口入口")
 	}
 	return strings.TrimRight(base, "/"), nil
+}
+
+// yeguoScriptAPIBase 从站点 module 脚本反查接口根地址：先找
+// baseURL:xxx() 调用点，再在脚本里定位 xxx=()=>"https://…" 的
+// 箭头函数定义（移植自 Xanerix/guoapp 3b24e89）。页面改版不再
+// 直供 apiBaseURL 时，这条路径兜底，无需每次手动加域名白名单。
+func yeguoScriptAPIBase(script string) string {
+	for _, call := range yeguoScriptBaseCall.FindAllStringSubmatch(script, 16) {
+		pattern, err := regexp.Compile(`(?:^|[^a-zA-Z0-9_$.])` + regexp.QuoteMeta(call[1]) + `=\(\)=>["'\x60](https?://[^"'\x60\s]{1,512})["'\x60]`)
+		if err != nil {
+			continue
+		}
+		if match := pattern.FindStringSubmatch(script); match != nil {
+			if base, err := yeguoValidAPIBase(match[1]); err == nil {
+				return base
+			}
+		}
+	}
+	return ""
 }
 
 func yeguoScriptURL(base, reference string) string {
@@ -439,10 +466,7 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	if err != nil {
 		return nil, err
 	}
-	apiBase, err := yeguoAPIBase(document, d.cfg.YeguoAPIURL, site)
-	if err != nil {
-		return nil, err
-	}
+	apiBase, baseErr := yeguoAPIBase(document, d.cfg.YeguoAPIURL, site)
 	entry := ""
 	for _, script := range providerHTMLNodes(document, func(node *html.Node) bool {
 		return node.Data == "script" && providerHTMLAttr(node, "type") == "module"
@@ -458,13 +482,21 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	if err != nil {
 		return nil, err
 	}
+	// 页面不再直供 apiBaseURL 时，先试 entry 脚本里的 baseURL 反查。
+	if apiBase == "" {
+		apiBase = yeguoScriptAPIBase(entryBody)
+	}
 	imports := yeguoModuleImport.FindAllStringSubmatch(entryBody, 64)
 	sort.SliceStable(imports, func(i, j int) bool {
 		return !strings.Contains(imports[i][1], ",") && strings.Contains(imports[j][1], ",")
 	})
 	seen := map[string]bool{}
 	var lastErr error
+	var access *yeguoAccess
 	for _, imported := range imports {
+		if access != nil && apiBase != "" {
+			break
+		}
 		if len(imported[1]) > 2400 {
 			continue
 		}
@@ -485,18 +517,26 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 			}
 			continue
 		}
-		access := parseYeguoPublicConfiguration(body)
+		// 入口脚本没有 baseURL 定义时，import 的模块脚本里继续反查。
+		if apiBase == "" {
+			apiBase = yeguoScriptAPIBase(body)
+		}
 		if access == nil {
-			continue
+			access = parseYeguoPublicConfiguration(body)
 		}
-		var identifier [16]byte
-		if _, err := rand.Read(identifier[:]); err != nil {
-			return nil, errors.New("无法初始化野果请求会话")
-		}
-		access.base, access.site, access.identifier, access.loadedAt = apiBase, site, hex.EncodeToString(identifier[:]), time.Now()
-		return access, nil
 	}
-	return nil, errors.Join(errors.New("野果接口配置已变化，暂时无法解码，请稍后重试"), lastErr)
+	if access == nil {
+		return nil, errors.Join(errors.New("野果接口配置已变化，暂时无法解码，请稍后重试"), lastErr)
+	}
+	if apiBase == "" {
+		return nil, baseErr
+	}
+	var identifier [16]byte
+	if _, err := rand.Read(identifier[:]); err != nil {
+		return nil, errors.New("无法初始化野果请求会话")
+	}
+	access.base, access.site, access.identifier, access.loadedAt = apiBase, site, hex.EncodeToString(identifier[:]), time.Now()
+	return access, nil
 }
 
 func decodeYeguoJSONObject(body []byte) (map[string]any, error) {

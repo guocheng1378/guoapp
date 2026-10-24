@@ -50,6 +50,43 @@ func hongguoPlaybackIDs(task Task) (string, string, bool) {
 	return seriesID, videoID, hongguoNumericID.MatchString(seriesID) && hongguoNumericID.MatchString(videoID)
 }
 
+// dongpiandiPlaybackIDs 从播放任务提取真果·鉴的弹幕身份：
+// variantID 来自剧目 ID，episodeID 来自分集 ID（Chapter.ID 即
+// providerDramaID(sourceDongpiandi, episode.ID) 形态）。
+func dongpiandiPlaybackIDs(task Task) (string, string, bool) {
+	if task.Chapter.Source != sourceDongpiandi {
+		return "", "", false
+	}
+	variantSource, variantID, variantValid := splitProviderDramaID(task.DramaID)
+	episodeSource, episodeID, episodeValid := splitProviderDramaID(task.Chapter.ID)
+	if !variantValid || !episodeValid || variantSource != sourceDongpiandi || episodeSource != sourceDongpiandi {
+		return "", "", false
+	}
+	if variantID == "" || episodeID == "" || len(variantID) > 256 || len(episodeID) > 256 {
+		return "", "", false
+	}
+	return variantID, episodeID, true
+}
+
+// danmakuPlaybackIDs 按源分发弹幕身份提取：红果走 cenc 视频号，
+// 真果·鉴走 variant/episode ID。返回的 series/video 对各家弹幕
+// 实现即 (剧集 ID, 分集 ID) 语义。
+func danmakuPlaybackIDs(task Task) (source, series, video string, ok bool) {
+	if task.Chapter.Source == sourceHongguo {
+		if series, video, valid := hongguoPlaybackIDs(task); valid {
+			return sourceHongguo, series, video, true
+		}
+		return "", "", "", false
+	}
+	if task.Chapter.Source == sourceDongpiandi {
+		if series, video, valid := dongpiandiPlaybackIDs(task); valid {
+			return sourceDongpiandi, series, video, true
+		}
+		return "", "", "", false
+	}
+	return "", "", "", false
+}
+
 func (d *Downloader) hongguoDanmaku(ctx context.Context, seriesID, videoID string, start, duration int64) (hongguoDanmakuPage, error) {
 	if err := ctx.Err(); err != nil {
 		return hongguoDanmakuPage{}, err

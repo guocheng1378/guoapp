@@ -73,6 +73,80 @@ func TestNativePruneAdSegmentsRemovesInjectedAds(t *testing.T) {
 	if doubled := strings.Count(text, "#EXT-X-DISCONTINUITY\n#EXT-X-DISCONTINUITY"); doubled != 0 {
 		t.Fatalf("存在相邻重复的 DISCONTINUITY:\n%s", text)
 	}
+	// 中插广告剔除后应恰好保留一个 DISCONTINUITY（包夹的后标记或补插，
+	// 提示播放器正片时间轴在此跳变，缺失会导致音频同步拉扯出杂音）。
+	if count := strings.Count(text, "#EXT-X-DISCONTINUITY"); count != 1 {
+		t.Fatalf("DISCONTINUITY 应恰好 1 个，实际 %d:\n%s", count, text)
+	}
+}
+
+func TestNativePruneAdSegmentsInsertsDiscontinuityWithoutTrailer(t *testing.T) {
+	// 注入形态变体：广告段只有前置 DISCONTINUITY（后无标记）。
+	// 剔除后正片边界必须补插一个 DISCONTINUITY，否则正片时间轴
+	// 无提示跳变，播放器音频同步拉扯出杂音。
+	var builder strings.Builder
+	builder.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:8\n#EXT-X-MEDIA-SEQUENCE:0\n")
+	for i := 0; i < 3; i++ {
+		builder.WriteString("#EXTINF:4.000000,\n9bd8a2a212a000000" + string(rune('0'+i)) + ".ts\n")
+	}
+	builder.WriteString("#EXT-X-DISCONTINUITY\n")
+	for i := 0; i < 2; i++ {
+		builder.WriteString("#EXTINF:4.000000,\nhttps://other.cdn.example/20261003/84_9109598f/2000k/hls/751808405d700000" + string(rune('0'+i)) + ".ts\n")
+	}
+	for i := 3; i < 6; i++ {
+		builder.WriteString("#EXTINF:4.000000,\n9bd8a2a212a000000" + string(rune('0'+i)) + ".ts\n")
+	}
+	builder.WriteString("#EXT-X-ENDLIST\n")
+	pruned := nativePruneAdSegments(strings.Split(builder.String(), "\n"), playlistBase)
+	text := strings.Join(pruned, "\n")
+	if strings.Contains(text, "other.cdn.example") {
+		t.Fatalf("广告分片未被剔除:\n%s", text)
+	}
+	if count := strings.Count(text, "#EXT-X-DISCONTINUITY"); count != 1 {
+		t.Fatalf("剔除块边界应补插 1 个 DISCONTINUITY，实际 %d:\n%s", count, text)
+	}
+	if doubled := strings.Count(text, "#EXT-X-DISCONTINUITY\n#EXT-X-DISCONTINUITY"); doubled != 0 {
+		t.Fatalf("存在相邻重复的 DISCONTINUITY:\n%s", text)
+	}
+}
+
+func TestNativePruneAdSegmentsRestoresMainKeyAfterAd(t *testing.T) {
+	// 广告段自带独立 KEY：随段删除后必须在块边界恢复正片生效的 KEY，
+	// 否则残留广告密钥会作用到后续正片分片，解密失败即爆音杂音。
+	var builder strings.Builder
+	builder.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:8\n#EXT-X-MEDIA-SEQUENCE:0\n")
+	builder.WriteString("#EXT-X-KEY:METHOD=AES-128,URI=\"https://cdn.example.com/20260909/key/a.key\",IV=0x1\n")
+	for i := 0; i < 3; i++ {
+		builder.WriteString("#EXTINF:4.000000,\n9bd8a2a212a000000" + string(rune('0'+i)) + ".ts\n")
+	}
+	builder.WriteString("#EXT-X-DISCONTINUITY\n")
+	builder.WriteString("#EXT-X-KEY:METHOD=AES-128,URI=\"https://ad.example.com/20261003/key/b.key\"\n")
+	for i := 0; i < 2; i++ {
+		builder.WriteString("#EXTINF:4.000000,\nhttps://other.cdn.example/20261003/84_9109598f/2000k/hls/751808405d700000" + string(rune('0'+i)) + ".ts\n")
+	}
+	builder.WriteString("#EXT-X-DISCONTINUITY\n")
+	for i := 3; i < 6; i++ {
+		builder.WriteString("#EXTINF:4.000000,\n9bd8a2a212a000000" + string(rune('0'+i)) + ".ts\n")
+	}
+	builder.WriteString("#EXT-X-ENDLIST\n")
+	pruned := nativePruneAdSegments(strings.Split(builder.String(), "\n"), playlistBase)
+	text := strings.Join(pruned, "\n")
+	if strings.Contains(text, "other.cdn.example") {
+		t.Fatalf("广告分片未被剔除:\n%s", text)
+	}
+	if strings.Contains(text, "b.key") {
+		t.Fatalf("广告密钥残留:\n%s", text)
+	}
+	if count := strings.Count(text, "a.key"); count != 2 {
+		t.Fatalf("正片密钥应出现 2 次（原声明+块边界恢复），实际 %d:\n%s", count, text)
+	}
+	if count := strings.Count(text, "#EXT-X-DISCONTINUITY"); count != 1 {
+		t.Fatalf("DISCONTINUITY 应恰好 1 个，实际 %d:\n%s", count, text)
+	}
+	// 恢复的 KEY 必须紧邻补插的 DISCONTINUITY、位于块后正片之前。
+	if keyIndex := strings.Index(text, "a.key\",IV=0x1\n#EXT-X-DISCONTINUITY"); keyIndex < 0 {
+		t.Fatalf("恢复的 KEY 未紧邻补插的 DISCONTINUITY:\n%s", text)
+	}
 }
 
 func TestNativePruneAdSegmentsKeepsCleanPlaylist(t *testing.T) {

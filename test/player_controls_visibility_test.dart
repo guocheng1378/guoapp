@@ -87,12 +87,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  testWidgets('控制栏只在主动唤出时出现，4 秒后自动收起（播放中）', (tester) async {
+  testWidgets('控制栏只在主动唤出时出现，2.5 秒后自动收起（播放中）', (tester) async {
     final player = await mount(tester);
     expect(controlsVisible(tester), isTrue, reason: '进入播放器先亮一次');
 
     await tester.pump(const Duration(seconds: 5));
-    expect(controlsVisible(tester), isFalse, reason: '播放中 4 秒后自动收起');
+    expect(controlsVisible(tester), isFalse, reason: '播放中 2.5 秒后自动收起');
 
     await tapScreen(tester, gestureArea(tester).center);
     expect(controlsVisible(tester), isTrue, reason: '点画面能唤出');
@@ -100,7 +100,7 @@ void main() {
     await unmount(tester, player);
   });
 
-  testWidgets('暂停后中央播放/上下集按钮不再常驻，4 秒后收起', (tester) async {
+  testWidgets('暂停后中央按钮不再常驻，2.5 秒后收起', (tester) async {
     final player = await mount(tester);
     await tester.pump(const Duration(seconds: 5));
     expect(controlsVisible(tester), isFalse);
@@ -116,7 +116,69 @@ void main() {
     expect(
       controlsVisible(tester),
       isFalse,
-      reason: '暂停后中央三个按钮必须自动收起，不能长期杵在画面上',
+      reason: '暂停后中央按钮必须自动收起，不能长期杵在画面上',
+    );
+    await unmount(tester, player);
+  });
+
+  testWidgets('中间 HUD 只留播放/暂停按钮，且比上下控制栏先收起', (tester) async {
+    final player = await mount(tester);
+    await tester.pump(const Duration(seconds: 3));
+    expect(controlsVisible(tester), isFalse);
+
+    await tapScreen(tester, gestureArea(tester).center);
+    final pauseButton = find.byTooltip('暂停播放');
+    expect(pauseButton, findsOneWidget);
+    expect(
+      find.byTooltip('上一集'),
+      findsNothing,
+      reason: '切集走竖滑手势和选集面板，中间不再摆上一集按钮',
+    );
+    expect(find.byTooltip('下一集'), findsNothing);
+
+    // tapScreen 自带 400ms 双击仲裁等待；中间 HUD 1.5s 收起 + 200ms 淡出下线，
+    // 拆两段泵避开 1.7s 的边界
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      pauseButton,
+      findsNothing,
+      reason: '中间按钮 1.5 秒先收，不能拖到控制栏之后',
+    );
+    expect(
+      controlsVisible(tester),
+      isTrue,
+      reason: '上下控制栏 2.5 秒才收，比中间晚',
+    );
+
+    await tester.pump(const Duration(milliseconds: 1000));
+    expect(controlsVisible(tester), isFalse, reason: '累计 2.9 秒后上下也收起');
+    await unmount(tester, player);
+  });
+
+  testWidgets('长按倍速中控制栏不弹出也不常驻', (tester) async {
+    final player = await mount(tester);
+    final area = gestureArea(tester);
+    final spot = Offset(area.center.dx, area.top + area.height * .25);
+    await tester.pump(const Duration(seconds: 3));
+    expect(controlsVisible(tester), isFalse);
+
+    // 长按 600ms（超过 350ms 判定阈值）进入 2 倍速
+    final gesture = await tester.startGesture(spot);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(player.rates, contains(2.0), reason: '长按进入倍速');
+    expect(
+      controlsVisible(tester),
+      isFalse,
+      reason: '倍速提示只弹胶囊，不能把控制栏顶出来挡画面',
+    );
+
+    await gesture.up();
+    await tester.pump();
+    expect(
+      controlsVisible(tester),
+      isFalse,
+      reason: '松手后的恢复提示也不该把控制栏弹回来',
     );
     await unmount(tester, player);
   });

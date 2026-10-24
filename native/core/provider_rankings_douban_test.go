@@ -86,6 +86,45 @@ func TestDoubanRankingParsesPicCover(t *testing.T) {
 	}
 }
 
+func TestDoubanRankingParsesCoverDict(t *testing.T) {
+	// 电影合集（movie_showing / movie_latest）的封面是 cover 对象（url +
+	// 尺寸元数据），cover_url 为空串、无 pic；第三种形态都必须出图。
+	board, _ := findRankingBoard("douban-showing")
+	rows := []map[string]any{
+		{
+			"id": "37123458", "rank_value": 1,
+			"title": "生化危机：爆发夜",
+			"cover": map[string]any{
+				"url":    "https://img2.doubanio.com/view/photo/m_ratio_poster/public/p2936442661.jpg",
+				"height": 5500, "width": 4400, "shape": "rectangle",
+			},
+			"rating": map[string]any{"value": 6.2, "count": 8921},
+		},
+		{
+			// cover 对象缺 url 时回退 pic（若有），全空则无封面不报错。
+			"id": "37123459", "rank_value": 2,
+			"title": "鲸口脱险",
+			"cover": map[string]any{"height": 4199},
+			"pic":   map[string]any{"large": "https://img3.doubanio.com/view/photo/m_ratio_poster/public/p2935800697.jpg"},
+		},
+	}
+	result, err := parseDoubanRanking(doubanFixture(0, 25, rows), board, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCover, ok := result.Items[0].Drama.Cover.(string)
+	if !ok || firstCover != "https://img2.doubanio.com/view/photo/m_ratio_poster/public/p2936442661.jpg" {
+		t.Fatalf("cover.url must be extracted: %+v", result.Items[0].Drama.Cover)
+	}
+	if result.Items[0].Drama.CoverURL == "" {
+		t.Fatal("CoverURL must mirror Cover")
+	}
+	secondCover, ok := result.Items[1].Drama.Cover.(string)
+	if !ok || secondCover != "https://img3.doubanio.com/view/photo/m_ratio_poster/public/p2935800697.jpg" {
+		t.Fatalf("empty cover.url must fall through to pic: %+v", result.Items[1].Drama.Cover)
+	}
+}
+
 func TestDoubanRankingParsesCollection(t *testing.T) {
 	board, _ := findRankingBoard("douban-weekly")
 	result, err := parseDoubanRanking(doubanFixture(0, 25, doubanItems()), board, 1)

@@ -13,14 +13,14 @@ import 'widgets.dart';
 import 'motion_tokens.dart';
 
 /// 首页轮播大卡：剧卡流顶部的横滑推荐位（主题商店跑马灯卡样式）。
-/// 内容整体由豆瓣选片：直接播豆瓣「近期热门国产剧」榜条目（豆瓣封面 +
-/// 蓝色豆瓣徽章 + 评分摘要），不足 [maxItems] 张用当前源条目补位；榜单
-/// 拉取失败/为空即纯当前源回退（见 featured_catalog.dart 的
-/// loadDoubanPicks）。豆瓣条目无播放链路，点击经 openDoubanReferral 同
-/// 名搜索进详情（onOpen 由 home_screen 分流）；黄果类锚点不拉榜、纯回
-/// 退。自动 5 秒翻页，手动拖动或翻页后重新计时；
-/// 测试环境（FLUTTER_TEST）不启动自动翻页，避免 pumpAndSettle 被
-/// pending timer 卡住。
+/// 内容跟随主页当前大类（anchor.classKey）播对应榜单：视频类播豆瓣
+/// 「近期热门国产剧」榜（蓝色豆瓣徽章 + 评分摘要）；短剧类播红果榜；
+/// 黄果类播黄果榜（不再纯回退）。不足 [maxItems] 张用当前源条目补位；
+/// 榜单拉取失败/为空即纯当前源回退。左上角徽章标明榜单来源（豆瓣/
+/// 红果榜/黄果榜）；豆瓣条目无播放链路，点击经 openDoubanReferral 同名
+/// 搜索进详情（onOpen 由 home_screen 分流）。自动 5 秒翻页，手动拖动或
+/// 翻页后重新计时；测试环境（FLUTTER_TEST）不启动自动翻页，避免
+/// pumpAndSettle 被 pending timer 卡住。
 class HomeCarousel extends StatefulWidget {
   const HomeCarousel({
     super.key,
@@ -39,12 +39,13 @@ class HomeCarousel extends StatefulWidget {
   final AppRepository repository;
   final ValueChanged<Drama> onOpen;
 
-  /// 精选轮换锚点：通常是当前站源，决定只在同一内容类型的站源里轮换。
+  /// 轮播大类锚点：通常是当前站源，决定播哪一大类的榜单（视频类→豆瓣、
+  /// 短剧类→红果榜、黄果类→黄果榜）。
   final SourceSite anchor;
 
-  /// 补位/回退条目：豆瓣命中不足 [maxItems] 张（或黄果类锚点、无同类
-  /// 可搜源）时，用首页当前源条目补位（home_screen 传入排好序的可见
-  /// 条目，轮播自行截取去重）。
+  /// 补位/回退条目：榜单命中不足 [maxItems] 张（或拉榜失败/无该类榜）时，
+  /// 用首页当前源条目补位（home_screen 传入排好序的可见条目，轮播自行
+  /// 截取去重）。
   final List<Drama> fallbackItems;
   final double height;
 
@@ -89,7 +90,7 @@ class _HomeCarouselState extends State<HomeCarousel> {
     // 不该重拉搜索请求（当天缓存已挡住重复请求，这里只是少一次空转）。
     if (anchorChanged ||
         (itemsChanged &&
-            !doubanPicksFill(HomeCarousel.maxItems, widget.anchor))) {
+            !categoryPicksFill(HomeCarousel.maxItems, widget.anchor))) {
       _load();
     }
   }
@@ -106,22 +107,19 @@ class _HomeCarouselState extends State<HomeCarousel> {
 
   Future<void> _load() async {
     final generation = ++_generation;
-    // 黄果类锚点不走豆瓣选片：纯回退自家条目，零请求。
-    if (widget.anchor.inHuangguoCategory) {
-      _applyFallback(generation);
-      return;
-    }
     try {
-      final picks = await loadDoubanPicks(
+      // 跟随主页当前大类播对应榜单（视频→豆瓣、短剧→红果、黄果→黄果）。
+      final picks = await loadCategoryRankingPicks(
         widget.repository,
         widget.store,
         widget.anchor,
       );
       if (!mounted || generation != _generation) return;
-      // 命中卡在前（带豆瓣徽章），不足 maxItems 张用当前源条目补位；
-      // 0 命中即纯回退（与黄果类同款表现）。
+      // 命中卡在前（带榜单来源徽章），不足 maxItems 张用当前源条目补位；
+      // 0 命中即纯回退。
       final entries = <_Entry>[
-        for (final pick in picks) _Entry(pick.drama, doubanTag: pick.tag),
+        for (final pick in picks)
+          _Entry(pick.drama, boardLabel: pick.boardLabel, tag: pick.tag),
       ];
       final existing = {for (final entry in entries) entry.drama.id};
       for (final drama in widget.fallbackItems) {
@@ -255,19 +253,21 @@ class _HomeCarouselState extends State<HomeCarousel> {
     // setState 驱动 _pressedIndex，按一张卡要重建整座轮播。
     return _CarouselCard(
       drama: entry.drama,
-      doubanTag: entry.doubanTag,
+      boardLabel: entry.boardLabel,
+      tag: entry.tag,
       repository: widget.repository,
       onOpen: widget.onOpen,
     );
   }
 }
 
-/// 轮播条目：[doubanTag] 非空 = 豆瓣选片卡（榜单剧名搜同类站源命中），
-/// 渲染蓝色豆瓣徽章 + 评分摘要；空 = 当前源补位/回退卡。
+/// 轮播条目：[boardLabel] 非空 = 榜单选片卡（按大类取榜命中），左上角渲染
+/// 榜单来源徽章（豆瓣/红果榜/黄果榜）+ 可选评分摘要；空 = 当前源补位/回退卡。
 class _Entry {
-  const _Entry(this.drama, {this.doubanTag = ''});
+  const _Entry(this.drama, {this.boardLabel = '', this.tag = ''});
   final Drama drama;
-  final String doubanTag;
+  final String boardLabel;
+  final String tag;
 }
 
 /// 单张轮播卡：按住轻微缩放（主题同款手感），松开/取消复原；
@@ -277,15 +277,19 @@ class _CarouselCard extends StatefulWidget {
     required this.drama,
     required this.repository,
     required this.onOpen,
-    this.doubanTag = '',
+    this.boardLabel = '',
+    this.tag = '',
   });
 
   final Drama drama;
   final AppRepository repository;
   final ValueChanged<Drama> onOpen;
 
-  /// 非空 = 豆瓣搜片卡：左上替换 VIP 位渲染蓝色豆瓣徽章 + 评分摘要。
-  final String doubanTag;
+  /// 非空 = 榜单来源徽章（如「豆瓣」「红果榜」「黄果榜」）。
+  final String boardLabel;
+
+  /// 评分/热度摘要（豆瓣取评分；其它类可空）。
+  final String tag;
 
   @override
   State<_CarouselCard> createState() => _CarouselCardState();
@@ -386,7 +390,7 @@ class _CarouselCardState extends State<_CarouselCard> {
                   ],
                 ),
               ),
-              if (widget.doubanTag.isNotEmpty)
+              if (widget.boardLabel.isNotEmpty)
                 Positioned(
                   left: 12,
                   top: 12,
@@ -394,16 +398,20 @@ class _CarouselCardState extends State<_CarouselCard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       _carouselBadge(
-                        '豆瓣',
-                        background: const Color(0xFF2E7BF0),
+                        widget.boardLabel,
+                        background: widget.boardLabel == '豆瓣'
+                            ? const Color(0xFF2E7BF0)
+                            : colors.primary,
                         foreground: Colors.white,
                       ),
-                      const SizedBox(width: 6),
-                      _carouselBadge(
-                        widget.doubanTag,
-                        background: Colors.black.withValues(alpha: .45),
-                        foreground: Colors.white,
-                      ),
+                      if (widget.tag.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        _carouselBadge(
+                          widget.tag,
+                          background: Colors.black.withValues(alpha: .45),
+                          foreground: Colors.white,
+                        ),
+                      ],
                     ],
                   ),
                 )

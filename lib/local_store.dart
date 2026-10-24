@@ -30,8 +30,11 @@ class LocalStore extends ChangeNotifier {
   final Map<String, WatchEntry> _history = {};
   final Map<String, Drama> _favorites = {};
   final Map<String, FollowState> _followStates = {};
+  // 后台追剧检查记录（FollowUpdater 轮转/去重/退避的依据），按用户隔离。
+  final Map<String, FollowCheck> _followChecks = {};
   final Map<String, Drama> _seriesCandidates = {};
   final Map<String, bool> _sourceSwitches = {};
+  final List<String> _liveSources = [];
   Future<void> _writes = Future<void>.value();
   List<LocalProfile> _profiles = [];
   String _current = 'default';
@@ -60,6 +63,7 @@ class LocalStore extends ChangeNotifier {
       // 快照就位后再读站源开关；此前在快照赋值前调用，开关永远读空，
       // 重启后用户显式设置的开/关状态会全部回落到默认值。
       _loadSourceSwitches();
+      _loadLiveSources();
       final raw = _snapshot!.getString('profiles');
       if (raw == null &&
           (_snapshot!.getString('activeProfile') != null ||
@@ -111,6 +115,7 @@ class LocalStore extends ChangeNotifier {
     _history.clear();
     _favorites.clear();
     _followStates.clear();
+    _followChecks.clear();
     _seriesCandidates.clear();
     _epoch++;
   }
@@ -174,11 +179,50 @@ class LocalStore extends ChangeNotifier {
     });
   }
 
+  void _loadLiveSources() {
+    try {
+      final raw = _string('liveSources');
+      if (raw != null) {
+        final decoded = jsonDecode(raw) as List;
+        _liveSources
+          ..clear()
+          ..addAll([
+            for (final row in decoded)
+              if (row is String && row.trim().isNotEmpty) row.trim(),
+          ]);
+      }
+    } catch (_) {
+      _liveSources.clear();
+    }
+  }
+
+  /// 自填直播源列表（设备级）：每项一个 m3u/m3u8/txt 订阅 URL，
+  /// 打开直播页时经 liveUrls 传给 Go 核心与内置双列表合并。
+  List<String> get liveSourceUrls => List.unmodifiable(_liveSources);
+
+  Future<void> setLiveSourceUrls(List<String> urls) {
+    final clean = <String>[
+      for (final url in urls)
+        if (url.trim().isNotEmpty) url.trim(),
+    ];
+    final epoch = _epoch;
+    return _queue(() async {
+      _requireAdmin();
+      if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
+      await _commit({'liveSources': jsonEncode(clean)});
+      _liveSources
+        ..clear()
+        ..addAll(clean);
+      _notify();
+    });
+  }
+
   void _loadLibrary() {
     _lanDocumentCache = null;
     _history.clear();
     _favorites.clear();
     _followStates.clear();
+    _followChecks.clear();
     _seriesCandidates.clear();
     if (_configurationError != null) return;
     for (final row in readJsonList(_string(_key('history')))) {
@@ -210,6 +254,17 @@ class LocalStore extends ChangeNotifier {
           _history[drama.id],
         );
       }
+    }
+    // 追剧检查记录：只保留仍在追的剧（取消追剧即失效），逐条防御解析。
+    Map<String, dynamic> checks = {};
+    try {
+      checks = Map<String, dynamic>.from(
+        jsonDecode(_string(_key('followChecks')) ?? '{}') as Map,
+      );
+    } catch (_) {}
+    for (final drama in _favorites.values) {
+      final check = FollowCheck.fromJson(checks[drama.id]);
+      if (check != null) _followChecks[drama.id] = check;
     }
     for (final row in readJsonList(_string(_key('seriesCandidates')))) {
       try {
@@ -245,6 +300,31 @@ class LocalStore extends ChangeNotifier {
       _favorites[id] != null && allowsSource(_favorites[id]!.source);
   FollowState? following(String id) =>
       isFavorite(id) ? _followStates[id] : null;
+
+  /// 后台追剧检查记录副本（FollowUpdater 读取后原地更新再整体保存）。
+  Map<String, FollowCheck> get followChecks => Map.of(_followChecks);
+
+  /// 保存后台追剧检查记录：只保留仍在追的剧，防取消追剧后残留无限增长。
+  Future<void> saveFollowChecks(
+    Map<String, FollowCheck> checks, {
+    int? epoch,
+  }) {
+    final current = epoch ?? _epoch;
+    return _queue(() async {
+      if (locked || current != _epoch) return;
+      final kept = <String, FollowCheck>{
+        for (final entry in checks.entries)
+          if (_favorites.containsKey(entry.key)) entry.key: entry.value,
+      };
+      await _commit({
+        _key('followChecks'): jsonEncode({
+          for (final entry in kept.entries) entry.key: entry.value.toJson(),
+        }),
+      });
+      _loadLibrary();
+      _notify();
+    });
+  }
   List<Drama> seriesDramasFor(Drama anchor) {
     if (!allowsSource(SourceSite.hongguo.id) ||
         anchor.source != SourceSite.hongguo.id) {

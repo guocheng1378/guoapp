@@ -20,7 +20,6 @@ import 'episode_browser.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 class DetailScreen extends StatefulWidget {
   const DetailScreen({
@@ -559,8 +558,8 @@ class _DetailScreenState extends State<DetailScreen> {
                     variant: GlassVariant.surface,
                     // 全胶囊形：大块玻璃条改成悬浮胶囊（radius 999 自适应全圆）。
                     radius: 999,
-                    topHighlight: true,
-                    // 统一滑动栏瓷面档：微透白瓷+白描边。
+                    // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+                    tint: GlassTint.pill,
                     child: Center(
                       heightFactor: 1,
                       child: ConstrainedBox(

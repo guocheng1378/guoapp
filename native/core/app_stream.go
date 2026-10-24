@@ -73,6 +73,13 @@ var nativePlaylistURI = regexp.MustCompile(`URI="([^"]+)"`)
 // 地址后，目录与主目录（分片数最多的目录）不同的分片视为广告，连同其
 // 前置标签行（EXTINF/KEY/BYTERANGE/包夹 DISCONTINUITY）一并移除。
 // 主清单（多码率索引）、单目录清单与主目录不显著的清单原样返回。
+//
+// 剔除块边界补插两件事（中插广告才有前后正片）：
+//   - 补一个 #EXT-X-DISCONTINUITY：广告与正片独立转码打轴，包夹标记
+//     随段删除后正片时间轴出现无提示跳变，播放器音频同步拉扯出杂音。
+//   - 广告段自带的 #EXT-X-KEY 随段删除（KEY 是持续作用标签，残留会把
+//     广告密钥套到后续正片上，解密失败即爆音），并在块边界恢复正片
+//     原本生效的 KEY。
 func nativePruneAdSegments(lines []string, base string) []string {
 	parsed, err := url.Parse(base)
 	if err != nil {
@@ -129,10 +136,18 @@ func nativePruneAdSegments(lines []string, base string) []string {
 		}
 		// HLS 中分片行之间的 # 行都修饰其后的第一个分片行，因此从上一个
 		// 正片分片到当前广告分片之间的标签行随广告段一并删除；
-		// 清单级标签与加密声明保留（正片解密不依赖广告段）。
+		// 清单级标签保留，但广告段自带的 EXT-X-KEY 例外（持续作用标签，
+		// 残留会把广告密钥套到后续正片上，正片 KEY 在块边界恢复）。
 		for j := lastSegment + 1; j <= i; j++ {
 			text := strings.TrimSpace(lines[j])
-			if text == "" || nativePlaylistGlobalTag(text) {
+			if text == "" {
+				continue
+			}
+			if strings.HasPrefix(text, "#EXT-X-KEY") {
+				remove[j] = true
+				continue
+			}
+			if nativePlaylistGlobalTag(text) {
 				continue
 			}
 			remove[j] = true
@@ -141,8 +156,82 @@ func nativePruneAdSegments(lines []string, base string) []string {
 	if len(remove) == 0 {
 		return lines
 	}
-	output := make([]string, 0, len(lines))
+	// 逐行记录剔除后的生效 KEY：只认保留的 KEY 行（广告自带的 KEY
+	// 已标记删除，不得污染快照），正片分片前的 KEY 即正片密钥，
+	// 广告块删除后据此在块边界恢复。
+	currentKey, mainKey := "", ""
 	for i, line := range lines {
+		text := strings.TrimSpace(line)
+		if strings.HasPrefix(text, "#EXT-X-KEY") && !remove[i] {
+			currentKey = text
+		}
+		if segDirs[i] != "" && !remove[i] {
+			mainKey = currentKey
+		}
+	}
+	insertDIS := map[int]bool{}
+	insertKey := map[int]string{}
+	blockStart := -1
+	for i := 0; i <= len(lines); i++ {
+		if i < len(lines) && remove[i] {
+			if blockStart < 0 {
+				blockStart = i
+			}
+			continue
+		}
+		if blockStart < 0 {
+			continue
+		}
+		// 剔除块 [blockStart, i) 结束：仅在中插（块前后都有正片）时补插。
+		before := false
+		for j := 0; j < blockStart; j++ {
+			if segDirs[j] != "" && !remove[j] {
+				before = true
+				break
+			}
+		}
+		nextSeg := -1
+		for j := i; j < len(lines); j++ {
+			if segDirs[j] != "" && !remove[j] {
+				nextSeg = j
+				break
+			}
+		}
+		if before && nextSeg >= 0 {
+			for j := blockStart; j < i; j++ {
+				text := strings.TrimSpace(lines[j])
+				if !strings.HasPrefix(text, "#EXT-X-KEY") {
+					continue
+				}
+				// 广告段带独立 KEY 且正片有密钥、块后到正片分片前
+				// 又没有重新声明时，恢复正片 KEY。
+				if mainKey == "" {
+					break
+				}
+				declared := false
+				for k := i; k <= nextSeg; k++ {
+					if strings.HasPrefix(strings.TrimSpace(lines[k]), "#EXT-X-KEY") {
+						declared = true
+						break
+					}
+				}
+				if !declared {
+					insertKey[i] = mainKey
+				}
+				break
+			}
+			insertDIS[i] = true
+		}
+		blockStart = -1
+	}
+	output := make([]string, 0, len(lines)+len(insertDIS)+len(insertKey))
+	for i, line := range lines {
+		if text, ok := insertKey[i]; ok {
+			output = append(output, text)
+		}
+		if insertDIS[i] {
+			output = append(output, "#EXT-X-DISCONTINUITY")
+		}
 		if remove[i] {
 			continue
 		}

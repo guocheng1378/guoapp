@@ -334,6 +334,7 @@ class PlayerEpisodeGrid extends StatelessWidget {
     this.keyPrefix = 'play-episode',
     this.compact = false,
     this.title = '选集',
+    this.note = '',
   });
   final List<Episode> episodes;
   final int currentIndex;
@@ -341,6 +342,8 @@ class PlayerEpisodeGrid extends StatelessWidget {
   final String keyPrefix;
   final bool compact;
   final String title;
+  /// 标题追加的剧集状态（已完结 / 连载中），空则不显示。
+  final String note;
   @override
   Widget build(BuildContext context) => EpisodeBrowser(
     episodes: episodes,
@@ -351,5 +354,6 @@ class PlayerEpisodeGrid extends StatelessWidget {
     keyPrefix: keyPrefix,
     compact: compact,
     title: title,
+    note: note,
   );
 }

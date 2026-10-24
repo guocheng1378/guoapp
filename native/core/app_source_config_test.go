@@ -8,10 +8,32 @@ func resetSourceConfigForTest(t *testing.T) {
 	t.Helper()
 	prevMirrors := huangguoAIMirrorList()
 	prevDongpiandi := dongpiandiBaseURL()
+	prevHosts := providerHostsSeed()
 	t.Cleanup(func() {
 		setHuangguoAIMirrors(prevMirrors)
 		setDongpiandiBaseURL(prevDongpiandi)
+		setProviderHosts(prevHosts)
 	})
+}
+
+// setLiveEngineForTest 把带 Downloader 的最小引擎挂上 nativeState，
+// 用于验证 setProviderHosts 对现有引擎的写透路径；测试结束恢复原引擎。
+func setLiveEngineForTest(t *testing.T, downloader *Downloader) *Downloader {
+	t.Helper()
+	if downloader == nil {
+		downloader = &Downloader{providerHosts: map[string]string{}}
+	}
+	engine := &nativeEngine{downloader: downloader}
+	nativeState.Lock()
+	prev := nativeState.engine
+	nativeState.engine = engine
+	nativeState.Unlock()
+	t.Cleanup(func() {
+		nativeState.Lock()
+		nativeState.engine = prev
+		nativeState.Unlock()
+	})
+	return downloader
 }
 
 // TestApplySourceConfigRemoteUpdate 远程下发的镜像表与 dongpiandi 根地址生效，
@@ -105,5 +127,123 @@ func TestSourceConfigFallbackDefaults(t *testing.T) {
 	}
 	if id := dongpiandiDetailIDFromPageURL("https://other.example.com/player/abc9"); id != "" {
 		t.Fatalf("未知域名 PageURL 不应解析出 ID：%q", id)
+	}
+}
+
+// TestApplySourceConfigProviderHostsApply 合法覆盖表写透现有引擎并进播种快照，
+// cloudfront 兜底域（providerBaseURL default 分支）与封面 Referer 真正消费覆盖值。
+func TestApplySourceConfigProviderHostsApply(t *testing.T) {
+	resetSourceConfigForTest(t)
+	downloader := setLiveEngineForTest(t, nil)
+	// 未覆盖时 cloudfront 走内置兜底。
+	if got := downloader.providerBaseURL("cloudfront"); got != "https://d2pypzndaqisk.cloudfront.net" {
+		t.Fatalf("cloudfront 默认兜底域不符：%s", got)
+	}
+	value, err := applySourceConfig(map[string]any{
+		"providerHosts": map[string]any{
+			"cloudfront": "https://mirror-cf.example.com/",
+			"huangdou":   "https://mirror-hd.example.com/",
+		},
+	})
+	if err != nil {
+		t.Fatalf("applySourceConfig: %v", err)
+	}
+	if result, ok := value.(map[string]any); !ok || result["applied"] != true {
+		t.Fatalf("applied 期望 true，实际 %v", value)
+	}
+	if got := downloader.providerHostOverride("cloudfront"); got != "https://mirror-cf.example.com" {
+		t.Fatalf("覆盖未写透现有引擎（cloudfront）：%s", got)
+	}
+	if got := downloader.providerHostOverride("huangdou"); got != "https://mirror-hd.example.com" {
+		t.Fatalf("覆盖未写透现有引擎（huangdou）：%s", got)
+	}
+	seed := providerHostsSeed()
+	if seed["cloudfront"] != "https://mirror-cf.example.com" || seed["huangdou"] != "https://mirror-hd.example.com" {
+		t.Fatalf("播种快照未收录覆盖值：%v", seed)
+	}
+	// providerBaseURL default 分支消费覆盖（cloudfront 兜底域可远程替换）。
+	if got := downloader.providerBaseURL("cloudfront"); got != "https://mirror-cf.example.com" {
+		t.Fatalf("providerBaseURL 未消费覆盖：%s", got)
+	}
+	// 封面 Referer（huangdou 回退路径）消费覆盖。
+	if got := nativeCoverReferer(downloader, sourceHuangdou, "https://cdn.other.example.com/x.jpg"); got != "https://mirror-hd.example.com/home" {
+		t.Fatalf("封面 Referer 未消费覆盖：%s", got)
+	}
+}
+
+// TestApplySourceConfigProviderHostsRejects 覆盖表任一条目非法即整段丢弃，
+// 当前生效值不受污染；huangju/yeguo/未注册源（douban、未知 id）一律拒收。
+func TestApplySourceConfigProviderHostsRejects(t *testing.T) {
+	resetSourceConfigForTest(t)
+	downloader := setLiveEngineForTest(t, nil)
+	setProviderHosts(map[string]string{"cloudfront": "https://keep.example.com"})
+	cases := []map[string]any{
+		{"providerHosts": "https://text.example.com"},
+		{"providerHosts": map[string]any{"notasource": "https://a.example.com"}},
+		{"providerHosts": map[string]any{"douban": "https://a.example.com"}},
+		{"providerHosts": map[string]any{"huangju": "https://a.example.com"}},
+		{"providerHosts": map[string]any{"yeguo": "https://a.example.com"}},
+		{"providerHosts": map[string]any{"cloudfront": "ftp://a.example.com"}},
+		{"providerHosts": map[string]any{"cloudfront": "https://"}},
+		{"providerHosts": map[string]any{"cloudfront": 42}},
+		{"providerHosts": map[string]any{"cloudfront": "https://ok.example.com", "huangju": "https://bad.example.com"}},
+	}
+	for i, config := range cases {
+		value, err := applySourceConfig(config)
+		if err != nil {
+			t.Fatalf("用例 %d: err = %v", i, err)
+		}
+		if result, ok := value.(map[string]any); !ok || result["applied"] != false {
+			t.Fatalf("用例 %d: applied 期望 false，实际 %v", i, value)
+		}
+	}
+	if got := downloader.providerHostOverride("cloudfront"); got != "https://keep.example.com" {
+		t.Fatalf("非法段不应污染现有覆盖：%s", got)
+	}
+	if seed := providerHostsSeed(); seed["cloudfront"] != "https://keep.example.com" {
+		t.Fatalf("非法段不应污染播种快照：%v", seed)
+	}
+}
+
+// TestApplySourceConfigProviderHostsClears 空覆盖表合法，语义为清空覆盖、回落内置域名。
+func TestApplySourceConfigProviderHostsClears(t *testing.T) {
+	resetSourceConfigForTest(t)
+	downloader := setLiveEngineForTest(t, nil)
+	setProviderHosts(map[string]string{"cloudfront": "https://mirror-cf.example.com"})
+	value, err := applySourceConfig(map[string]any{"providerHosts": map[string]any{}})
+	if err != nil {
+		t.Fatalf("applySourceConfig: %v", err)
+	}
+	if result, ok := value.(map[string]any); !ok || result["applied"] != true {
+		t.Fatalf("applied 期望 true，实际 %v", value)
+	}
+	if got := downloader.providerHostOverride("cloudfront"); got != "" {
+		t.Fatalf("空表未清空现有覆盖：%s", got)
+	}
+	if got := downloader.providerBaseURL("cloudfront"); got != "https://d2pypzndaqisk.cloudfront.net" {
+		t.Fatalf("清空后未回落内置兜底域：%s", got)
+	}
+}
+
+// TestProviderURLCandidatesPreferredOverride 覆盖值作为媒体候选链的首选域名，
+// 保留原路径重写到覆盖域；主域与镜像仍殿后兜底。
+func TestProviderURLCandidatesPreferredOverride(t *testing.T) {
+	resetSourceConfigForTest(t)
+	downloader := setLiveEngineForTest(t, nil)
+	setProviderHosts(map[string]string{"huangguoai": "https://mirror-hg.example.com"})
+	candidates := downloader.providerURLCandidates("https://huangguoai.com/d/abc123")
+	if len(candidates) < 2 {
+		t.Fatalf("候选链过短：%v", candidates)
+	}
+	if candidates[0] != "https://mirror-hg.example.com/d/abc123" {
+		t.Fatalf("覆盖域未作为首选候选：%v", candidates)
+	}
+}
+
+// TestDuanjuBaseURLProviderHosts duanju 族媒体根域消费覆盖表（媒体解析链路）。
+func TestDuanjuBaseURLProviderHosts(t *testing.T) {
+	downloader := &Downloader{providerHosts: map[string]string{"yaguo": "https://yaguo-mirror.example.com"}}
+	if got := downloader.duanjuBaseURL("yaguo"); got != "https://yaguo-mirror.example.com" {
+		t.Fatalf("duanjuBaseURL 未消费覆盖：%s", got)
 	}
 }

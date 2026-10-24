@@ -33,6 +33,7 @@ type vod struct {
 	VodArea     any             `json:"vod_area"`
 	VodYear     any             `json:"vod_year"`
 	VodScore    any             `json:"vod_score"`
+	VodDuration json.RawMessage `json:"vod_duration"`
 	VodPlayFrom string          `json:"vod_play_from"`
 	VodPlayURL  string          `json:"vod_play_url"`
 }
@@ -63,18 +64,18 @@ func (f *flexInt) UnmarshalJSON(data []byte) error {
 }
 
 type response struct {
-	Code      int      `json:"code"`
-	Msg       string   `json:"msg"`
-	Page      flexInt  `json:"page"`
-	PageCount flexInt  `json:"pagecount"`
-	Total     flexInt  `json:"total"`
-	List      []vod    `json:"list"`
+	Code      int     `json:"code"`
+	Msg       string  `json:"msg"`
+	Page      flexInt `json:"page"`
+	PageCount flexInt `json:"pagecount"`
+	Total     flexInt `json:"total"`
+	List      []vod   `json:"list"`
 }
 
 type Source struct {
-	spec     provider.Spec
-	typeID   string
-	catalog  func(base, typeID string, page int) string
+	spec    provider.Spec
+	typeID  string
+	catalog func(base, typeID string, page int) string
 }
 
 func New(spec provider.Spec, typeID string) *Source {
@@ -205,6 +206,7 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 			Area:          vodText(item.VodArea),
 			Year:          vodText(item.VodYear),
 			Score:         vodText(item.VodScore),
+			Duration:      vodDurationSeconds(item.VodDuration),
 			ChannelName:   channel,
 		})
 	}
@@ -304,6 +306,7 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 		Area:         vodText(item.VodArea),
 		Year:         vodText(item.VodYear),
 		Score:        vodText(item.VodScore),
+		Duration:     vodDurationSeconds(item.VodDuration),
 		ChannelName:  provider.SourceName(s.spec.ID),
 	}
 	return drama, chapters, nil
@@ -337,6 +340,32 @@ func vodTimeOnlineDate(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// vodDurationSeconds 把 maccms vod_duration 解析为秒。采集站常见三种形态：
+// 数字秒（2712）、"45:12"（分:秒）、"1:05:30"（时:分:秒）；无法识别返回 0，
+// 让 Dart 侧短剧/长剧判定走兜底规则而不是拿到假时长。
+func vodDurationSeconds(raw json.RawMessage) float64 {
+	s := strings.TrimSpace(strings.Trim(string(raw), `"`))
+	if s == "" || s == "null" {
+		return 0
+	}
+	if secs, err := strconv.ParseFloat(s, 64); err == nil {
+		return secs
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0
+	}
+	total := 0.0
+	for _, part := range parts {
+		value, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil || value < 0 {
+			return 0
+		}
+		total = total*60 + value
+	}
+	return total
 }
 
 // vodText 把 vod_area/vod_year/vod_score 等松散类型字段统一为字符串。

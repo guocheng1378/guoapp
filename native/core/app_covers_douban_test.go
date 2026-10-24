@@ -61,13 +61,13 @@ func TestDoubanCoverLoadIntegration(t *testing.T) {
 	downloader.client = &http.Client{Timeout: 30 * time.Second}
 	downloader.limiter = newRequestLimiter(8, time.Nanosecond)
 	engine := &nativeEngine{
-		downloader:       downloader,
-		directory:        dir,
-		catalogs:         map[string][]nativeDrama{},
-		catalogStates:    map[string]nativeCatalogState{},
-		categoryOptions:  map[string][]nativeCategory{},
-		recommendations:  map[string]nativeRecommendationState{},
-		covers:           newNativeCoverCache(dir, downloader),
+		downloader:      downloader,
+		directory:       dir,
+		catalogs:        map[string][]nativeDrama{},
+		catalogStates:   map[string]nativeCatalogState{},
+		categoryOptions: map[string][]nativeCategory{},
+		recommendations: map[string]nativeRecommendationState{},
+		covers:          newNativeCoverCache(dir, downloader),
 	}
 	// 2026-10-19 rexxar movie_top250 首条实测（肖申克的救赎）。
 	drama := nativeDrama{ID: "douban:1292052", Source: sourceDouban, SourceID: "1292052",

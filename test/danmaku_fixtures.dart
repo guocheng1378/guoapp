@@ -24,8 +24,8 @@ class DanmakuFixtureRepository extends RouteRepository {
   DanmakuPage Function(DanmakuRequest)? response;
 
   @override
-  PlaybackPlan plan(bool alternate) {
-    final base = super.plan(alternate);
+  PlaybackPlan plan(bool alternate, {int route = -1}) {
+    final base = super.plan(alternate, route: route);
     return PlaybackPlan(
       url: base.url,
       session: base.session,
@@ -35,6 +35,8 @@ class DanmakuFixtureRepository extends RouteRepository {
       qualities: base.qualities,
       routeIndex: base.routeIndex,
       routeCount: base.routeCount,
+      routeLabels: base.routeLabels,
+      routeOfficial: base.routeOfficial,
     );
   }
 

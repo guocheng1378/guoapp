@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
@@ -8,7 +9,6 @@ import 'glass.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
 
 class CatalogFilters extends StatefulWidget {
   const CatalogFilters({
@@ -23,6 +23,7 @@ class CatalogFilters extends StatefulWidget {
     this.remoteAutofocus = false,
     this.onExitUp,
     this.onExitDown,
+    this.proxListenable,
   });
 
   final List<CatalogCategory> categories;
@@ -36,10 +37,19 @@ class CatalogFilters extends StatefulWidget {
   final VoidCallback? onExitUp;
   final VoidCallback? onExitDown;
 
+  /// 接近度信号（demo 真值，首页传入）：内容滚动时分类胶囊白描边随
+  /// h=滚动距离/50 亮起、回顶熄灭；不传=静态描边（其余页面不变）。
+  final ValueListenable<double>? proxListenable;
+
   /// 分类条高度（单一来源）：条内公式 extra=4；首页吸顶 pinned header
-  /// 传 extra=12，避免两处魔法数漂移。
+  /// 传 extra=12，避免两处魔法数漂移。手机横屏紧凑档降一档（与沉浸
+  /// 顶栏 44 同级），配 dense 胶囊（视觉 ~25px）。
   static double barHeight(BuildContext context, {double extra = 4}) {
-    final scaled = MediaQuery.textScalerOf(context).scale(14);
+    final scaler = MediaQuery.textScalerOf(context);
+    if (AppLayout.landscapePhone(context)) {
+      return max(38, scaler.scale(12.5) + 22) + extra;
+    }
+    final scaled = scaler.scale(14);
     return max(52, scaled + 28) + extra;
   }
 
@@ -95,6 +105,8 @@ class _CatalogFiltersState extends State<CatalogFilters> {
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
+    // 手机横屏紧凑档：胶囊字号/内边距降一档。
+    final compact = AppLayout.landscapePhone(context);
     final bar = Row(
       children: [
         Expanded(
@@ -142,8 +154,11 @@ class _CatalogFiltersState extends State<CatalogFilters> {
                               label: entry.name,
                               selected: entry.id == widget.category,
                               onTap: () => widget.onCategory(entry.id),
+                              fontSize: compact ? 12.5 : 14,
+                              dense: compact,
                               // 胶囊视觉保持小米 ~32px，命中区撑到 48px。
                               hitTarget: 48,
+                              proxListenable: widget.proxListenable,
                             ),
                           ),
                         ),

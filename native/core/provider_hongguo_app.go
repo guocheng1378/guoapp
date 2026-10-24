@@ -194,7 +194,12 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			if comment {
 				signHongguoCommentRequest(prepared, commentNonce, now)
 			} else {
-				signHongguoRequest(prepared, body, now)
+				// 红果网关 2026-10-20 起真校验播放签名：仅 X-Gorgon 系的
+				// signHongguoRequest 会被判无效（HTTP 200 空包），必须补
+				// X-Argus/X-Ladon（device_id + license + 机型 + body hash）。
+				// device_id/aid 从已编码的 query 里取，签名回调先设了
+				// RawQuery，这里能读到。
+				signHongguoPlayerRequest(prepared, body, now)
 			}
 		})
 		if err != nil {

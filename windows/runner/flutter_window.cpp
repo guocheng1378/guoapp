@@ -33,6 +33,17 @@ bool FlutterWindow::OnCreate() {
   device_channel_->SetMethodCallHandler(
       [](const flutter::MethodCall<flutter::EncodableValue>& call,
          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() == "deviceInfo") {
+          // FLUTTER_VERSION 由 CMake 从 pubspec 注入（与 Runner.rc 同源），
+          // Dart 侧更新提示依赖 "x.y.z+build" 形态做 build 比较。
+          flutter::EncodableMap info;
+          info[flutter::EncodableValue("television")] =
+              flutter::EncodableValue(false);
+          info[flutter::EncodableValue("version")] =
+              flutter::EncodableValue(std::string(FLUTTER_VERSION));
+          result->Success(flutter::EncodableValue(info));
+          return;
+        }
         if (call.method_name() != "playbackPower") {
           result->NotImplemented();
           return;

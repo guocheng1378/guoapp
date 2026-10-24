@@ -341,17 +341,26 @@ class DramaTile extends StatelessWidget {
   final VoidCallback? onMore;
   final VoidCallback? onLongPress;
 
-  static double titleHeight(BuildContext context) =>
-      MediaQuery.textScalerOf(
-        context,
-      ).scale(AppLayout.isTelevision(context) ? 17 : 14) *
-      2.6;
+  static double titleHeight(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    // 手机横屏紧凑档文字降一档。
+    final size = AppLayout.isTelevision(context)
+        ? 17.0
+        : AppLayout.landscapePhone(context)
+        ? 12.5
+        : 14.0;
+    return scaler.scale(size) * 2.6;
+  }
 
-  static double subtitleHeight(BuildContext context) =>
-      MediaQuery.textScalerOf(
-        context,
-      ).scale(AppLayout.isTelevision(context) ? 14 : 12) *
-      1.3;
+  static double subtitleHeight(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final size = AppLayout.isTelevision(context)
+        ? 14.0
+        : AppLayout.landscapePhone(context)
+        ? 10.5
+        : 12.0;
+    return scaler.scale(size) * 1.3;
+  }
 
   static double extentFor(BuildContext context, double width) =>
       (width * 1.5 + 13 + titleHeight(context) + subtitleHeight(context))
@@ -360,6 +369,7 @@ class DramaTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final television = AppLayout.isTelevision(context);
+    final compact = AppLayout.landscapePhone(context);
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -428,7 +438,7 @@ class DramaTile extends StatelessWidget {
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 height: 1.3,
-                fontSize: television ? 17 : 14,
+                fontSize: television ? 17 : (compact ? 12.5 : 14),
               ),
             ),
           ),
@@ -443,7 +453,7 @@ class DramaTile extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: television ? 14 : 12,
+                fontSize: television ? 14 : (compact ? 10.5 : 12),
                 height: 1.3,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -543,12 +553,17 @@ class StatusPanel extends StatelessWidget {
 }
 
 SliverGridDelegate dramaGridDelegate(BuildContext context, double width) {
-  final columns = width < 600 ? 3 : (width / 180).floor().clamp(4, 9);
+  // 手机横屏紧凑档：/150 分母 + 行距收窄（869 宽 ≈ 6 列，横屏一屏
+  // 从 4 列提到 6 列）；竖屏与桌面/TV 分档不变。
+  final landscapeCompact = AppLayout.landscapePhone(context);
+  final columns = width < 600
+      ? 3
+      : (width / (landscapeCompact ? 150 : 180)).ceil().clamp(4, 9);
   final spacing = width < 600 ? 10.0 : 18.0;
   final tileWidth = (width - (columns - 1) * spacing) / columns;
   return SliverGridDelegateWithFixedCrossAxisCount(
     crossAxisCount: columns,
-    mainAxisSpacing: 22,
+    mainAxisSpacing: landscapeCompact ? 14 : 22,
     crossAxisSpacing: spacing,
     mainAxisExtent: DramaTile.extentFor(context, tileWidth),
   );

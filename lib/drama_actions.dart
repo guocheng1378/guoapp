@@ -16,6 +16,7 @@ Future<void> showDramaActions(
   VoidCallback? onContinue,
   VoidCallback? onDownload,
   VoidCallback? onSelect,
+  VoidCallback? onFindSource,
   bool history = false,
   GlobalKey? anchorKey,
 }) async {
@@ -37,6 +38,8 @@ Future<void> showDramaActions(
       ),
     if (following != null && following.hasUpdates)
       ('read', '标记 ${following.updateLabel}已读', AppIcon(AppIcons.emailRead, size: 22)),
+    if (onFindSource != null)
+      ('findSource', '换个源找', AppIcon(AppIcons.search, size: 22)),
     if (onDownload != null && store.canDownload)
       ('download', '下载选集', AppIcon(AppIcons.download, size: 22)),
     if (onSelect != null && store.canDownload)
@@ -118,6 +121,8 @@ Future<void> showDramaActions(
       if (store.canDownload) onDownload?.call();
     case 'select':
       if (store.canDownload) onSelect?.call();
+    case 'findSource':
+      onFindSource?.call();
     case 'removeHistory':
       await saveUserChange(context, () => store.removeHistory(drama.id));
   }
@@ -133,6 +138,7 @@ class DramaActionButton extends StatefulWidget {
     this.onContinue,
     this.onDownload,
     this.onSelect,
+    this.onFindSource,
     this.history = false,
   });
   final Drama drama;
@@ -140,6 +146,7 @@ class DramaActionButton extends StatefulWidget {
   final VoidCallback? onContinue;
   final VoidCallback? onDownload;
   final VoidCallback? onSelect;
+  final VoidCallback? onFindSource;
   final bool history;
 
   @override
@@ -156,6 +163,7 @@ class _DramaActionButtonState extends State<DramaActionButton> {
     onContinue: widget.onContinue,
     onDownload: widget.onDownload,
     onSelect: widget.onSelect,
+    onFindSource: widget.onFindSource,
     history: widget.history,
     anchorKey: _anchorKey,
   );

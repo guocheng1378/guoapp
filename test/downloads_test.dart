@@ -25,6 +25,7 @@ class DownloadRepository extends FixtureRepository {
   int localCalls = 0;
   int onlineCalls = 0;
   int alternateCalls = 0;
+  int selectCalls = 0;
   bool missing = false;
   DramaDetail? detailOverride;
 
@@ -113,6 +114,12 @@ class DownloadRepository extends FixtureRepository {
   Future<PlaybackPlan> fallback(PlaybackPlan current) async {
     alternateCalls++;
     throw AppFailure('本地视频不应该自动切线');
+  }
+
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) async {
+    selectCalls++;
+    throw AppFailure('本地视频不支持选线');
   }
 }
 
@@ -348,6 +355,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('embedded header clears the floating top bar via topInset', (
+    tester,
+  ) async {
+    size(tester, const Size(360, 760));
+    final repository = DownloadRepository();
+    repository.jobs = [repository.job(1, 'downloading')];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: DownloadsScreen(
+            repository: repository,
+            store: await makeStore(),
+            embedded: true,
+            topInset: 96,
+            bottomInset: 72,
+          ),
+        ),
+      ),
+    );
+    await tick(tester);
+
+    // 手机端首页 extendBodyBehindAppBar：嵌入标题/搜索等固定行必须让出
+    // 悬浮玻璃顶栏整体高度（topInset=状态栏+顶栏），不得顶进状态栏。
+    expect(
+      tester.getTopLeft(find.text('下载合集')).dy,
+      greaterThanOrEqualTo(96),
+    );
+    expect(
+      tester.getTopLeft(find.byType(TextField)).dy,
+      greaterThanOrEqualTo(96),
+    );
+  });
+
   testWidgets(
     'downloaded episode playback uses saved metadata and progress without detail requests',
     (tester) async {
@@ -436,7 +477,14 @@ void main() {
         expect(repository.onlineCalls, 1);
         expect(player.opened.last.uri, contains('online.mp4'));
         expect(player.opened.last.start, const Duration(seconds: 28));
-        await tester.tap(find.byTooltip('下一集').last);
+        // 下一集按钮已随 HUD 分离改造移除：改走现行切集路径（中间竖滑上滑）。
+        final area = tester.getRect(
+          find.byKey(const ValueKey('player-gesture-surface')),
+        );
+        await tester.dragFrom(
+          Offset(area.width * .30, area.top + area.height * .25),
+          const Offset(0, -160),
+        );
         await tick(tester);
         expect(player.opened.last.uri, contains('local.mp4'));
         expect(repository.onlineCalls, 1);

@@ -1,5 +1,5 @@
 {
-  "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；image 为可选配图 URL（仅支持 http/https，留空或非法则不显示，加载失败自动隐藏）；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。sourceConfig 为可选的站源热更配置（改后无需发版，用户启动时静默热更站源地址）：huangguoAIMirrors 为字符串数组（黄果AI 镜像表，http/https 根地址，去重后 1-8 个，尾斜杠自动规范化，任一项非法整段拒绝）；dongpiandiBaseURL 为字符串（真果·鉴根地址，http/https 根地址）；任一字段非法则整段丢弃并保留当前生效值；保持空对象 {} 即不生效、不产生任何请求。",
+  "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；image 为可选配图 URL（仅支持 http/https，留空或非法则不显示，加载失败自动隐藏）；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。sourceConfig 为可选的站源热更配置（改后无需发版，用户启动时静默热更站源地址）：huangguoAIMirrors 为字符串数组（黄果AI 镜像表，http/https 根地址，去重后 1-8 个，尾斜杠自动规范化，任一项非法整段拒绝）；dongpiandiBaseURL 为字符串（真果·鉴根地址，http/https 根地址）；providerHosts 为对象映射（源站 id → http/https 根地址，仅限已注册站源，黄果剧/野果/豆瓣等不可覆盖，最多 32 条，任一条目非法整段拒绝，空对象为合法=清空覆盖回落内置地址）；任一字段非法则整段丢弃并保留当前生效值；保持空对象 {} 即不生效、不产生任何请求。",
   "announcement": {
     "enabled": true,
     "title": "欢迎使用真果鉴",
@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2157,
-    "notes": "追剧与首页新功能：\n· 追剧有更新自动提醒，打开首页即可查看\n· 首页新增「继续观看」，上次没看完的接着看\n· 剧卡菜单新增「换个源找」，换源继续追\n\n体验优化：\n· 详情数据自动预热，点剧打开更快\n· 播放器操作栏更清爽，切集倍速更顺手",
-    "url": "https://1818547493.share.123pan.cn/123pan/ofGhjv-q7Gsd"
+    "build": 2182,
+    "notes": "本次更新：\n· 真果·鉴线路修复：不再误选片头/预告线路，彻底解决切线路后播放失败\n· 全预告集的剧集不再给出无效线路，提示改为「无有效播放地址」",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2182/zhenguojian-0.2.96+2182-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }

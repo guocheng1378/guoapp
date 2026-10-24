@@ -1,6 +1,6 @@
 import 'models.dart';
 
-enum PlaybackRecoveryAction { reuse, alternative, refresh, stop }
+enum PlaybackRecoveryAction { reuse, alternative, refresh, route, stop }
 
 class PlaybackRecovery {
   static const maxAttempts = 4;

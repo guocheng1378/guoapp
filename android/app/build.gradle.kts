@@ -32,10 +32,17 @@ android {
 
     defaultConfig {
         applicationId = "com.duanju.duanju_app"
+        // minSdk 26：adaptive-icon 三件套要求 API 26+（drawable/app_icon.xml
+        // 无 legacy PNG 兜底）。降到 24 的前置=先补 mipmap 五密度 PNG
+        // （对标 Xanerix/guoapp 的 mipmap-*/ic_launcher 模式），见 2172 周期
+        // 报备，勿单独改此值。
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        // versionName 附带 pubspec 构建号（flutter.versionCode 在此无 split-per-abi
+        // 的 ABI 偏移；偏移是 split 输出阶段才加的）。deviceInfo 渠道把它原样返回，
+        // 更新提示依赖 "x.y.z+build" 形态做构建号比较。
+        versionName = "${flutter.versionName}+${flutter.versionCode}"
         manifestPlaceholders["appLabel"] = if (allSources) "真果鉴" else "红果鉴"
         manifestPlaceholders["appBanner"] = if (allSources) "@drawable/tv_banner_all_sources" else "@drawable/tv_banner"
     }

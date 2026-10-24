@@ -217,7 +217,13 @@ class _DanmakuMotion extends StatefulWidget {
 
 class _DanmakuMotionState extends State<_DanmakuMotion>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _motion = AnimationController(vsync: this);
+  // AnimationBehavior.preserve：系统关闭过渡动画（缩放为 0）时默认
+  // normal 会把动画时长压缩到约 5%，弹幕飞得快到看不清（移植自
+  // Xanerix/guoapp 3521a84）。
+  late final AnimationController _motion = AnimationController(
+    vsync: this,
+    animationBehavior: AnimationBehavior.preserve,
+  );
 
   @override
   void initState() {

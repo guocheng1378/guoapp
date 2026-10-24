@@ -10,11 +10,13 @@ import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
 import 'danmaku_models.dart';
+import 'search_suggestion.dart';
 import 'background_downloads.dart';
 import 'local_store.dart';
 import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
+import 'live_models.dart';
 import 'cover_decoder.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
@@ -183,6 +185,11 @@ abstract class AppRepository {
     int page = 1,
     bool force = false,
   }) async => throw AppFailure('当前环境不支持榜单');
+  Future<LivePage> liveChannels({
+    String listId = '',
+    List<String> liveUrls = const [],
+    bool force = false,
+  }) async => throw AppFailure('当前环境不支持直播');
   Future<List<CatalogCategory>> categories(
     String source, {
     bool force = false,
@@ -197,7 +204,10 @@ abstract class AppRepository {
   }) async => throw AppFailure('当前环境不支持站源管理');
   Future<SourceStatus> cancelSourceJob(String source) async =>
       throw AppFailure('当前环境不支持站源管理');
-  Future<List<String>> suggestions(String query) async => const [];
+  Future<List<SearchSuggestion>> suggestions(
+    String query, {
+    String source = '',
+  }) async => const [];
   Future<Map<String, dynamic>> storage() async => {};
   Future<String> downloadDirectory() async =>
       (await storage())['directory'] as String? ?? '';
@@ -256,6 +266,7 @@ abstract class AppRepository {
   Future<DramaDetail> detail(Drama drama);
   Future<PlaybackPlan> resolve(Drama drama, Episode episode, {int quality = 0});
   Future<PlaybackPlan> fallback(PlaybackPlan current);
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route);
   Future<void> cancelPlayback();
   Future<void> release(String session);
 }
@@ -489,7 +500,7 @@ class NativeRepository extends AppRepository {
   @override
   Future<void> cancelCatalog() => _cancelReads('catalog-');
   @override
-  Future<void> cancelSuggestions() => _cancelReads('suggestions');
+  Future<void> cancelSuggestions() => _cancelReads('suggest');
   @override
   Future<void> cancelRecommendations() => _cancelReads('recommendations-');
 
@@ -563,6 +574,20 @@ class NativeRepository extends AppRepository {
   );
 
   @override
+  Future<LivePage> liveChannels({
+    String listId = '',
+    List<String> liveUrls = const [],
+    bool force = false,
+  }) async => LivePage.fromJson(
+    await _call({
+      'action': 'live.channels',
+      'listId': listId,
+      'liveUrls': liveUrls,
+      'force': force,
+    }),
+  );
+
+  @override
   Future<SourceStatus> sourceStatus(String source) async =>
       SourceStatus.fromJson(
         await _call({'action': 'sourceStatus', 'source': source}),
@@ -620,13 +645,37 @@ class NativeRepository extends AppRepository {
   }
 
   @override
-  Future<List<String>> suggestions(String query) async {
+  Future<List<SearchSuggestion>> suggestions(
+    String query, {
+    String source = '',
+  }) async {
+    if (source == 'dongpiandi') {
+      // 真果·鉴站内搜索建议（/v1/suggest，带直达播放目标）。
+      final result = await _read('suggest', {
+        'action': 'suggest',
+        'source': source,
+        'query': query,
+      });
+      return (result['items'] as List? ?? [])
+          .whereType<Map>()
+          .map(
+            (item) => SearchSuggestion.fromJson(
+              item.map(
+                (key, value) => MapEntry(key.toString(), value),
+              ),
+            ),
+          )
+          .toList();
+    }
     _authorize('hongguo');
     final result = await _read('suggestions', {
       'action': 'suggestions',
       'query': query,
     });
-    return (result['items'] as List? ?? []).whereType<String>().toList();
+    return (result['items'] as List? ?? [])
+        .whereType<String>()
+        .map((label) => SearchSuggestion(label: label))
+        .toList();
   }
 
   @override
@@ -984,6 +1033,16 @@ class NativeRepository extends AppRepository {
         await _call({
           'action': 'fallback',
           'session': current.session,
+          'sequence': ++_playbackSequence,
+        }),
+      );
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) async =>
+      PlaybackPlan.fromJson(
+        await _call({
+          'action': 'selectPlayback',
+          'session': current.session,
+          'route': route,
           'sequence': ++_playbackSequence,
         }),
       );

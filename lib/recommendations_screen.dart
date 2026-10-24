@@ -7,6 +7,7 @@ import 'catalog_filters.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'featured_catalog.dart';
+import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -352,13 +353,14 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                         },
                       );
                     }
-                    return RefreshIndicator(
+                    return FogRefresh(
                     onRefresh: () {
                       HapticFeedback.mediumImpact();
                       return _load(force: true);
                     },
-                    // anywhere：与首页下拉手感一致（顶部边缘之外起手也计刷新）。
-                    triggerMode: RefreshIndicatorTriggerMode.anywhere,
+                    // 胶囊停在视口顶 6px：独立页视口在顶栏之下、内嵌主页时
+                    // 在分类条之下，视口顶都已是内容上缘，小间隙即可。
+                    displacement: 6,
                     child: CustomScrollView(
                       controller: _scroll,
                       physics: const AlwaysScrollableScrollPhysics(),

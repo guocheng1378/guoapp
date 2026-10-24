@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 )
 
 type nativePlaybackChoice struct {
+	danmakuSource string
 	danmakuSeries string
 	danmakuVideo  string
 	media         []providerMedia
@@ -39,7 +41,15 @@ func nativePlaybackChoices(media providerMedia, quality int) nativePlaybackChoic
 			qualities[option.Quality] = true
 		}
 	}
-	sort.SliceStable(choice.media, func(i, j int) bool { return choice.media[i].Quality > choice.media[j].Quality })
+	// 官方线恒排在前面（真果·鉴用户定调「默认就进官方源」），同组内再按
+	// 清晰度降序——只按清晰度排会把 Quality=0 的官方线挤到几十条三方线
+	// 之后，默认地址也就落不到官方线上了。
+	sort.SliceStable(choice.media, func(i, j int) bool {
+		if choice.media[i].Official != choice.media[j].Official {
+			return choice.media[i].Official
+		}
+		return choice.media[i].Quality > choice.media[j].Quality
+	})
 	for value := range qualities {
 		choice.qualities = append(choice.qualities, value)
 	}
@@ -76,7 +86,8 @@ func (engine *nativeEngine) nativeOpenPlayback(ctx context.Context, choice nativ
 		DanmakuID: choice.danmakuVideo,
 		URL:       media.URL, Headers: map[string]string{"User-Agent": hongguoWebMediaUserAgent(media.URL), "Referer": media.Referer},
 		Key: hex.EncodeToString(media.CENCKey), Quality: media.Quality, Qualities: choice.qualities,
-		RouteIndex: choice.index, RouteCount: len(choice.media), Session: hex.EncodeToString(tokenBytes),
+		RouteIndex: choice.index, RouteCount: len(choice.media), RouteLabels: nativeRouteLabels(choice.media),
+		RouteOfficial: nativeRouteOfficial(choice.media), Session: hex.EncodeToString(tokenBytes),
 	}
 	if media.credentials != nil && !media.credentials.expires.IsZero() {
 		if !time.Now().Before(media.credentials.expires) {
@@ -153,6 +164,59 @@ func (engine *nativeEngine) nativeNextPlayback(ctx context.Context, session stri
 		return nativePlan{}, errors.New("播放线路已失效，请重新解析播放")
 	}
 	choice.index++
+	return engine.nativeOpenPlayback(ctx, choice)
+}
+
+// nativeRouteLabels 从线路表提取显示名（无 Label 的源留空串，由 UI 回退
+// 「线路 N」）。数量与 RouteCount 对齐。
+func nativeRouteLabels(media []providerMedia) []string {
+	if len(media) < 2 {
+		return nil
+	}
+	labels := make([]string, len(media))
+	for i, option := range media {
+		labels[i] = strings.TrimSpace(option.Label)
+	}
+	return labels
+}
+
+// nativeRouteOfficial 与 nativeRouteLabels 对齐输出官方线标记：只有站源
+// 真有官方票据时才有值，其余源返回 nil（Dart 侧按「无官方线」平铺全部线路）。
+func nativeRouteOfficial(media []providerMedia) []bool {
+	if len(media) < 2 {
+		return nil
+	}
+	flags := make([]bool, len(media))
+	any := false
+	for i, option := range media {
+		if option.Official {
+			flags[i] = true
+			any = true
+		}
+	}
+	if !any {
+		return nil
+	}
+	return flags
+}
+
+// nativeSelectPlayback 按索引任选一条线路（播放器线路面板点选）。
+// 与 nativeNextPlayback 的区别：不递增 index，可任意跳转。
+func (engine *nativeEngine) nativeSelectPlayback(ctx context.Context, session string, index int) (nativePlan, error) {
+	engine.mu.Lock()
+	choice, exists := engine.playbacks[session]
+	engine.mu.Unlock()
+	if !exists {
+		return nativePlan{}, errors.New("播放线路已失效，请重新解析播放")
+	}
+	if index < 0 || index >= len(choice.media) {
+		return nativePlan{}, errors.New("所选线路不可用，请重新解析播放")
+	}
+	if index == choice.index {
+		// 已在该线路上：仍重开一次，让调用方拿到新 plan（幂等）。
+		return engine.nativeOpenPlayback(ctx, choice)
+	}
+	choice.index = index
 	return engine.nativeOpenPlayback(ctx, choice)
 }
 

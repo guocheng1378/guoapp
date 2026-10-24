@@ -6,6 +6,9 @@ import 'catalog_filters.dart';
 import 'core_bridge.dart';
 import 'detail_screen.dart';
 import 'featured_catalog.dart';
+import 'fog_tint_sampler.dart';
+import 'fog_tuning.dart';
+import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -64,6 +67,20 @@ class _RankingsScreenState extends State<RankingsScreen> {
   String? _error;
   String _updated = '';
 
+  /// 接近度信号（主页同款真值）：滚动距离/50 clamp 0..1，驱动顶栏雾玻璃
+  /// 岛白描边亮起；滚回顶部熄灭。同值不通知，滚动稳态零开销。
+  final ValueNotifier<double> _prox = ValueNotifier<double>(0);
+
+  /// 雾面动态取色采样色（null=纯白雾）：FogTintSampler 节流采样内容区
+  /// 像素平均色，驱动顶部雾带染色（调参台 tintMix 控制浓度，与主页同源）。
+  final ValueNotifier<Color?> _fogTint = ValueNotifier<Color?>(null);
+
+  /// 调参台「雾面高度」延伸量：雾面挂点高度随之增减（0=现状）。仅此
+  /// 参数需要整页 rebuild（挂点高度变化），其余维度由 TopFog 内部监听
+  /// 自行重建。初值直接读 store 对齐——主页以 0 起步靠后续变化通知
+  /// 补同步，榜单页冷启动即取真值，不丢首帧。
+  double _fogHeight = FogTuningStore.state.value.fogHeight;
+
   /// 当前豆瓣榜内部分组（电影 / 剧集 / 综艺 / 站源），空 = 无需分组。
   String _kind = '';
 
@@ -115,16 +132,112 @@ class _RankingsScreenState extends State<RankingsScreen> {
     super.initState();
     _scroll.addListener(_onScroll);
     widget.repository.catalogUpdates.addListener(_metadataChanged);
+    FogTuningStore.state.addListener(_onFogTuning);
     _initialize();
   }
 
   @override
   void dispose() {
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
+    FogTuningStore.state.removeListener(_onFogTuning);
     _generation++;
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
+    _prox.dispose();
+    _fogTint.dispose();
     super.dispose();
+  }
+
+  /// 调参台「雾面高度」变化回调：值变了才 setState（雾面挂点高度需
+  /// 整页 rebuild）；拖动其它滑块零开销（主页同款）。
+  void _onFogTuning() {
+    final h = FogTuningStore.state.value.fogHeight;
+    if (h != _fogHeight && mounted) setState(() => _fogHeight = h);
+  }
+
+  /// 雾面挂点实际高度：负档收窄（底缘上移，最少收到 0），正档向下
+  /// 延伸盖住列表顶部；clamp≥0 防负高度断言（主页同款）。
+  double _fogBandHeight(double base) {
+    final h = base + _fogHeight;
+    return h < 0 ? 0 : h;
+  }
+
+  /// 接近度信号更新（主页同款）：滚动距离/50 clamp 0..1。走
+  /// ScrollNotification 冒泡，横滑通知过滤掉。
+  bool _onBodyScroll(ScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    _prox.value = (n.metrics.pixels / 50).clamp(0.0, 1.0);
+    return false;
+  }
+
+  /// 主页同款雾化 body（手机/桌面）：沉浸延伸 + 动态取色 + 接近度监
+  /// 听；TV 走原样 SafeArea（遥控焦点链不动）。
+  ///
+  /// 雾带挂在吸顶筛选头内（_pinnedFiltersBar，与主页 tab0 同构）：整
+  /// 条盖住状态栏→顶栏→筛选行，内容滚动穿到其后方时被糊化提亮、色跟
+  /// 内容走——这正是 flexibleSpace 挂法在无沉浸延伸页面上做不到的
+  ///（雾面背后没有内容可采样，只剩死白蒙）。
+  Widget _fogBody({
+    required bool floatingFog,
+    required double topInset,
+    required Widget child,
+  }) {
+    if (!floatingFog) return SafeArea(top: false, child: child);
+    return FogTintSampler(
+      tint: _fogTint,
+      // 采样行带避开顶部雾带自身（防反馈循环），与首页接线同参。
+      sampleBandStart: 0.30,
+      sampleBandEnd: 0.62,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onBodyScroll,
+        child: Stack(
+          children: [
+            // 主页铁律（home_screen._catalogFloating）：滚动视口必须从
+            // 屏幕顶端 y=0 铺满，内容上滑才能穿进雾带后方被糊化；初始
+            // 下移交给吸顶头自身 extent。视口压在 topInset 处会被上边
+            // 缘裁剪成「雾面背后只有背景色」的假透（糊一块死背景堵在
+            // 顶上）。雾带在吸顶头内（pinned 首位 sliver），不再外挂。
+            Positioned.fill(child: SafeArea(top: false, child: child)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 吸顶筛选头（主页 _pinnedFiltersBar 同构）：雾面整条盖住吸顶头
+  /// （状态栏→顶栏→筛选行均匀一块，底缘硬切），筛选行浮在雾面之上。
+  /// 布局高度只随正档雾延伸增长（负档只缩雾，不裁筛选行）。
+  Widget _pinnedFiltersBar(
+    BuildContext context, {
+    required double topInset,
+    required double rowsExtent,
+    required List<Widget> rows,
+  }) {
+    return SizedBox(
+      height: topInset + rowsExtent + (_fogHeight > 0 ? _fogHeight : 0),
+      child: Stack(
+        children: [
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: _fogBandHeight(topInset + rowsExtent),
+            child: ValueListenableBuilder<Color?>(
+              valueListenable: _fogTint,
+              builder: (_, tint, _) => TopFog(tint: tint),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(top: topInset),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final row in rows) row],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _onScroll() {
@@ -151,16 +264,14 @@ class _RankingsScreenState extends State<RankingsScreen> {
     try {
       final fetched = await widget.repository.rankingBoards();
       if (!mounted || generation != _generation) return;
-      // 未解锁时黄果类/成人类榜不入 _boards：分类行、类型行、榜行与
-      // 选中回落全部基于过滤后的列表（initialCategory 命中隐藏类时
-      // 自动回落到第一个可见分类）。
-      final boards = fetched.where(_boardVisible).toList();
-      final categories = _categoriesOf(boards);
-      final category = categories.any(
-            (category) => category.id == widget.initialCategory,
-          )
-          ? widget.initialCategory
-          : (categories.firstOrNull?.id ?? '');
+      // 强隔离：榜单页只展示主页当前大类（initialCategory）的主榜，其他类
+      // 一律不出现、也不提供切换入口。受限类（黄果/成人）未解锁时由
+      // _boardVisible 过滤掉，当前类无榜则走空态渲染（不回落其它类）。
+      final category = widget.initialCategory;
+      final boards = fetched
+          .where(_boardVisible)
+          .where((board) => _categoryOf(board) == category)
+          .toList();
       final kind = _kindsOf(boards, category).firstOrNull ?? '';
       setState(() {
         _boards = boards;
@@ -230,9 +341,10 @@ class _RankingsScreenState extends State<RankingsScreen> {
   }
 
   bool _passes(Drama drama) =>
-      // 豆瓣榜条目不走站源开关（榜单专用源，无播放链路，仅参考展示）。
+      // 榜单条目是只读参考数据（不涉及播放/下载授权），仅按变体白名单放行，
+      // 不走站源开关：关闭某源不影响其榜单展示。
       SourceSite.isRankingOnly(drama.source) ||
-      widget.store.allowsSource(drama.source);
+      SourceSite.isAvailable(drama.source);
 
   bool _isFollowing(Drama drama) => widget.store.isFavorite(drama.id);
 
@@ -323,190 +435,299 @@ class _RankingsScreenState extends State<RankingsScreen> {
         .toList();
     final rows = items;
     final busy = _loading || _more;
+    // 主页同款雾化（手机/桌面）：沉浸顶栏 + 定高雾带（「雾面高度」
+    // 参数响应）+ 动态取色 + 雾玻璃岛顶栏 + 接近度描边；TV 保持原
+    // AppBar（遥控焦点链不动，雾面沿用 flexibleSpace TopFog）。
+    final floatingFog = !television;
+    final topInset = MediaQuery.paddingOf(context).top + 56.0;
+    final refresh = RefreshAction(
+      loading: busy,
+      tooltip: '更新榜单',
+      onPressed: _board == null ? _initialize : () => _load(force: true),
+    );
+    // 三条筛选行 / 描述 / 进度与错误行：TV（Column）与手机/桌面雾化
+    //（全屏 slivers）两个容器共用同一组行组件，只构造一次。
+    final categoryRow = categoryRowVisible
+        ? CatalogFilters(
+            key: const ValueKey('ranking-categories'),
+            categories: categories,
+            category: _category,
+            remoteKey: _categoriesKey,
+            remoteAutofocus: television,
+            proxListenable: floatingFog ? _prox : null,
+            onExitDown: television
+                ? () => (kindRowVisible ? _kindsKey : _boardsKey)
+                    .currentState
+                    ?.focusCurrent()
+                : null,
+            onCategory: _selectCategory,
+            onRetry: _initialize,
+          )
+        : null;
+    final kindRow = kindRowVisible
+        ? CatalogFilters(
+            key: ValueKey('ranking-kinds-$_category'),
+            categories: [
+              for (final kind in kinds) CatalogCategory(kind, kind),
+            ],
+            category: _kind,
+            remoteKey: _kindsKey,
+            remoteAutofocus: television && !categoryRowVisible,
+            proxListenable: floatingFog ? _prox : null,
+            onExitUp: television && categoryRowVisible
+                ? () => _categoriesKey.currentState?.focusCurrent()
+                : null,
+            onExitDown: television
+                ? () => _boardsKey.currentState?.focusCurrent()
+                : null,
+            onCategory: _selectKind,
+            onRetry: _initialize,
+          )
+        : null;
+    final boardRow = boards.isNotEmpty
+        ? CatalogFilters(
+            key: ValueKey(
+              kindRowVisible
+                  ? 'ranking-boards-$_category-$_kind'
+                  : categoryRowVisible
+                  ? 'ranking-boards-$_category'
+                  : 'ranking-boards',
+            ),
+            categories: [
+              for (final board in boards)
+                CatalogCategory(board.id, board.name),
+            ],
+            category: _board!.id,
+            remoteKey: _boardsKey,
+            remoteAutofocus:
+                television && !categoryRowVisible && !kindRowVisible,
+            proxListenable: floatingFog ? _prox : null,
+            onExitUp: television && (categoryRowVisible || kindRowVisible)
+                ? () => (kindRowVisible ? _kindsKey : _categoriesKey)
+                    .currentState
+                    ?.focusCurrent()
+                : null,
+            onExitDown: television
+                ? () => _listKey.currentState?.focusCurrent()
+                : null,
+            onCategory: (id) => _selectBoardId(id),
+            onRetry: () => _load(force: true),
+          )
+        : null;
+    // 吸顶筛选行集合（手机/桌面钉在顶栏正下方，TV 保持原 Column）：
+    // 主页吸顶分类条同构——雾面整条盖住吸顶头，描述行与榜单条目上滑
+    // 从其后方穿过被糊化（「让界面穿过去」）。
+    final pinnedRows = [
+      ?categoryRow,
+      ?kindRow,
+      ?boardRow,
+    ];
+    // 吸顶头内容高度：可见行高之和 + 末行与内容的呼吸；行高单一来源
+    // CatalogFilters.barHeight（与主页同口径，含系统字号缩放）。
+    final pinnedRowsExtent = floatingFog && pinnedRows.isNotEmpty
+        ? pinnedRows.length * CatalogFilters.barHeight(context) + 10.0
+        : 0.0;
+    final descriptionRow = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          [
+            _board?.description ?? '',
+            if (_updated.isNotEmpty) _updated,
+          ].join(' ').trim(),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ),
+    );
+    final progressRow = busy && rows.isNotEmpty
+        ? const LinearProgressIndicator(minHeight: 2)
+        : null;
+    final errorRow = _error != null && rows.isNotEmpty
+        ? Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => _load(more: _failedMore, force: true),
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
+          )
+        : null;
     return Scaffold(
+      extendBodyBehindAppBar: floatingFog,
       appBar: AppBar(
-        flexibleSpace: const TopFog(),
-        title: const Text('榜单'),
+        // 手机/桌面：雾面由 body 定高雾带承担（与主页 tab1-3 同构），
+        // flexibleSpace 不再重复挂；TV 保持原样。
+        flexibleSpace: floatingFog ? null : const TopFog(),
+        title: floatingFog
+            ? FogPill(
+                prox: _prox,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: const Text('榜单'),
+                ),
+              )
+            : const Text('榜单'),
         actions: [
-          RefreshAction(
-            loading: busy,
-            tooltip: '更新榜单',
-            onPressed: _board == null ? _initialize : () => _load(force: true),
-          ),
+          if (floatingFog) FogPill(prox: _prox, child: refresh) else refresh,
         ],
       ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            if (categoryRowVisible)
-              CatalogFilters(
-                key: const ValueKey('ranking-categories'),
-                categories: categories,
-                category: _category,
-                remoteKey: _categoriesKey,
-                remoteAutofocus: television,
-                onExitDown: television
-                    ? () => (kindRowVisible
-                                ? _kindsKey
-                                : _boardsKey)
-                            .currentState
-                            ?.focusCurrent()
-                    : null,
-                onCategory: _selectCategory,
-                onRetry: _initialize,
-              ),
-            if (kindRowVisible)
-              CatalogFilters(
-                key: ValueKey('ranking-kinds-$_category'),
-                categories: [
-                  for (final kind in kinds) CatalogCategory(kind, kind),
-                ],
-                category: _kind,
-                remoteKey: _kindsKey,
-                remoteAutofocus: television && !categoryRowVisible,
-                onExitUp: television && categoryRowVisible
-                    ? () => _categoriesKey.currentState?.focusCurrent()
-                    : null,
-                onExitDown: television
-                    ? () => _boardsKey.currentState?.focusCurrent()
-                    : null,
-                onCategory: _selectKind,
-                onRetry: _initialize,
-              ),
-            if (boards.isNotEmpty)
-              CatalogFilters(
-                key: ValueKey(
-                  kindRowVisible
-                      ? 'ranking-boards-$_category-$_kind'
-                      : categoryRowVisible
-                      ? 'ranking-boards-$_category'
-                      : 'ranking-boards',
+      body: _fogBody(
+        floatingFog: floatingFog,
+        topInset: topInset,
+        child: floatingFog
+            // 手机/桌面雾化：单一全屏 CustomScrollView（主页
+            // _catalogFloating 同构）——视口从 y=0 铺满，筛选行吸顶、
+            // 描述与榜单条目上滑穿进雾带后方被糊化。TV 分支（else）
+            // 保持原 Column，遥控焦点链不动。
+            ? FogRefresh(
+                // 胶囊停在吸顶筛选行下方：顶栏+吸顶筛选行总高再留 8px
+                // 间隙，雾面胶囊不罩到筛选行（与主页悬浮视图同构）。
+                displacement: topInset + pinnedRowsExtent + 8,
+                // 筛选行吸顶层：钉在原位不随下拉平移（与主页悬浮视图
+                // 同构，真机定调「分组不跟着下来，刷新图标在白区」）。
+                header: _pinnedFiltersBar(
+                  context,
+                  topInset: topInset,
+                  rowsExtent: pinnedRowsExtent,
+                  rows: pinnedRows,
                 ),
-                categories: [
-                  for (final board in boards)
-                    CatalogCategory(board.id, board.name),
-                ],
-                category: _board!.id,
-                remoteKey: _boardsKey,
-                remoteAutofocus:
-                    television && !categoryRowVisible && !kindRowVisible,
-                onExitUp: television && (categoryRowVisible || kindRowVisible)
-                    ? () => (kindRowVisible
-                                ? _kindsKey
-                                : _categoriesKey)
-                            .currentState
-                            ?.focusCurrent()
-                    : null,
-                onExitDown: television
-                    ? () => _listKey.currentState?.focusCurrent()
-                    : null,
-                onCategory: (id) => _selectBoardId(id),
-                onRetry: () => _load(force: true),
-              ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  [
-                    _board?.description ?? '',
-                    if (_updated.isNotEmpty) _updated,
-                  ].join(' ').trim(),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-            if (busy && rows.isNotEmpty)
-              const LinearProgressIndicator(minHeight: 2),
-            if (_error != null && rows.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _error!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                headerExtent:
+                    topInset +
+                    pinnedRowsExtent +
+                    (_fogHeight > 0 ? _fogHeight : 0),
+                onRefresh: () {
+                  HapticFeedback.mediumImpact();
+                  return _load(force: true);
+                },
+                child: CustomScrollView(
+                  controller: _scroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    // 吸顶筛选头已挪到 FogRefresh.header 吸顶层（钉在
+                    // 原位不随下拉平移）；视口内留等高占位，描述行/榜单
+                    // 条目仍从其下方起排、上滑从雾面后方穿过，滚动语义
+                    // 不变。
+                    SliverToBoxAdapter(
+                      child: SizedBox(
+                        height:
+                            topInset +
+                            pinnedRowsExtent +
+                            (_fogHeight > 0 ? _fogHeight : 0),
+                      ),
+                    ),
+                    SliverToBoxAdapter(child: descriptionRow),
+                    if (progressRow != null)
+                      SliverToBoxAdapter(child: progressRow),
+                    if (errorRow != null) SliverToBoxAdapter(child: errorRow),
+                    if (busy && rows.isEmpty)
+                      const SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (rows.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: StatusPanel(
+                          title: _error == null
+                              ? '暂无榜单内容'
+                              : '榜单暂时无法加载',
+                          message: _error ?? '当前榜单暂无可显示的内容。',
+                          onRetry: _board == null
+                              ? _initialize
+                              : () => _load(force: true),
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                        sliver: SliverList.builder(
+                          key: ValueKey('ranking-${_board!.id}'),
+                          itemCount: rows.length + 1,
+                          itemBuilder: (context, index) {
+                            if (index == rows.length) {
+                              return Center(
+                                child: _more
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: CircularProgressIndicator(),
+                                      )
+                                    : _hasMore
+                                    ? OutlinedButton(
+                                        onPressed: () => _load(more: true),
+                                        child: const Text('加载更多'),
+                                      )
+                                    : const Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: Text('已显示全部榜单'),
+                                      ),
+                              );
+                            }
+                            return _rankTile(rows[index]);
+                          },
                         ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: busy
-                          ? null
-                          : () => _load(more: _failedMore, force: true),
-                      child: const Text('重试'),
-                    ),
                   ],
                 ),
+              )
+            : Column(
+                children: [
+                  ?categoryRow,
+                  ?kindRow,
+                  ?boardRow,
+                  descriptionRow,
+                  ?progressRow,
+                  ?errorRow,
+                  Expanded(
+                    child: busy && rows.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : rows.isEmpty
+                        ? StatusPanel(
+                            title: _error == null
+                                ? '暂无榜单内容'
+                                : '榜单暂时无法加载',
+                            message: _error ?? '当前榜单暂无可显示的内容。',
+                            onRetry: _board == null
+                                ? _initialize
+                                : () => _load(force: true),
+                          )
+                        // floatingFog=false 只可能是 TV（floatingFog=
+                        // !television），列表固定 RemoteList 保焦点链。
+                        : RemoteList(
+                            key: _listKey,
+                            itemKeys: [
+                              for (final row in rows)
+                                '${row.rank}-${row.drama.id}',
+                            ],
+                            itemExtent: 140,
+                            spacing: 10,
+                            controller: _scroll,
+                            onExitUp:
+                                () => _boardsKey.currentState?.focusCurrent(),
+                            itemBuilder: (_, index, node, onFocus) {
+                              return _rankTile(
+                                rows[index],
+                                focusNode: node,
+                                onFocus: onFocus,
+                              );
+                            },
+                          ),
+                  ),
+                ],
               ),
-            Expanded(
-              child: busy && rows.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : rows.isEmpty
-                  ? StatusPanel(
-                      title: _error == null ? '暂无榜单内容' : '榜单暂时无法加载',
-                      message: _error ?? '当前榜单暂无可显示的内容。',
-                      onRetry: _board == null
-                          ? _initialize
-                          : () => _load(force: true),
-                    )
-                  : television
-                  ? RemoteList(
-                      key: _listKey,
-                      itemKeys: [
-                        for (final row in rows) '${row.rank}-${row.drama.id}',
-                      ],
-                      itemExtent: 140,
-                      spacing: 10,
-                      controller: _scroll,
-                      onExitUp: () => _boardsKey.currentState?.focusCurrent(),
-                      itemBuilder: (_, index, node, onFocus) {
-                        return _rankTile(
-                          rows[index],
-                          focusNode: node,
-                          onFocus: onFocus,
-                        );
-                      },
-                    )
-                  : RefreshIndicator(
-                      onRefresh: () {
-                        HapticFeedback.mediumImpact();
-                        return _load(force: true);
-                      },
-                      child: ListView.builder(
-                        key: ValueKey('ranking-${_board!.id}'),
-                        controller: _scroll,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-                        itemCount: rows.length + 1,
-                        itemBuilder: (context, index) {
-                          if (index == rows.length) {
-                            return Center(
-                              child: _more
-                                  ? const Padding(
-                                      padding: EdgeInsets.all(16),
-                                      child: CircularProgressIndicator(),
-                                    )
-                                  : _hasMore
-                                  ? OutlinedButton(
-                                      onPressed: () => _load(more: true),
-                                      child: const Text('加载更多'),
-                                    )
-                                  : const Padding(
-                                      padding: EdgeInsets.all(16),
-                                      child: Text('已显示全部榜单'),
-                                    ),
-                            );
-                          }
-                          return _rankTile(rows[index]);
-                        },
-                      ),
-                    ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -684,3 +905,5 @@ class _RankingsScreenState extends State<RankingsScreen> {
     );
   }
 }
+
+

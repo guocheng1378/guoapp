@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -213,27 +214,26 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 	}
 	quick := huangdouQuickHosts()
 	resultCh := make(chan error, len(quick))
+	// 并发镜像下只有一个 goroutine 允许写 out：resultCh 容量等于并发数，
+	// 缓冲永远装得下所有发送，下方 select 的 default 不会拦截第二个
+	// 成功者——若无 CAS，多个成功镜像会同时执行 *out = dec 与主流程
+	// 读 out（call 返回后调用方立即反序列化）构成数据竞争。
+	var winner atomic.Bool
 	for _, host := range quick {
 		go func(h string) {
 			cc := *c
 			cc.host = "https://" + h
 			var dec any
 			err := cc.callOnceAllKeys(ctx, path, data, &dec)
-			if err == nil {
-				// 只有第一个成功的把结果写给 out，其他的仍返回 nil 但不覆盖
-				select {
-				case resultCh <- nil:
-					*out = dec
-					c.d.providerMu.Lock()
-					c.d.providerHosts[sourceHuangdou] = cc.host
-					c.d.providerMu.Unlock()
-				default:
-				}
-			} else {
-				select {
-				case resultCh <- err:
-				default:
-				}
+			if err == nil && winner.CompareAndSwap(false, true) {
+				*out = dec
+				c.d.providerMu.Lock()
+				c.d.providerHosts[sourceHuangdou] = cc.host
+				c.d.providerMu.Unlock()
+			}
+			select {
+			case resultCh <- err:
+			default:
 			}
 		}(host)
 	}

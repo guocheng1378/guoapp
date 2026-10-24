@@ -35,8 +35,15 @@ ThemeData televisionTheme(ThemeData theme) {
     iconButtonTheme: IconButtonThemeData(
       style: button.copyWith(backgroundColor: focusBackground),
     ),
-    filledButtonTheme: FilledButtonThemeData(style: button),
-    outlinedButtonTheme: OutlinedButtonThemeData(style: button),
+    // 手机主题的双态玻璃胶囊按钮材质（app_theme pill 配方）继续生效，
+    // TV 只追加焦点环/最小尺寸/字号；ButtonStyle.merge 非空属性以后者为准
+    // （focusSide 未聚焦时返回 null，落到 SDK 默认描边，与既往 TV 行为一致）。
+    filledButtonTheme: FilledButtonThemeData(
+      style: theme.filledButtonTheme.style?.merge(button) ?? button,
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: theme.outlinedButtonTheme.style?.merge(button) ?? button,
+    ),
     textButtonTheme: TextButtonThemeData(
       style: button.copyWith(backgroundColor: focusBackground),
     ),
@@ -58,7 +65,8 @@ class AppDevice {
   static Future<AppDevice> detect({
     AppDevice fallback = const AppDevice(),
   }) async {
-    if (defaultTargetPlatform != TargetPlatform.android) {
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.windows) {
       return const AppDevice();
     }
     try {
@@ -126,6 +134,23 @@ class AppLayout extends InheritedWidget {
   static String versionOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppLayout>()?.version ??
       appVersion;
+
+  /// 手机横屏（宽>高且逻辑短边 <600，如折叠屏展开态 869x400）。
+  /// 用于首页横屏沉浸+紧凑化。桌面（窗口尺寸任意）与 TV 恒 false；
+  /// 测试宿主 800x600 短边=600 恒 false，既有测试布局不受影响。
+  static bool landscapePhone(BuildContext context) {
+    if (isTelevision(context)) return false;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.windows:
+      case TargetPlatform.macOS:
+      case TargetPlatform.linux:
+        return false;
+      default:
+        break;
+    }
+    final size = MediaQuery.sizeOf(context);
+    return size.width > size.height && size.shortestSide < 600;
+  }
 
   @override
   bool updateShouldNotify(AppLayout oldWidget) =>

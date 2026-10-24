@@ -81,7 +81,7 @@ func (d *Downloader) duanjuBaseURL(source string) string {
 	if !found {
 		return ""
 	}
-	if configured := d.providerHosts[canonicalProviderSource(source)]; configured != "" {
+	if configured := d.providerHostOverride(canonicalProviderSource(source)); configured != "" {
 		return strings.TrimRight(configured, "/")
 	}
 	return strings.TrimRight(spec.Base, "/")

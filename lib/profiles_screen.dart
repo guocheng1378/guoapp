@@ -82,9 +82,9 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
           ),
         );
         if (accepted != true || !mounted) return;
-        final pin = await showDialog<String>(
-          context: context,
-          builder: (_) => const _PasswordDialog(name: '管理员（原配置或备份中的密码）'),
+        final pin = await _promptPassword(
+          context,
+          '管理员（原配置或备份中的密码）',
         );
         if (pin == null || !mounted) return;
         await widget.store.recoverBackup(content, pin: pin);
@@ -99,10 +99,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
   Future<void> _switch(LocalProfile profile) async {
     String pin = '';
     if (profile.protected) {
-      final value = await showDialog<String>(
-        context: context,
-        builder: (_) => _PasswordDialog(name: profile.name),
-      );
+      final value = await _promptPassword(context, profile.name);
       if (value == null || !mounted) return;
       pin = value;
     }
@@ -142,6 +139,45 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 密码输入浮层。
+  ///
+  /// TV/桌面走系统弹窗（玻璃壳 + AlertDialog），遥控焦点导航可靠。
+  /// 手机端自绘浮层：深色遮罩 + 屏幕居中小卡。
+  /// 不用 [showDialog] 的原因有二——它按键盘高度把弹窗顶到屏幕上沿
+  /// （观感像被挤到顶端、下方留大片空白），且遮罩颜色不可控；这里自己
+  /// 控制遮罩与定位，卡片始终停在屏幕中线，键盘升起也不会把它顶走。
+  Future<String?> _promptPassword(BuildContext context, String name) {
+    if (AppLayout.isTelevision(context)) {
+      return showDialog<String>(
+        context: context,
+        builder: (_) => _PasswordDialog(name: name),
+      );
+    }
+    return showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '登录 $name',
+      barrierColor: Colors.black.withValues(alpha: 0.32),
+      transitionDuration: const Duration(milliseconds: 180),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.94, end: 1).animate(curved),
+            alignment: Alignment.center,
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) =>
+          _PasswordDialog(name: name),
+    );
   }
 
   String _permissionsLabel(LocalProfile profile) {
@@ -317,64 +353,80 @@ class _PasswordDialogState extends State<_PasswordDialog> {
         ),
       );
     }
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final scheme = Theme.of(context).colorScheme;
-    return GlassSurface(
-      radius: 20,
-      topHighlight: true,
-      // 输入面是连续文字+输入框，底色实一档保可读（同关于浮卡口径）。
-      tint: GlassTint.card,
-      child: Material(
-        type: MaterialType.transparency,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 240),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '登录 ${widget.name}',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+    // 手机端：整屏浮层内居中的小卡（宽 280）。卡片位置不参与键盘布局，
+    // 键盘升起时仍停在屏幕中线，不会被顶到屏幕上沿。
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: GlassSurface(
+                    radius: 20,
+                    topHighlight: true,
+                    // 输入面是连续文字+输入框，底色实一档保可读（同关于浮卡口径）。
+                    tint: GlassTint.card,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '登录 ${widget.name}',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '输入密码解锁该用户',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                            const SizedBox(height: 14),
+                            TextField(
+                              controller: _pin,
+                              autofocus: true,
+                              obscureText: true,
+                              decoration: const InputDecoration(
+                                labelText: '密码',
+                              ),
+                              onSubmitted: (value) =>
+                                  Navigator.pop(context, value),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('取消'),
+                                ),
+                                const SizedBox(width: 4),
+                                FilledButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, _pin.text),
+                                  child: const Text('登录'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '输入密码解锁该用户',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _pin,
-                  autofocus: true,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: '密码'),
-                  onSubmitted: (value) => Navigator.pop(context, value),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('取消'),
-                    ),
-                    const SizedBox(width: 4),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context, _pin.text),
-                      child: const Text('登录'),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

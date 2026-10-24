@@ -204,6 +204,9 @@ class DanmakuController extends ChangeNotifier {
 
   void _ensureWindow() {
     if (!visible || _buffering || _pendingStart != null) return;
+    // 换集瞬间 setPlan(null) 后 _plan 可能为空；_load 里的 _plan! 在
+    // try 块外，缺这个守卫会反复抛未捕获异常
+    if (_plan == null) return;
     final page = _covering(positionMs);
     var start = positionMs ~/ danmakuWindowMs * danmakuWindowMs;
     if (page == null && _pages.containsKey(start)) start = positionMs;

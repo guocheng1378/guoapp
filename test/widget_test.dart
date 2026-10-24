@@ -250,8 +250,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byTooltip('VIP：隐藏'), findsOneWidget);
     } else {
-      // 默认变体单类：长按不弹类选择菜单。
-      expect(find.text('短剧类'), findsNothing);
+      // 默认变体单类：长按仍弹菜单（末尾固定「电视直播」条目，
+      // 见 _pickSourceCategory；守卫自 2171 起移除），但只有一个
+      // 分类项，没有类可选择。
+      expect(find.text('短剧类'), findsOneWidget);
+      expect(find.text('电视直播'), findsOneWidget);
       expect(find.text('黄果类'), findsNothing);
     }
   });

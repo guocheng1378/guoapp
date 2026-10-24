@@ -13,7 +13,9 @@ import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'glass_preferences.dart';
+import 'fog_tuning.dart';
 import 'home_screen.dart';
+import 'live_route_memory.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
 import 'media_library.dart';
@@ -22,6 +24,7 @@ import 'lan_controller.dart';
 import 'player_screen.dart';
 import 'video_enhancement_assets.dart';
 import 'app_icons.dart';
+import 'remote_notice.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -115,6 +118,8 @@ class _AppBootstrapState extends State<AppBootstrap>
     try {
       final preferences = await SharedPreferences.getInstance();
       await GlassPreferences.load(preferences);
+      await FogTuningStore.load(preferences);
+    await LiveRouteMemory.load(preferences);
       await _refreshDevice();
       await repository.initialize();
       if (mounted) {
@@ -133,6 +138,7 @@ class _AppBootstrapState extends State<AppBootstrap>
                 : 'phone',
           );
           LanController.current = link;
+          LanController.currentLink.value = link;
           link.openPlayback = (request) async {
             final epoch = request.profileEpoch;
             if (request.cancelled ||
@@ -265,12 +271,15 @@ class DuanjuApp extends StatelessWidget {
     home: store != null
         ? (store!.locked
             ? ProfilesScreen(store: store!, locked: true)
-            : HomeScreen(
-                key: ValueKey(
-                  'profile-${store!.profile.id}-${store!.profileEpoch}',
+            : RemoteNoticeTrigger(
+                version: version,
+                child: HomeScreen(
+                  key: ValueKey(
+                    'profile-${store!.profile.id}-${store!.profileEpoch}',
+                  ),
+                  repository: repository,
+                  store: store!,
                 ),
-                repository: repository,
-                store: store!,
               ))
         : Scaffold(
             body: Center(

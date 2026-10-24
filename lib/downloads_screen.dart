@@ -1039,7 +1039,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       children: [
         if (widget.embedded)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 4, 0),
+            // 手机端首页 extendBodyBehindAppBar：嵌入的标题等固定行必须让出
+            // 悬浮玻璃顶栏整体高度（topInset=状态栏+顶栏），与 SavedLibrary 头部同款。
+            padding: EdgeInsets.fromLTRB(16, 4 + widget.topInset, 4, 0),
             child: Row(
               children: [
                 Expanded(
@@ -1168,9 +1170,11 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       },
                 )
               : ListView.builder(
+                  // 顶部只留 4：topInset 已由上方嵌入标题行让出，避免双重留白；
+                  // 底部仍要 bottomInset 让开悬浮玻璃底栏（无批量操作栏时的滚动尽头）。
                   padding: EdgeInsets.fromLTRB(
                     12,
-                    4 + widget.topInset,
+                    4,
                     12,
                     20 + widget.bottomInset,
                   ),
@@ -1182,7 +1186,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   },
                 ),
         ),
-        if (_selecting) television ? _televisionBatchBar() : _batchBar(),
+        if (_selecting)
+          Padding(
+            // 手机端悬浮玻璃底栏（extendBody）同理：批量操作栏让出 bottomInset。
+            padding: EdgeInsets.only(bottom: widget.bottomInset),
+            child: television ? _televisionBatchBar() : _batchBar(),
+          ),
       ],
     );
     if (widget.embedded) return body;

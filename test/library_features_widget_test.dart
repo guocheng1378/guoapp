@@ -88,6 +88,35 @@ void main() {
     },
   );
 
+  testWidgets('find-source menu item forwards the drama title', (tester) async {
+    viewport(tester, const Size(390, 844));
+    final store = await create();
+    final repository = LibraryFeatureRepository();
+    await store.setFollowStatus(first, FollowStatus.watching);
+    final found = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SavedLibrary(
+            repository: repository,
+            store: store,
+            history: false,
+            onOpen: (_) {},
+            onContinue: (_) {},
+            onFindSource: (title) => found.add(title),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('drama-actions-${first.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('换个源找'));
+    await tester.pumpAndSettle();
+    expect(found, [first.title]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'follow filters show unread updates until explicitly marked read',
     (tester) async {

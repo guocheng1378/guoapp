@@ -220,7 +220,12 @@ class PlayerInteractions extends ChangeNotifier {
     _boosting = false;
     if (boosted) {
       _easeRateBack();
-      if (!silent) hint('恢复 ${baseSpeed()} 倍速');
+      if (!silent) {
+        // 提示照弹，但安静期内不把工具栏顶出来（与滑动 seek 松手同一套
+        // 机制），否则松开倍速的瞬间控制条又弹回画面上
+        _quietUntil = DateTime.now().add(const Duration(milliseconds: 800));
+        hint('恢复 ${baseSpeed()} 倍速');
+      }
     } else if (tap && wasKeyboard) {
       seek(5);
     }
@@ -327,17 +332,17 @@ class PlayerInteractions extends ChangeNotifier {
     if (_swipeAction == SwipeAction.none) {
       final absDx = diff.dx.abs();
       final absDy = diff.dy.abs();
-      // 水平位移显著大于垂直 → seek
+      // 水平位移显著大于垂直 → seek。
       if (absDx > absDy * 1.2 && absDx > 15) {
         _swipeAction = SwipeAction.seek;
         _pauseForSeekPreview();
       } else if (absDy > absDx * 1.2 && absDy > 15) {
-        // 垂直位移：左 35% 亮度 / 右 35% 音量，中间竖滑切上/下集
+        // 垂直位移：左 25% 亮度 / 右 25% 音量，中间竖滑切上/下集
         final x = event.localPosition.dx;
-        if (x < _viewWidth * 0.35) {
+        if (x < _viewWidth * 0.25) {
           _swipeAction = SwipeAction.brightness;
           _initialBrightness = _brightness;
-        } else if (x > _viewWidth * 0.65) {
+        } else if (x > _viewWidth * 0.75) {
           _swipeAction = SwipeAction.volume;
         } else if (onEpisode != null) {
           _swipeAction = SwipeAction.episode;
@@ -533,9 +538,16 @@ class PlayerInteractions extends ChangeNotifier {
     } else if (key == LogicalKeyboardKey.keyM) {
       if (event is KeyDownEvent) toggleMute();
     } else if (key == LogicalKeyboardKey.mediaTrackNext ||
-        key == LogicalKeyboardKey.mediaTrackPrevious) {
+        key == LogicalKeyboardKey.mediaTrackPrevious ||
+        key == LogicalKeyboardKey.keyN ||
+        key == LogicalKeyboardKey.keyP ||
+        key == LogicalKeyboardKey.pageDown ||
+        key == LogicalKeyboardKey.pageUp) {
       if (event is KeyDownEvent && onEpisode != null) {
-        hint(onEpisode!(key == LogicalKeyboardKey.mediaTrackNext ? 1 : -1));
+        final next = key == LogicalKeyboardKey.mediaTrackNext ||
+            key == LogicalKeyboardKey.keyN ||
+            key == LogicalKeyboardKey.pageDown;
+        hint(onEpisode!(next ? 1 : -1));
       }
     } else {
       return KeyEventResult.ignored;

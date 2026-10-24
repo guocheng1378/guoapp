@@ -118,13 +118,13 @@ abstract final class AppTheme {
           borderSide: BorderSide.none,
         ),
       ),
-      // 全 App 胶囊统一「滑动栏瓷面」语言：与 GlassChip / _StoreChip
-      // 同一配方（GlassChipTokens），覆盖所有 Material Chip 系。
+      // 全 App 胶囊统一「双态玻璃胶囊」语言：与 GlassChip / GlassSurface
+      // pill 档同一配方（GlassChipTokens.pill*），覆盖所有 Material Chip 系。
       chipTheme: ChipThemeData(
-        backgroundColor: GlassChipTokens.tint(dark),
-        selectedColor: GlassChipTokens.selected(dark),
+        backgroundColor: GlassChipTokens.pill(dark),
+        selectedColor: GlassChipTokens.pillSelected(dark),
         disabledColor: scheme.surfaceContainer,
-        side: BorderSide(color: GlassChipTokens.edge(dark)),
+        side: BorderSide(color: GlassChipTokens.pillEdge(dark, selected: false)),
         shape: const StadiumBorder(),
         labelStyle: TextStyle(
           color: scheme.onSurface,
@@ -138,6 +138,56 @@ abstract final class AppTheme {
         elevation: 0,
         pressElevation: 0,
         surfaceTintColor: Colors.transparent,
+      ),
+      // 操作按钮统一双态玻璃胶囊材质：主操作（FilledButton）=选中态
+      // 深玻璃+白字，次操作（OutlinedButton）=未选白玻璃+深字+白描边。
+      // 主题层只能给静态色（挂不了 BackdropFilter），半透胶囊色在页面
+      // 底色上自成立，与玻璃开关无关。
+      filledButtonTheme: FilledButtonThemeData(
+        style: ButtonStyle(
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return scheme.onSurface.withValues(alpha: 0.12);
+            }
+            return GlassChipTokens.pillSelected(dark);
+          }),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return scheme.onSurface.withValues(alpha: 0.38);
+            }
+            return GlassChipTokens.onSelected(dark);
+          }),
+          elevation: const WidgetStatePropertyAll(0),
+          shape: const WidgetStatePropertyAll(StadiumBorder()),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return Colors.transparent;
+            }
+            return GlassChipTokens.pill(dark);
+          }),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return scheme.onSurface.withValues(alpha: 0.38);
+            }
+            return scheme.onSurface;
+          }),
+          side: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return BorderSide(
+                color: scheme.onSurface.withValues(alpha: 0.12),
+              );
+            }
+            return BorderSide(
+              color: GlassChipTokens.pillEdge(dark, selected: false),
+            );
+          }),
+          elevation: const WidgetStatePropertyAll(0),
+          shape: const WidgetStatePropertyAll(StadiumBorder()),
+        ),
       ),
       // 弹窗背景透明化：玻璃质感由 GlassDialogShell（lib/glass.dart）接管，
       // 未包外壳的弹窗在深浅主题下仍由 barrier 提供对比度。

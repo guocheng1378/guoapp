@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
+import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -317,11 +318,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 960),
-            child: RefreshIndicator(
+            child: FogRefresh(
               onRefresh: () {
                 HapticFeedback.mediumImpact();
                 return _refresh();
               },
+              // 胶囊停在视口顶 6px（视口顶已在顶栏之下）。
+              displacement: 6,
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
                 children: [

@@ -7,12 +7,69 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// providerHostsHot 是 providerHosts 的包级热更覆盖表（远程配置 sourceConfig
+// 的 providerHosts 键，经 applySourceConfig 校验后由 setProviderHosts 写入）。
+// Downloader 实例内的 providerHosts 是运行时状态（候选线路探测成功后核心还会
+// 回写实测可用域名，最后写入者获胜），所以热更既写透现有引擎、也播种进包级表，
+// 让之后新建的引擎带上最新覆盖。
+var (
+	providerHostsHotMu sync.RWMutex
+	providerHostsHot   map[string]string
+)
+
+// setProviderHosts 热更通用源站域名覆盖表（调用方负责校验；nil 表示清空覆盖）。
+// 值已由 applySourceConfig 规范化为无尾斜杠根地址。
+func setProviderHosts(hosts map[string]string) {
+	providerHostsHotMu.Lock()
+	providerHostsHot = cloneProviderHosts(hosts)
+	providerHostsHotMu.Unlock()
+	nativeState.Lock()
+	engine := nativeState.engine
+	nativeState.Unlock()
+	if engine == nil || engine.downloader == nil {
+		return
+	}
+	downloader := engine.downloader
+	downloader.providerMu.Lock()
+	downloader.providerHosts = cloneProviderHosts(hosts)
+	downloader.providerMu.Unlock()
+}
+
+// providerHostsSeed 快照包级覆盖表，供新建引擎播种。
+func providerHostsSeed() map[string]string {
+	providerHostsHotMu.RLock()
+	defer providerHostsHotMu.RUnlock()
+	return cloneProviderHosts(providerHostsHot)
+}
+
+// cloneProviderHosts 复制覆盖表，避免包级表与引擎运行时状态共享底层存储。
+func cloneProviderHosts(hosts map[string]string) map[string]string {
+	if len(hosts) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(hosts))
+	for source, host := range hosts {
+		out[source] = host
+	}
+	return out
+}
+
+// providerHostOverride 读取指定源的热更/优选域名覆盖（providerMu 保护）。
+func (d *Downloader) providerHostOverride(source string) string {
+	d.providerMu.Lock()
+	host := d.providerHosts[source]
+	d.providerMu.Unlock()
+	return host
+}
 
 type providerMedia struct {
 	credentials *providerMediaCredentials
 	URL         string
+	Label       string
 	Referer     string
 	Duration    time.Duration
 	Playlist    string
@@ -20,6 +77,9 @@ type providerMedia struct {
 	CENCKey     []byte
 	Quality     int
 	Variants    []providerMedia
+	// Official 标记该线路来自站源官方票据（目前只有真果·鉴有官方线）。
+	// 播放器线路面板按它把官方源与第三方源分开：官方线平铺、第三方折叠。
+	Official bool
 }
 
 func (d *Downloader) providerBaseURL(source string) string {
@@ -39,6 +99,10 @@ func (d *Downloader) providerBaseURL(source string) string {
 	default:
 		if spec, found := duanjuSourceSpecFor(source); found {
 			return d.duanjuBaseURL(spec.ID)
+		}
+		// duanju 族之外的源（cloudfront 兜底域等）也支持热更覆盖。
+		if override := d.providerHostOverride(source); override != "" {
+			return strings.TrimRight(override, "/")
 		}
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -72,13 +136,16 @@ func (d *Downloader) providerURLCandidates(raw string) []string {
 	}
 	add(rehostProviderURL(parsed, preferred))
 	configured := d.providerBaseURL(source)
-	add(rehostProviderURL(parsed, configured))
 	if providerSourceForURL(configured) == "" {
+		add(rehostProviderURL(parsed, configured))
 		return candidates
 	}
 	for _, candidate := range providerURLCandidates(raw) {
 		add(candidate)
 	}
+	// 主域排在镜像之后：huangguoai.com 当前半死（间歇超时），
+	// 一次超时会拖慢整个 resolve 链路，只在镜像全部失败时兜底。
+	add(rehostProviderURL(parsed, configured))
 	return candidates
 }
 
@@ -101,11 +168,17 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 		return d.resolveSoraniMedia(ctx, task)
 	}
 	if isDuanjuProviderSource(chapter.Source) {
+		if chapter.Source == sourceDongpiandi {
+			// 真果·鉴：站点推荐线路常失效/过慢，播放期做存活验证与实测换线。
+			return d.resolveDongpiandiMedia(ctx, task)
+		}
 		return d.resolveDuanjuMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)
 	}
+	// 2026-10-20：黄果AI 分集页真实形态是 /video/{id}/ep-{N}/（活页，自带
+	// 该集地址）；「PageURL 为空」的旧任务才需要整合集刷新重建。
 	if chapter.PageURL == "" && chapter.Source == sourceHuangguoAI {
 		if source, sourceID, valid := splitProviderDramaID(task.DramaID); valid {
 			_, chapters, err := d.GetHuangguoChapters(ctx, source, sourceID)
@@ -141,7 +214,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 			media.Referer = client.host + "/home"
 		}
 	}
-	if chapter.PageURL != "" && chapter.Source == sourceHuangguoAI {
+	if chapter.PageURL != "" && chapter.Source == sourceHuangguoAI && !isProviderHTTPMediaURL(media.URL) {
 		responses := &playbackResponseURLs{}
 		pageContext := context.WithValue(ctx, playbackResponseURLsKey{}, responses)
 		body, err := d.fetchProviderText(pageContext, chapter.PageURL, media.Referer)

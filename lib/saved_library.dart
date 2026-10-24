@@ -21,6 +21,7 @@ class SavedLibrary extends StatefulWidget {
     required this.onOpen,
     required this.onContinue,
     this.onDownload,
+    this.onFindSource,
     this.remoteAutofocus = false,
     this.onExitLeft,
     this.onExitUp,
@@ -34,6 +35,10 @@ class SavedLibrary extends StatefulWidget {
   final ValueChanged<Drama> onOpen;
   final ValueChanged<Drama> onContinue;
   final ValueChanged<Drama>? onDownload;
+
+  /// 追剧/最近卡 ⋯ 菜单「换个源找」：回发现页用剧名触发全源搜索；
+  /// 单源变体不传该回调，菜单项自然消失。
+  final ValueChanged<String>? onFindSource;
   final bool remoteAutofocus;
   final VoidCallback? onExitLeft;
   final VoidCallback? onExitUp;
@@ -56,6 +61,12 @@ class _SavedLibraryState extends State<SavedLibrary> {
   void initState() {
     super.initState();
     _healEpisodeCounts();
+    // 打开追剧/最近即预取条目详情（≤12 部）：配合 30 分钟详情缓存，
+    // 用户再点开任何一部都是零网络等待。基类 no-op，测试天然安全。
+    widget.repository.prefetchDetails([
+      ...widget.store.favorites,
+      for (final entry in widget.store.history) entry.drama,
+    ].take(12));
   }
 
   /// 存量自愈：早期版本把部分站源的「总条目/播放量」误当集数存进了追剧
@@ -121,6 +132,9 @@ class _SavedLibraryState extends State<SavedLibrary> {
     onDownload: widget.onDownload == null
         ? null
         : () => widget.onDownload!(drama),
+    onFindSource: widget.onFindSource == null
+        ? null
+        : () => widget.onFindSource!(drama.title),
   );
 
   Widget _tile(Drama drama, {FocusNode? focusNode, VoidCallback? onFocus}) {
@@ -145,6 +159,9 @@ class _SavedLibraryState extends State<SavedLibrary> {
         onDownload: widget.onDownload == null
             ? null
             : () => widget.onDownload!(drama),
+        onFindSource: widget.onFindSource == null
+            ? null
+            : () => widget.onFindSource!(drama.title),
       ),
       badge: badge,
       subtitle: watched == null
@@ -202,23 +219,25 @@ class _SavedLibraryState extends State<SavedLibrary> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: TextField(
-            key: ValueKey(
-              widget.history ? 'history-search' : 'favorites-search',
-            ),
-            controller: _search,
-            onChanged: (_) => setState(() {}),
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: widget.history ? '搜索观看记录' : '搜索追剧',
-              prefixIcon: AppIcon(AppIcons.search),
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: '清空搜索',
-                      onPressed: () => setState(_search.clear),
-                      icon: AppIcon(AppIcons.close),
-                    ),
+          child: RemoteTextInput(
+            child: TextField(
+              key: ValueKey(
+                widget.history ? 'history-search' : 'favorites-search',
+              ),
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: widget.history ? '搜索观看记录' : '搜索追剧',
+                prefixIcon: AppIcon(AppIcons.search),
+                suffixIcon: _search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清空搜索',
+                        onPressed: () => setState(_search.clear),
+                        icon: AppIcon(AppIcons.close),
+                      ),
+              ),
             ),
           ),
         ),

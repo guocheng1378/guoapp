@@ -11,12 +11,14 @@ import 'package:window_manager/window_manager.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'catalog_browser.dart' show dramaIsLongDrama;
 import 'core_bridge.dart';
 import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
 import 'download_picker.dart';
 import 'downloads_screen.dart';
 import 'follow_state.dart';
+import 'glass_menu.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_loader.dart';
@@ -35,7 +37,23 @@ import 'lan_screen.dart';
 import 'video_enhancement.dart';
 import 'video_output_size.dart';
 import 'app_icons.dart';
-import 'motion_tokens.dart';
+
+/// 画面比例档位：自适应/铺满/拉伸直接换 Video 的 fit；带 aspect 的档位
+/// 额外把画面裁进固定比例的框（cover），用来消黑边或统一画面形状。
+enum _PlayerFitMode {
+  contain('自适应', BoxFit.contain, null),
+  cover('铺满裁剪', BoxFit.cover, null),
+  fill('拉伸填满', BoxFit.fill, null),
+  ratio16x9('16:9', BoxFit.cover, 16 / 9),
+  ratio4x3('4:3', BoxFit.cover, 4 / 3),
+  ratio9x16('9:16', BoxFit.cover, 9 / 16);
+
+  const _PlayerFitMode(this.label, this.fit, this.aspect);
+
+  final String label;
+  final BoxFit fit;
+  final double? aspect;
+}
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({
@@ -109,14 +127,22 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _generation = 0;
   int _requestedQuality = 0;
   bool _loading = true;
+  // 切集两阶段：false=还在解析新地址（旧画面暂停定格在屏上），
+  // true=地址已就绪、正在换源出首帧（此刻才允许整幅黑遮罩）。
+  bool _swapping = false;
   bool _forceOnline = false;
   bool _localFailure = false;
   bool _fullscreen = false;
   bool _automaticFullscreenSuppressed = false;
+  // 短剧竖屏播放：进入即竖屏全屏（_portraitFullscreenApplied 守卫只执行一次），
+  // _forceLandscape=用户手动旋转到横屏，再点转回竖屏。
+  bool _forceLandscape = false;
+  bool _portraitFullscreenApplied = false;
   bool _panelOpen = false;
   int _mobileTab = 0;
   bool _autoAdvance = true;
   bool? _systemFullscreen;
+  bool _exitImmersive = false;
   Orientation? _lastOrientation;
   bool _closed = false;
   bool _acceptErrors = false;
@@ -138,6 +164,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   PlaybackPlan? _plan;
   double _speed = 1;
   double _aspectRatio = 9 / 16;
+  _PlayerFitMode _fitMode = _PlayerFitMode.contain;
   double _resumePosition = 0;
   bool _rotating = false;
   bool _television = false;
@@ -152,6 +179,24 @@ class _PlayerScreenState extends State<PlayerScreen>
       !_television &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
+
+  /// 短剧竖屏播放形态：手机端且按单集时长/短剧信号判定为短剧。
+  /// 进入播放器直接竖屏全屏，视频保持原始比例；长剧走原行为。
+  /// 红果详情接口下发每集 vertical 官方标记时优先按标记判定，
+  /// 缺失（非红果源/旧缓存）回退单集时长启发式。
+  bool get _portraitDrama {
+    if (!_mobile) return false;
+    final episodes = widget.detail.episodes;
+    final current = _index >= 0 && _index < episodes.length
+        ? episodes[_index]
+        : null;
+    final vertical = current?.vertical;
+    if (vertical != null) return vertical;
+    return !dramaIsLongDrama(
+      widget.detail.drama,
+      SourceSite.byId(widget.detail.drama.source),
+    );
+  }
   VideoEnhancementController? get _enhancementForUi =>
       _enhancement.supported ? _enhancement : null;
   PlaybackPreferences get _preferences => PlaybackPreferences(
@@ -191,8 +236,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _preloader = PlaybackPreloader(widget.repository);
     _danmaku = DanmakuController(widget.repository)
       ..setEnabled(_danmakuEnabled);
-    // 暂停时进度不再变化，弹幕载入/失败后的状态徽标也要立刻刷新
-    _danmaku.addListener(_danmakuStatusChanged);
     widget.store.addListener(_accessChanged);
     _player =
         widget.playerFactory?.call() ??
@@ -325,12 +368,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     _subscriptions.add(
       _player.stream.videoParams.listen((parameters) {
         final size = videoDisplaySize(parameters);
-        if (size != null && mounted && !_closed) {
-          setState(() {
-            _aspectRatio = size.width / size.height;
-          });
-          _scheduleSystemUi();
+        if (size == null || !mounted || _closed) return;
+        var fallback = false;
+        setState(() {
+          _aspectRatio = size.width / size.height;
+          // 短剧竖屏全屏里混入横屏视频：contain 会上下大黑边，
+          // 自动退回常规形态（横屏设备仍可自动全屏）；用户手动旋转过则尊重。
+          if (_portraitFullscreenApplied &&
+              _fullscreen &&
+              !_forceLandscape &&
+              _aspectRatio >= 1) {
+            _fullscreen = false;
+            fallback = true;
+          }
+        });
+        if (fallback) {
+          unawaited(_syncPlaybackOrientation(fullscreen: false));
         }
+        _scheduleSystemUi();
       }),
     );
     _saveTimer = Timer.periodic(
@@ -364,6 +419,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (handoff != null)
         unawaited(widget.repository.release(handoff.plan.session));
       _loading = false;
+      _swapping = false;
       _error = '播放接收已取消';
     } else {
       _play(
@@ -716,10 +772,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     final duration = state.duration.inMilliseconds;
     final position = state.position.inMilliseconds;
+    // 开播 2 秒、缓冲领先 3 秒就预载下一集：预载只是解析地址+预取首段，
+    // 不必等本集播过半。短剧一集一两分钟，等播过半常等于没预载；
+    // 2 分钟凭证过期由 preloader 自行重签。
     if (duration <= 0 ||
         position < 2000 ||
-        (position < duration ~/ 2 && duration - position > 45000) ||
-        state.buffer.inMilliseconds - position < 5000) {
+        state.buffer.inMilliseconds - position < 3000) {
       return;
     }
     _preloader.prepare(
@@ -727,12 +785,6 @@ class _PlayerScreenState extends State<PlayerScreen>
       widget.detail.episodes[_index + 1],
       quality: _requestedQuality,
     );
-  }
-
-  /// 弹幕状态变化后刷新控制栏徽标（暂停时进度不动，也要立刻可见）
-  void _danmakuStatusChanged() {
-    if (!mounted || _closed) return;
-    setState(() {});
   }
 
   /// 一集播完自动接下一集：等待秒数为 0 时立即连播（无提示 UI），
@@ -768,9 +820,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted && !_closed) setState(() => _advanceSeconds = 0);
   }
 
-  /// 手势变化：刷新 UI（遮罩亮度/HUD），并在滑动调完亮度/音量后落盘记忆
+  /// 手势变化：滑动调完亮度/音量后落盘记忆（遮罩亮度/HUD 的刷新由
+  /// build 里的 ListenableBuilder 局部监听承担，不再整屏 setState——
+  /// 手势拖动时这个回调每帧触发，整屏重建是播放页最大的卡顿源）
   void _onInteractionChanged() {
-    if (mounted) setState(() {});
     final brightness = _interactions.brightness;
     final volume = _interactions.volume;
     if (_savedBrightness == brightness && _savedVolume == volume) return;
@@ -836,6 +889,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _television = television;
     _orientationController = AppOrientationScope.maybeOf(context);
+    // 短剧：进入即竖屏全屏直接播（手机端），锁竖屏。
+    if (_portraitDrama && !_portraitFullscreenApplied && !_fullscreen) {
+      _portraitFullscreenApplied = true;
+      _fullscreen = true;
+      unawaited(_syncPlaybackOrientation(fullscreen: true));
+    }
     final orientation = MediaQuery.orientationOf(context);
     if (_lastOrientation != null && _lastOrientation != orientation) {
       _automaticFullscreenSuppressed = false;
@@ -932,6 +991,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed && ticket == _generation) {
         setState(() {
           _loading = false;
+          _swapping = false;
           _localFailure = current.local;
           _error = current.local
               ? widget.allowOnlineFallback
@@ -988,6 +1048,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed && ticket == _generation) {
         setState(() {
           _loading = false;
+          _swapping = false;
         });
         _acceptErrors = true;
         _danmaku.setPlan(plan);
@@ -1069,6 +1130,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     bool playWhenReady = true,
     PlaybackPlan? handoffPlan,
     bool showControlsOnReady = true,
+    int? route,
   }) async {
     if (_closed ||
         widget.store.profileEpoch != _profileEpoch ||
@@ -1096,7 +1158,6 @@ class _PlayerScreenState extends State<PlayerScreen>
             : null);
     _preloader.clear();
     final ticket = ++_generation;
-    _enhancement.suspend();
     _seekSequence++;
     _danmaku.setPlan(null);
     _acceptErrors = false;
@@ -1112,13 +1173,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() {
       _index = index;
       _loading = true;
+      _swapping = false;
       _error = null;
       _localFailure = false;
       _loadingMessage = switch (recoveryAction) {
         PlaybackRecoveryAction.reuse => '正在重新连接播放',
         PlaybackRecoveryAction.alternative => '正在切换备用线路',
         PlaybackRecoveryAction.refresh => '正在重新获取播放地址',
-        _ => '正在准备播放',
+        PlaybackRecoveryAction.route => '正在切换播放线路',
+        _ => '正在准备第 ${widget.detail.episodes[index].number} 集',
       };
     });
     LanController.current?.detachPlayback(_lanIdentity);
@@ -1128,28 +1191,26 @@ class _PlayerScreenState extends State<PlayerScreen>
     PlaybackPlan? retained;
     bool installed = false;
     try {
+      // 阶段一：只定格不停播。暂停让旧集画面停在最后一帧，
+      // 趁画面还在时先存进度，然后才去解析新集地址——
+      // 解析（网络）期间屏幕有内容，不再整段黑屏干等。
       await _serialize(() async {
         if (_closed || ticket != _generation) {
           return;
         }
         await _saveProgress(flush: true);
-        await _enhancement.beforeMedia();
         if (_closed || ticket != _generation) return;
-        _openedIndex = -1;
-        await _player.stop();
-        final previous = _plan;
-        _plan = null;
-        if (recoveryAction == PlaybackRecoveryAction.alternative) {
-          retained = previous;
-        } else if (previous != null) {
-          await widget.repository.release(previous.session);
-        }
+        try {
+          await _player.pause();
+        } catch (_) {}
       });
       if (_closed || ticket != _generation) {
         return;
       }
-      prepared = retained != null
-          ? await _loader.fallback(retained!)
+      // 选线：保留当前播放会话，按索引切到指定线路（真果·鉴多线路表）。
+      final active = _plan;
+      prepared = route != null && active != null
+          ? await _loader.selectRoute(active, route)
           : warmed != null
           ? await _loader.use(warmed)
           : await _loader.load(
@@ -1170,6 +1231,24 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         if (plan.url.isEmpty) {
           throw AppFailure('站源未返回播放地址，请重试');
+        }
+        // 阶段二：新地址已到手才真正动播放器。挂起画质增强要先于
+        // stop——此刻画面即将被替换，不再需要维持旧帧的滤镜。
+        _enhancement.suspend();
+        await _enhancement.beforeMedia();
+        if (mounted && !_closed && ticket == _generation) {
+          setState(() => _swapping = true);
+        }
+        _openedIndex = -1;
+        await _player.stop();
+        final previous = _plan;
+        _plan = null;
+        if (recoveryAction == PlaybackRecoveryAction.alternative &&
+            route == null) {
+          retained = previous;
+        } else if (previous != null) {
+          // 选线/普通重解析：新会话已接管，旧会话立即释放，避免 8 槽泄漏。
+          await widget.repository.release(previous.session);
         }
         final platform = _player.platform;
         if (platform is NativePlayer) {
@@ -1218,6 +1297,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (mounted && !_closed && ticket == _generation) {
           setState(() {
             _loading = false;
+            _swapping = false;
           });
           _danmaku.setPlan(plan);
           _syncDanmaku();
@@ -1237,6 +1317,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           if (mounted && !_closed && ticket == _generation) {
             setState(() {
               _loading = false;
+              _swapping = false;
               _localFailure =
                   (error is AppFailure && error.code == 'local_media') ||
                   (widget.localOnly && !_forceOnline);
@@ -1287,10 +1368,102 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 按索引切换到指定线路（保留当前会话与进度，两阶段定格不断画面）。
+  Future<void> _selectRoute(int index) async {
+    final plan = _plan;
+    if (plan == null || index < 0 || index >= plan.routeCount) return;
+    if (index == plan.routeIndex) return;
+    final position = _currentPosition;
+    await _play(
+      _index,
+      position: position,
+      recoveryAction: PlaybackRecoveryAction.route,
+      playWhenReady: true,
+      route: index,
+    );
+  }
+
+  /// 线路面板：官方源平铺 + 第三方源折叠成一条入口，点选即切。
+  /// 真果·鉴一集常带 20~30 条三方线，全平铺会把 1~5 条官方线淹没在长列表里。
+  Future<void> _showRouteMenu() async {
+    final plan = _plan;
+    if (plan == null || plan.routeCount < 2 || !mounted) return;
+    final labels = plan.routeLabels;
+    String labelOf(int index) {
+      final label = (index >= 0 && index < labels.length)
+          ? labels[index].trim()
+          : '';
+      return label.isNotEmpty ? label : '线路 ${index + 1}';
+    }
+    final official = plan.officialRoutes;
+    final thirdParty = plan.thirdPartyRoutes;
+    // 选中即切线的值；点「第三方源」只是展开二级列表，用哨兵值兜住。
+    const thirdPartyEntry = -1;
+    var selected = official.isEmpty
+        // 没有官方线（除真果·鉴外的站源）：维持原样平铺全部线路。
+        ? await showGlassMenu<int>(
+            context: context,
+            entries: [
+              for (var index = 0; index < plan.routeCount; index++)
+                GlassMenuEntry<int>(
+                  index,
+                  labelOf(index),
+                  checked: index == plan.routeIndex,
+                ),
+            ],
+          )
+        : await showGlassMenu<int>(
+            context: context,
+            entries: [
+              GlassMenuEntry<int>(-2, '官方源 · ${official.length} 条', header: true),
+              for (final index in official)
+                GlassMenuEntry<int>(
+                  index,
+                  labelOf(index),
+                  checked: index == plan.routeIndex,
+                ),
+              if (thirdParty.isNotEmpty)
+                GlassMenuEntry<int>(
+                  thirdPartyEntry,
+                  '第三方源 · ${thirdParty.length} 条',
+                  checked: !plan.onOfficialRoute,
+                ),
+            ],
+          );
+    if (selected == null || !mounted) return;
+    if (selected == thirdPartyEntry) {
+      // 一级菜单收起后再开二级：两层玻璃浮层叠在同一位置会很脏。
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      if (!mounted) return;
+      selected = await showGlassMenu<int>(
+        context: context,
+        entries: [
+          GlassMenuEntry<int>(-2, '第三方源 · ${thirdParty.length} 条', header: true),
+          for (final index in thirdParty)
+            GlassMenuEntry<int>(
+              index,
+              labelOf(index),
+              checked: index == plan.routeIndex,
+            ),
+        ],
+      );
+      if (selected == null || !mounted) return;
+    }
+    // 关闭动画约 170ms + 调度延迟：320ms 后再动作，避免菜单未关就切线。
+    await Future<void>.delayed(const Duration(milliseconds: 320));
+    if (!mounted) return;
+    await _selectRoute(selected);
+  }
+
   String? get _routeLabel {
     final plan = _plan;
     if (plan == null || plan.routeCount < 2) return null;
-    return '线路 ${plan.routeIndex + 1}/${plan.routeCount}';
+    final index = plan.routeIndex;
+    final label = (index >= 0 && index < plan.routeLabels.length)
+        ? plan.routeLabels[index].trim()
+        : '';
+    // 有真名显示真名（如「无水印资源」），否则回退计数。
+    return label.isNotEmpty ? label : '线路 ${index + 1}/${plan.routeCount}';
   }
 
   /// 全屏/旋转能力：电视端、手机（全部站源）与桌面端都支持；
@@ -1306,6 +1479,52 @@ class _PlayerScreenState extends State<PlayerScreen>
               _aspectRatio >= 1 &&
               MediaQuery.orientationOf(context) == Orientation.landscape));
 
+  /// 按当前全屏态与旋转态同步锁向（Windows 全屏窗口 / 手机锁竖横屏）。
+  /// Windows 分支排除 _mobile：测试宿主可能 override android，
+  /// 此时走 SystemChrome 路径而不是 windowManager 插件。
+  Future<void> _syncPlaybackOrientation({required bool fullscreen}) async {
+    if (Platform.isWindows && !_mobile) {
+      await windowManager.setFullScreen(fullscreen);
+    } else if (_mobile) {
+      await (_orientationController?.setPlayback(
+            this,
+            fullscreen: fullscreen,
+            aspectRatio: _aspectRatio,
+            forceLandscape: _forceLandscape,
+          ) ??
+          SystemChrome.setPreferredOrientations(
+            AppOrientationController.orientations(
+              television: _television,
+              fullscreen: fullscreen,
+              aspectRatio: _aspectRatio,
+              forceLandscape: _forceLandscape,
+            ),
+          ));
+    }
+  }
+
+  /// 短剧竖屏全屏的旋转按钮：竖屏 ⇄ 横屏手动切换。
+  Future<void> _togglePortraitRotate() async {
+    if (!_portraitDrama || _rotating) {
+      return;
+    }
+    _interactions.cancel();
+    _rotating = true;
+    final previous = _forceLandscape;
+    setState(() => _forceLandscape = !previous);
+    try {
+      await _syncPlaybackOrientation(fullscreen: true);
+    } catch (_) {
+      if (mounted && !_closed) {
+        setState(() => _forceLandscape = previous);
+        _notice('无法旋转，请重试');
+      }
+    } finally {
+      _rotating = false;
+      if (mounted && !_closed) _scheduleSystemUi();
+    }
+  }
+
   Future<void> _rotate() async {
     if (_rotating || !_fullscreenSupported) {
       return;
@@ -1320,22 +1539,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _automaticFullscreenSuppressed = !fullscreen;
     });
     try {
-      if (Platform.isWindows) {
-        await windowManager.setFullScreen(fullscreen);
-      } else if (_mobile) {
-        await (_orientationController?.setPlayback(
-              this,
-              fullscreen: fullscreen,
-              aspectRatio: _aspectRatio,
-            ) ??
-            SystemChrome.setPreferredOrientations(
-              AppOrientationController.orientations(
-                television: _television,
-                fullscreen: fullscreen,
-                aspectRatio: _aspectRatio,
-              ),
-            ));
-      }
+      await _syncPlaybackOrientation(fullscreen: fullscreen);
     } catch (_) {
       if (mounted && !_closed) {
         setState(() {
@@ -1485,7 +1689,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               mobile: _mobile,
               onEpisode: (index) => Navigator.pop(menuContext, index),
               onPreferences: _setPreferences,
-              showDanmaku: widget.detail.drama.source == 'hongguo',
+              showDanmaku: _plan?.danmakuId.isNotEmpty == true,
               danmakuStatus: _danmaku.status,
               onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
               preloadStatus: _preloader.status,
@@ -1585,7 +1789,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               onFavorite: _toggleFavorite,
               autoAdvance: _autoAdvance,
               danmaku: _danmakuEnabled,
-              showDanmaku: widget.detail.drama.source == 'hongguo',
+              showDanmaku: _plan?.danmakuId.isNotEmpty == true,
               danmakuStatus: _danmaku.status,
               onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
               preload: _preloadEnabled,
@@ -1621,7 +1825,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _back() {
     _cancelAdvanceCountdown();
-    if (_showFullscreen && !_television) {
+    // 短剧竖屏全屏是"正常播放态"，返回直接退出播放页，不先退全屏。
+    if (_showFullscreen && !_television && !_portraitDrama) {
       _rotate();
     } else {
       Navigator.of(context).maybePop();
@@ -1635,9 +1840,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     LanController.current?.detachPlayback(_lanIdentity);
     widget.handoff?.fail('接收端已退出播放');
     widget.store.removeListener(_accessChanged);
-    _danmaku
-      ..removeListener(_danmakuStatusChanged)
-      ..dispose();
+    _danmaku.dispose();
     _preloader.dispose();
     _generation++;
     WidgetsBinding.instance.removeObserver(this);
@@ -1668,7 +1871,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         await _player.dispose();
       }),
     );
-    if (Platform.isWindows) {
+    if (Platform.isWindows && !_mobile) {
       unawaited(windowManager.setFullScreen(false));
     } else if (_mobile || _television && Platform.isAndroid) {
       unawaited(
@@ -1680,7 +1883,15 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ))
             .catchError((Object _) {}),
       );
-      unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+      // 退出后按设备方向恢复：横屏回沉浸首页（衔接 home_screen 的沉浸
+      // 同步），竖屏恢复常规 edgeToEdge。
+      unawaited(
+        SystemChrome.setEnabledSystemUIMode(
+          _exitImmersive
+              ? SystemUiMode.immersiveSticky
+              : SystemUiMode.edgeToEdge,
+        ),
+      );
     }
     super.dispose();
   }
@@ -1693,6 +1904,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       data: theme,
       child: Builder(
         builder: (context) {
+          // 缓存退出时是否手机横屏（dispose 无 context，恢复模式按此判定）。
+          _exitImmersive = AppLayout.landscapePhone(context);
           final fullscreen = _showFullscreen;
           final overlayBrightness = fullscreen
               ? Brightness.dark
@@ -1712,9 +1925,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final fullscreen = _showFullscreen;
     final pictureInPicture = _pictureInPictureVisible;
     return PopScope(
-      canPop: _television || !fullscreen,
+      canPop: _television || !fullscreen || _portraitDrama,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && fullscreen && !_television) {
+        if (!didPop && fullscreen && !_television && !_portraitDrama) {
           _rotate();
         }
       },
@@ -1760,11 +1973,21 @@ class _PlayerScreenState extends State<PlayerScreen>
             body: pictureInPicture
                 ? _videoPane(context)
                 : SafeArea(
-                    top: !_television && (fullscreen || _mobile),
+                    // 只有「手机 + 非全屏 + 竖屏」才需要给系统栏让位：
+                    // 全屏走 immersiveSticky（系统栏已隐藏），横屏则要求画面
+                    // 铺到屏幕边缘——两种情况再留状态栏高度都会让画面整体
+                    // 下移、上下不对称，看起来像没居中。
+                    top: !_television &&
+                        !fullscreen &&
+                        _mobile &&
+                        MediaQuery.orientationOf(context) == Orientation.portrait,
                     bottom: !fullscreen,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final desktop = constraints.maxWidth >= 840;
+                        // 宽屏判定含高度门槛（同 detail_screen/home_screen）：
+                        // 手机横屏逻辑高度 <600，仍走手机播放布局。
+                        final desktop = constraints.maxWidth >= 840 &&
+                            constraints.maxHeight >= 600;
                         if (fullscreen) {
                           return _videoPane(context);
                         }
@@ -1822,6 +2045,73 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 画面层：按当前比例档位决定 fit。带 aspect 的档位（16:9 / 4:3 / 9:16）
+  /// 把画面裁进固定形状的框里，用来消黑边或统一画面形状。
+  Widget _videoLayer() {
+    final mode = _fitMode;
+    Widget surface(BoxFit fit) => Video(
+      controller: _video!,
+      fit: fit,
+      controls: (_) => const SizedBox.shrink(),
+    );
+    final aspect = mode.aspect;
+    if (aspect == null) return surface(mode.fit);
+    return Center(
+      child: AspectRatio(
+        aspectRatio: aspect,
+        child: ClipRect(child: surface(mode.fit)),
+      ),
+    );
+  }
+
+  /// 画面比例 + 音轨：一个入口两段清单（玻璃菜单，与线路面板同款）。
+  Future<void> _showDisplayOptions() async {
+    if (!mounted || _closed) return;
+    final tracks = _player.state.tracks.audio;
+    final current = _player.state.track.audio;
+    final picked = await showGlassMenu<Object>(
+      context: context,
+      entries: [
+        const GlassMenuEntry<Object>(-1, '画面比例', header: true),
+        for (final mode in _PlayerFitMode.values)
+          GlassMenuEntry<Object>(mode, mode.label, checked: mode == _fitMode),
+        if (tracks.isNotEmpty) ...[
+          GlassMenuEntry<Object>(
+            -2,
+            tracks.length > 1 ? '音轨 · ${tracks.length} 条' : '音轨',
+            header: true,
+          ),
+          for (var index = 0; index < tracks.length; index++)
+            GlassMenuEntry<Object>(
+              tracks[index],
+              _audioTrackLabel(tracks[index], index),
+              checked: tracks[index].id == current.id,
+            ),
+        ],
+      ],
+    );
+    if (picked == null || !mounted || _closed) return;
+    if (picked is _PlayerFitMode) {
+      setState(() => _fitMode = picked);
+      return;
+    }
+    if (picked is AudioTrack) {
+      try {
+        await _player.setAudioTrack(picked);
+      } catch (_) {
+        _notice('切换音轨失败，请重试');
+      }
+    }
+  }
+
+  String _audioTrackLabel(AudioTrack track, int index) {
+    final title = track.title?.trim() ?? '';
+    if (title.isNotEmpty) return title;
+    final language = track.language?.trim() ?? '';
+    if (language.isNotEmpty) return language;
+    return '音轨 ${index + 1}';
+  }
+
   Widget _videoPane(BuildContext context) {
     final videoTheme = _television
         ? televisionTheme(AppTheme.dark)
@@ -1860,32 +2150,32 @@ class _PlayerScreenState extends State<PlayerScreen>
             onTogglePlayback: _togglePlayback,
             swipeEnabled: _mobile,
             onFullscreen: _fullscreenSupported ? _rotate : null,
+            portraitRotate: _portraitDrama,
+            forceLandscape: _forceLandscape,
+            onPortraitRotate: _togglePortraitRotate,
             onBack: _back,
             onFocusSurface: _playerFocus.requestFocus,
             onSeek: _seekTo,
             speed: _speed,
             qualityLabel: _qualityLabel,
-            showDanmaku: widget.detail.drama.source == 'hongguo',
+            showDanmaku: _plan?.danmakuId.isNotEmpty == true,
             danmakuEnabled: _danmakuEnabled,
-            danmakuStatus: _danmaku.status,
+            danmaku: _danmaku,
             onEpisodes: () => _openPanel(PlayerMenuSection.episodes),
             onSpeed: () => _openPanel(PlayerMenuSection.speed),
             onQuality: () => _openPanel(PlayerMenuSection.quality),
             routeLabel: _routeLabel,
-            onRoute: _plan?.hasAlternative == true ? _switchRoute : null,
-            onDanmaku: widget.detail.drama.source == 'hongguo'
+            onRoute: _plan?.hasAlternative == true
+                ? (_television ? _switchRoute : _showRouteMenu)
+                : null,
+            onDisplayOptions: _showDisplayOptions,
+            onDanmaku: _plan?.danmakuId.isNotEmpty == true
                 ? _toggleDanmaku
                 : null,
-            onRetryDanmaku: _danmaku.canRetry
-                ? _retryDanmakuFromControls
-                : null,
+            onRetryDanmaku: _retryDanmakuFromControls,
             onPush: widget.mediaId == null ? _pushToDevice : null,
             onPictureInPicture: _canUsePictureInPicture
                 ? _enterPictureInPicture
-                : null,
-            onPrevious: _index > 0 ? () => _play(_index - 1) : null,
-            onNext: _index + 1 < widget.detail.episodes.length
-                ? () => _play(_index + 1)
                 : null,
           );
     final layeredControls = Stack(
@@ -1916,34 +2206,68 @@ class _PlayerScreenState extends State<PlayerScreen>
             children: [
               if (widget.videoBuilder != null)
                 widget.videoBuilder!(layeredControls)
-              else
-                Video(
-                  controller: _video!,
-                  fit: BoxFit.contain,
-                  controls: (_) => layeredControls,
-                ),
-              // 亮度遮罩模拟：手势亮度只调这层透明度，不修改系统亮度
-              if (_interactions.brightness < 1 &&
-                  !_interactions.brightnessViaSystem &&
-                  !hideOverlayForPictureInPicture)
-                IgnorePointer(
-                  child: ColoredBox(
-                    color: Colors.black.withValues(
-                      alpha: (1 - _interactions.brightness) * .72,
-                    ),
-                  ),
+              else ...[
+                // 画面与控件分成两层：比例档会把画面裁进固定形状的框，
+                // 控件层跟着被裁就会只剩一小块可点区域。
+                _videoLayer(),
+                layeredControls,
+              ],
+              // 亮度遮罩模拟：手势亮度只调这层透明度，不修改系统亮度。
+              // 手势期间逐帧变化，局部监听只重建这一层遮罩。
+              if (!hideOverlayForPictureInPicture)
+                ListenableBuilder(
+                  listenable: _interactions,
+                  builder: (context, _) {
+                    if (_interactions.brightness >= 1 ||
+                        _interactions.brightnessViaSystem) {
+                      return const SizedBox.shrink();
+                    }
+                    return IgnorePointer(
+                      child: ColoredBox(
+                        color: Colors.black.withValues(
+                          alpha: (1 - _interactions.brightness) * .72,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               if (_loading && !hideOverlayForPictureInPicture)
                 ColoredBox(
-                  color: Colors.black.withValues(alpha: .78),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(_loadingMessage),
-                      ],
+                  // 解析新地址阶段（_swapping=false）画面还停在旧集最后一帧，
+                  // 只垫一层浅遮罩让用户看得到画面；真正换源出首帧前才压黑。
+                  color: Colors.black.withValues(alpha: _swapping ? .78 : .32),
+                  child: Align(
+                    // 进度反馈放画面中下部小胶囊：正中央留给旧集定格画面，
+                    // 别让转圈+文案压住内容
+                    alignment: const Alignment(0, 0.72),
+                    child: Container(
+                      margin: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: .55),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _loadingMessage,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -2034,10 +2358,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                     ),
                   ),
                 ),
-              if ((_advanceSeconds > 0 ||
-                      _interactions.hudState.type != SwipeAction.none) &&
-                  !hideOverlayForPictureInPicture)
-                _buildGestureHud(),
+              if (!hideOverlayForPictureInPicture)
+                ListenableBuilder(
+                  listenable: _interactions,
+                  builder: (context, _) {
+                    if (_advanceSeconds <= 0 &&
+                        _interactions.hudState.type == SwipeAction.none) {
+                      return const SizedBox.shrink();
+                    }
+                    return _buildGestureHud();
+                  },
+                ),
             ],
           );
         },
@@ -2449,6 +2780,12 @@ class _PlayerScreenState extends State<PlayerScreen>
       currentIndex: _index,
       compact: compact,
       title: compact ? '剧集' : '选集',
+      // 剧集完结状态：releaseStatus 已知时标题带「已完结 / 连载中」。
+      note:
+          widget.detail.drama.releaseStatus.isNotEmpty &&
+              widget.detail.drama.releaseStatus != 'unknown'
+          ? widget.detail.drama.releaseLabel
+          : '',
       onSelected: (index) => _play(index),
     ),
   );

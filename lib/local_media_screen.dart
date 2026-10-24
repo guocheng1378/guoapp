@@ -456,6 +456,9 @@ class _LocalFileRepository extends AppRepository {
   @override
   Future<PlaybackPlan> fallback(PlaybackPlan current) => _plan();
   @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) =>
+      _plan();
+  @override
   Future<void> cancelPlayback() async {}
   @override
   Future<void> release(String session) async {}

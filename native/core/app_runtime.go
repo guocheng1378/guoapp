@@ -42,6 +42,7 @@ type Config struct {
 
 type Downloader struct {
 	rankings              rankingCache
+	live                  liveCache
 	cfg                   Config
 	client                *http.Client
 	huangdouDetails       map[string]huangdouDetailEntry
@@ -64,6 +65,8 @@ type Downloader struct {
 	apiFailures           map[string]time.Time
 	legacyOnce            sync.Once
 	legacy                *legacyAPIClient
+	dongpiandiDanmakuOnce sync.Once
+	dongpiandiDanmakuStore *dongpiandiDanmakuCache
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -100,6 +103,8 @@ type nativeInput struct {
 	StartMS          int64                   `json:"startMs"`
 	DurationMS       int64                   `json:"durationMs"`
 	Board            string                  `json:"board"`
+	ListID           string                  `json:"listId"`
+	LiveURLs         []string                `json:"liveUrls"`
 	Entries          []nativeDownloadEpisode `json:"entries"`
 	JobID            string                  `json:"jobId"`
 	Command          string                  `json:"command"`
@@ -115,6 +120,7 @@ type nativeInput struct {
 	Chapter          Chapter                 `json:"chapter"`
 	Index            int                     `json:"index"`
 	Quality          int                     `json:"quality"`
+	Route            int                     `json:"route"`
 	Session          string                  `json:"session"`
 	Sequence         int64                   `json:"sequence"`
 	Force            bool                    `json:"force"`
@@ -144,6 +150,10 @@ type nativePlan struct {
 	Session         string            `json:"session,omitempty"`
 	RouteIndex      int               `json:"routeIndex"`
 	RouteCount      int               `json:"routeCount"`
+	RouteLabels     []string          `json:"routeLabels,omitempty"`
+	// RouteOfficial 与 RouteLabels 一一对应：true 表示该线路是站源官方线。
+	// 面板据此把第三方线路折叠，避免几十条三方线把官方源淹没。
+	RouteOfficial []bool `json:"routeOfficial,omitempty"`
 }
 
 type nativeEngine struct {
@@ -236,7 +246,7 @@ func nativeNormalize(drama Drama) nativeDrama {
 			sourceID = strings.TrimPrefix(drama.ID, source+":")
 		}
 	}
-	return nativeDrama{MetadataSchema: 1, ID: drama.ID, Source: source, SourceID: sourceID, Title: drama.DisplayTitle(),
+	return nativeDrama{MetadataSchema: nativeDramaMetadataSchema, ID: drama.ID, Source: source, SourceID: sourceID, Title: drama.DisplayTitle(),
 		Description: firstNonEmpty(drama.Desc, drama.Intro), Cover: cover, Episodes: episodes,
 		Category: nativeDramaCategory(drama), VIP: drama.VIP,
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
@@ -309,7 +319,7 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	cfg := defaultConfig()
 	cfg.dataDir = directory
 	router := &proxyRouter{}
-	d := &Downloader{cfg: cfg, providerHosts: map[string]string{}, proxyRouter: router,
+	d := &Downloader{cfg: cfg, providerHosts: providerHostsSeed(), proxyRouter: router,
 		limiter: newRequestLimiter(3, 250*time.Millisecond), diagnostics: newDiagnosticLog(directory)}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -327,6 +337,7 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	engine := &nativeEngine{downloader: d, directory: directory, catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
 	engine.loadResourceSettings()
 	d.loadRankingCache()
+	d.loadLiveCache()
 	engine.loadCatalogCache()
 	engine.loadSourceRecords()
 	engine.covers = newNativeCoverCache(directory, d)
@@ -462,9 +473,21 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return map[string]any{"items": boards}, nil
 	case "rankings":
 		return engine.nativeRanking(ctx, input)
+	case "live.channels":
+		return engine.nativeLive(ctx, input)
 	case "suggestions":
 		items, err := engine.suggestions(ctx, input.Query)
 		return map[string]any{"items": items}, err
+	case "suggest":
+		// 真果·鉴站内搜索建议（带直达播放目标）
+		if input.Source != sourceDongpiandi {
+			return nil, fmt.Errorf("当前站源不支持搜索建议")
+		}
+		items, err := engine.downloader.fetchDongpiandiSuggest(ctx, newDongpiandiClient(), input.Query, 8)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
 	case "downloadDirectory":
 		engine.downloads.mu.Lock()
 		root := engine.downloads.root
@@ -512,7 +535,10 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.nativeDetail(ctx, input.Drama)
 	case "metadata":
 		return engine.nativeMetadata(ctx, input.Drama)
-	case "resolve", "fallback":
+	// selectPlayback 必须与 resolve/fallback 同列：线路面板点选（含红果清晰度
+	// 变体）走的就是它。此前这里只写了内层 if 却漏了 case 分支，请求直接落到
+	// default 报「不支持的应用操作」，表现为切线一律不能播放（两个源都中）。
+	case "resolve", "fallback", "selectPlayback":
 		playback, finish, err := engine.nativeBeginPlayback(ctx, input.Sequence)
 		if err != nil {
 			return nil, err
@@ -520,6 +546,9 @@ func nativeDispatch(input nativeInput) (any, error) {
 		defer finish()
 		if input.Action == "fallback" {
 			return engine.nativeNextPlayback(playback, input.Session)
+		}
+		if input.Action == "selectPlayback" {
+			return engine.nativeSelectPlayback(playback, input.Session, input.Route)
 		}
 		return engine.nativeResolve(playback, input)
 	case "cancelPlayback":
@@ -535,8 +564,10 @@ func nativeDispatch(input nativeInput) (any, error) {
 
 // applySourceConfig 应用远程下发的站源配置（app_config.json 的 sourceConfig 段，
 // 由 Dart 侧拉取远程公告配置后经 config.source 转发）。校验规则：scheme 仅
-// http/https、镜像去重后 1-8 个、dongpiandi 根地址为合法根；任一字段非法则
-// 整段丢弃，保留当前生效值（未热更过即内置兜底）。签名密钥不经此通道下发。
+// http/https、镜像去重后 1-8 个、dongpiandi 根地址为合法根、providerHosts 键
+// 必须是核心已知的规范站源（拒收黄果剧/野果与未注册 provider 的榜单专用源）、
+// 值为合法根地址；任一字段非法则整段丢弃，保留当前生效值（未热更过即内置兜底）。
+// 签名密钥不经此通道下发。
 func applySourceConfig(config map[string]any) (any, error) {
 	if len(config) == 0 {
 		return map[string]any{"applied": false, "reason": "缺少 sourceConfig"}, nil
@@ -560,6 +591,18 @@ func applySourceConfig(config map[string]any) (any, error) {
 			return map[string]any{"applied": false, "reason": "dongpiandiBaseURL 非法"}, nil
 		}
 		setDongpiandiBaseURL(strings.TrimSuffix(strings.TrimSpace(text), "/"))
+		applied++
+	}
+	if raw, ok := config["providerHosts"]; ok {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return map[string]any{"applied": false, "reason": "providerHosts 类型无效"}, nil
+		}
+		hosts, ok := sanitizeProviderHosts(table)
+		if !ok {
+			return map[string]any{"applied": false, "reason": "providerHosts 含非法条目"}, nil
+		}
+		setProviderHosts(hosts)
 		applied++
 	}
 	if applied == 0 {
@@ -590,6 +633,34 @@ func sanitizeSourceMirrorList(list []any) ([]string, bool) {
 		out = append(out, text)
 	}
 	if len(out) == 0 || len(out) > 8 {
+		return nil, false
+	}
+	return out, true
+}
+
+// sanitizeProviderHosts 校验远程下发的通用源站域名覆盖表（providerHosts 键）：
+// 键必须是核心已知的规范站源——douban 等榜单专用源未注册 provider，无法消费，
+// 黄果剧/野果被媒体候选链排除，覆盖只会是死配置，均拒收；值必须是合法根地址，
+// 自动去空白与尾斜杠。任一条目非法即整体失败（调用方整段丢弃）；
+// 空表合法，语义为清空覆盖回落内置域名。
+func sanitizeProviderHosts(table map[string]any) (map[string]string, bool) {
+	out := make(map[string]string, len(table))
+	for key, raw := range table {
+		text, ok := raw.(string)
+		if !ok {
+			return nil, false
+		}
+		text = strings.TrimSuffix(strings.TrimSpace(text), "/")
+		if !validSourceBaseURL(text) {
+			return nil, false
+		}
+		source := canonicalProviderSource(key)
+		if source == "" || !provider.KnownSource(source) || source == sourceHuangju || source == sourceYeguo {
+			return nil, false
+		}
+		out[source] = text
+	}
+	if len(out) > 32 {
 		return nil, false
 	}
 	return out, true
@@ -871,8 +942,8 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 	choice.refresher = func(ctx context.Context) (providerMedia, error) {
 		return engine.downloader.resolveProviderMedia(ctx, Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index})
 	}
-	if series, video, valid := hongguoPlaybackIDs(task); valid {
-		choice.danmakuSeries, choice.danmakuVideo = series, video
+	if danmakuSource, series, video, valid := danmakuPlaybackIDs(task); valid {
+		choice.danmakuSource, choice.danmakuSeries, choice.danmakuVideo = danmakuSource, series, video
 	}
 	return engine.nativeOpenPlayback(ctx, choice)
 }

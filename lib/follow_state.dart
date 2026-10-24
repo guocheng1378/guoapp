@@ -249,3 +249,37 @@ int resumeEpisodeIndex(List<Episode> episodes, WatchEntry? watch) {
   if (next >= 0) return next;
   return current >= 0 ? current : episodes.length - 1;
 }
+
+/// 后台追剧检查记录（移植自 Xanerix/guoapp 3d1fa2b）：按用户与剧集
+/// ID 存档，[checkedAt] 驱动 6 小时去重与轮转排序，[failures] 驱动
+/// 失败指数退避（6h × 2^failures，封顶 8 倍）。
+class FollowCheck {
+  const FollowCheck(this.checkedAt, {this.failures = 0});
+
+  final DateTime checkedAt;
+  final int failures;
+
+  Map<String, dynamic> toJson() => {
+    'checkedAt': checkedAt.millisecondsSinceEpoch,
+    'failures': failures,
+  };
+
+  /// 防御解析：单条损坏不影响整表（调用方逐条 try）。
+  static FollowCheck? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final at = raw['checkedAt'];
+    final failures = raw['failures'] ?? 0;
+    if (at is! int ||
+        at < 0 ||
+        at > 253402300799000 || // 9999-12-31，防极端值
+        failures is! int ||
+        failures < 0 ||
+        failures > 64) {
+      return null;
+    }
+    return FollowCheck(
+      DateTime.fromMillisecondsSinceEpoch(at),
+      failures: failures,
+    );
+  }
+}

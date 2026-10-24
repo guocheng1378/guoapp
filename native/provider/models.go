@@ -91,6 +91,9 @@ type Chapter struct {
 	MediaSize      int64           `json:"mediaSize"`
 	PageURL        string          `json:"pageUrl,omitempty"`
 	Referer        string          `json:"referer,omitempty"`
+	// Vertical：红果详情接口下发的分集横竖屏标记（nil=未提供）。
+	// 竖屏短剧判定优先取官方标记，缺失时回退客户端时长启发式。
+	Vertical *bool `json:"vertical,omitempty"`
 }
 
 func (c Chapter) EpisodeString(fallback int) string {

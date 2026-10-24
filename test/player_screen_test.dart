@@ -230,6 +230,36 @@ void main() {
     }
   });
 
+  testWidgets('mobile landscape player fills the screen without status bar gap', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(
+        tester,
+        repository,
+        player,
+        size: const Size(844, 390),
+        padding: const FakeViewPadding(top: 32),
+      );
+      // 竖屏片源在横屏里不会自动进全屏（走宽屏布局），画面仍要铺到顶边。
+      player.videoSize(320, 480);
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      final surface = tester.getRect(
+        find.byKey(const ValueKey('player-gesture-surface')),
+      );
+      expect(surface.top, 0);
+      await unmount(tester, player);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPadding();
+    }
+  });
+
   testWidgets('compact player tools stay clustered instead of evenly spread', (
     tester,
   ) async {
@@ -253,11 +283,16 @@ void main() {
       final pip = tester.getRect(
         find.byKey(const ValueKey('player-picture-in-picture')),
       );
-      // 线路键（plan 带备用线路时显示）插在清晰度与画中画之间，仍需保持聚类
+      // 线路键（plan 带备用线路时显示）与画面比例键插在清晰度与画中画之间，
+      // 仍需保持聚类（不铺满整行）。
       final route = tester.getRect(find.byKey(const ValueKey('player-route')));
+      final display = tester.getRect(
+        find.byKey(const ValueKey('player-display')),
+      );
       expect(quality.left - speed.right, lessThan(8));
       expect(route.left - quality.right, lessThan(8));
-      expect(pip.left - route.right, lessThan(8));
+      expect(display.left - route.right, lessThan(8));
+      expect(pip.left - display.right, lessThan(8));
       expect(pip.right, greaterThan(330));
       await unmount(tester, player);
     } finally {

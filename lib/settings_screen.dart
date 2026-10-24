@@ -13,6 +13,7 @@ import 'activation/activation_flow.dart';
 import 'activation/license.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
+import 'fog_tuning_screen.dart';
 import 'app_theme.dart';
 import 'app_layout.dart';
 import 'background_downloads.dart';
@@ -23,7 +24,9 @@ import 'sources_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'lan_screen.dart';
+import 'live_sources_screen.dart';
 import 'app_icons.dart';
+import 'bug_report.dart';
 
 String storageSize(int bytes) {
   if (bytes < 0) return '暂不可用';
@@ -291,6 +294,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     (
+      id: 'live-sources',
+      icon: AppIcon(AppIcons.tv),
+      title: '直播源管理',
+      subtitle: '自填 m3u / txt 直播订阅链接',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => LiveSourcesScreen(store: widget.store),
+        ),
+      ),
+    ),
+    (
       id: 'theme',
       icon: AppIcon(AppIcons.palette),
       title: '外观主题',
@@ -310,11 +325,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     ),
     (
+      id: 'fog-tuning',
+      icon: AppIcon(AppIcons.tune),
+      title: '雾面调参',
+      subtitle: '实时调节雾面模糊、浓度与雾形',
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const FogTuningScreen()),
+      ),
+    ),
+    (
       id: 'profiles',
       icon: AppIcon(AppIcons.people),
       title: '用户管理',
       subtitle: '当前：${widget.store.profile.name}',
       onPressed: _openUserManagement,
+    ),
+    (
+      id: 'bug-report',
+      icon: AppIcon(AppIcons.edit),
+      title: '反馈 Bug',
+      subtitle: '一键提交到 GitHub 或复制给开发者',
+      onPressed: () => showBugReportCard(context),
     ),
     if (widget.store.canDownload)
       (
@@ -464,6 +495,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ListTile(
+                key: const ValueKey('live-sources-setting'),
+                leading: AppIcon(AppIcons.tv),
+                title: const Text('直播源管理'),
+                subtitle: const Text('自填 m3u / txt 直播订阅链接'),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => LiveSourcesScreen(store: widget.store),
+                  ),
+                ),
+              ),
+              ListTile(
                 key: const ValueKey('theme-setting'),
                 leading: AppIcon(AppIcons.palette),
                 title: const Text('外观主题'),
@@ -487,10 +531,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               ListTile(
+                key: const ValueKey('fog-tuning-setting'),
+                leading: AppIcon(AppIcons.tune),
+                title: const Text('雾面调参'),
+                subtitle: const Text('实时调节雾面模糊、浓度与雾形'),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const FogTuningScreen()),
+                ),
+              ),
+              ListTile(
                 leading: AppIcon(AppIcons.people),
                 title: const Text('用户管理'),
                 subtitle: Text('当前：${widget.store.profile.name}'),
                 onTap: _openUserManagement,
+              ),
+              ListTile(
+                key: const ValueKey('bug-report-setting'),
+                leading: AppIcon(AppIcons.edit),
+                title: const Text('反馈 Bug'),
+                subtitle: const Text('一键提交到 GitHub 或复制给开发者'),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: () => showBugReportCard(context),
               ),
               if (widget.store.canDownload)
                 ListTile(

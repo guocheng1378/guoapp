@@ -71,6 +71,9 @@ class SourceSite {
 
   static const hongguo = SourceSite('hongguo', '红果', '短剧 · 漫剧 · AI 剧');
   static const duanjuValues = [
+    // 真果·鉴（AI 聚合）固定列视频类首位：用户主用源，长按选「视频类」
+    // 与点按站源岛的视频类菜单均落到它。
+    SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
     SourceSite('yingshigongchang', '影视工厂', 'maccms · m3u8 · 可播放'),
     SourceSite('360zy', '360', 'maccms · m3u8 · 可播放'),
     SourceSite('modu', '魔都', 'maccms · m3u8 · 可播放'),
@@ -80,7 +83,6 @@ class SourceSite {
     SourceSite('niuniuzy', '牛牛', 'maccms · m3u8 · 可播放'),
     SourceSite('wsyzy', '无水印', 'maccms · m3u8 · 可播放'),
     SourceSite('sorani', '青空', '番剧 · 剧场 · 特摄 · m3u8'),
-    SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
   ];
   static const dsd = SourceSite('dsd', '帝果', '帝果合成短剧 · VIP 直免');
   // engineValues：Go 引擎已注册（specs.go 共 25 源）、体检全绿，但此前漏出
@@ -298,6 +300,7 @@ class Drama {
     this.area = '',
     this.year = '',
     this.score = '',
+    this.duration = 0,
     this.tags = const [],
     this.releaseStatus = '',
   }) : vipStatus = vip;
@@ -317,6 +320,10 @@ class Drama {
   final String area;
   final String year;
   final String score;
+
+  /// 单集时长（秒）。0 = 未知；短剧/长剧判定 >600 秒为长剧，
+  /// 未知时按条目短剧信号与站源分类兜底（见 catalog_browser.dramaIsLongDrama）。
+  final int duration;
   final List<String> tags;
   final String releaseStatus;
   String get releaseLabel => switch (releaseStatus) {
@@ -347,6 +354,7 @@ class Drama {
     area: json['area']?.toString() ?? '',
     year: json['year']?.toString() ?? '',
     score: json['score']?.toString() ?? '',
+    duration: intValue(json['duration']),
     tags: (json['tags'] as List? ?? const []).whereType<String>().toList(),
     releaseStatus: json['releaseStatus'] as String? ?? '',
   );
@@ -367,6 +375,7 @@ class Drama {
     'area': area,
     'year': year,
     'score': score,
+    'duration': duration,
     'tags': tags,
     'releaseStatus': releaseStatus,
   };
@@ -392,6 +401,7 @@ class Drama {
       description: fresh.description.isEmpty ? description : fresh.description,
       cover: fresh.cover.isEmpty ? cover : fresh.cover,
       episodes: fresh.episodes > 0 ? fresh.episodes : episodes,
+      duration: fresh.duration > 0 ? fresh.duration : duration,
       category:
           fresh.category.isEmpty ||
               genericCategories.contains(fresh.category) &&
@@ -422,12 +432,16 @@ class Episode {
       number = intValue(raw['currentEpisode']) > 0
           ? intValue(raw['currentEpisode'])
           : fallback,
-      vip = raw['vip'] == true;
+      vip = raw['vip'] == true,
+      // 红果详情下发的分集横竖屏标记（null=未提供）：竖屏短剧
+      // 判定优先取官方标记，缺失时回退客户端时长启发式。
+      vertical = raw['vertical'] as bool?;
   final Map<String, dynamic> raw;
   final String id;
   final String title;
   final int number;
   final bool vip;
+  final bool? vertical;
 }
 
 class DramaDetail {
@@ -486,6 +500,8 @@ class PlaybackPlan {
     this.expiresAt = 0,
     this.routeIndex = 0,
     this.routeCount = 1,
+    this.routeLabels = const [],
+    this.routeOfficial = const [],
     this.local = false,
   });
   final String url;
@@ -499,8 +515,31 @@ class PlaybackPlan {
   final int expiresAt;
   final int routeIndex;
   final int routeCount;
+  final List<String> routeLabels;
+
+  /// 与 [routeLabels] 一一对应：true 表示该线路是站源官方线（目前只有
+  /// 真果·鉴有）。空表表示该源没有官方线，线路面板按平铺处理。
+  final List<bool> routeOfficial;
   final bool local;
   bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
+
+  bool _isOfficial(int index) =>
+      index >= 0 && index < routeOfficial.length && routeOfficial[index];
+
+  /// 官方线路索引（面板平铺展示）。
+  List<int> get officialRoutes => [
+    for (var index = 0; index < routeCount; index++)
+      if (_isOfficial(index)) index,
+  ];
+
+  /// 第三方线路索引（面板折叠成一条入口）。
+  List<int> get thirdPartyRoutes => [
+    for (var index = 0; index < routeCount; index++)
+      if (!_isOfficial(index)) index,
+  ];
+
+  /// 当前线路是否官方线。
+  bool get onOfficialRoute => _isOfficial(routeIndex);
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',
     local: json['local'] == true,
@@ -519,6 +558,12 @@ class PlaybackPlan {
     routeCount: intValue(json['routeCount']) > 0
         ? intValue(json['routeCount'])
         : 1,
+    routeLabels: (json['routeLabels'] as List? ?? [])
+        .map((label) => label?.toString() ?? '')
+        .toList(),
+    routeOfficial: (json['routeOfficial'] as List? ?? [])
+        .map((flag) => flag == true)
+        .toList(),
   );
 }
 

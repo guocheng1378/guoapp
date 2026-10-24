@@ -104,6 +104,15 @@ class MainActivity : FlutterActivity() {
             window.isNavigationBarContrastEnforced = false
             window.isStatusBarContrastEnforced = false
         }
+        // 挖孔屏横屏时挖孔转到左侧：默认 DEFAULT 模式窗口会在挖孔处 letterbox
+        // 留黑条。SHORT_EDGES 让窗口延伸进挖孔，应用背景/雾面自然覆盖；
+        // Flutter 侧 AppBar 经 SafeArea 仍自动避开挖孔，不遮挡内容。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
     }
 
     override fun onResume() {
@@ -135,6 +144,8 @@ class MainActivity : FlutterActivity() {
                             openQQInApp(call.argument<String>("uin").orEmpty())
                         )
                         "deviceInfo" -> {
+                            // versionName 由 build.gradle.kts 拼成 "x.y.z+build"（pubspec 构建号，
+                            // 不含 split-per-abi 的 ABI 偏移），更新提示依赖该形态比较构建号。
                             val version = packageManager.getPackageInfo(packageName, 0).versionName
                             result.success(mapOf("television" to isTelevisionDevice(), "version" to version))
                         }

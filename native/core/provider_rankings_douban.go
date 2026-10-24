@@ -54,6 +54,11 @@ type doubanCollectionItem struct {
 		Large  string `json:"large"`
 		Normal string `json:"normal"`
 	} `json:"pic"`
+	// cover 是部分电影合集（如 movie_showing / movie_latest）的封面字段
+	//（单 url + 尺寸元数据）；rexxar 各合集响应形态不一，三种都要收。
+	Cover *struct {
+		URL string `json:"url"`
+	} `json:"cover"`
 	Rating *struct {
 		Value float64 `json:"value"`
 		Count int     `json:"count"`
@@ -169,6 +174,9 @@ func parseDoubanRanking(body []byte, board rankingBoard, page int) (rankingPage,
 			ChannelName: "豆瓣",
 		}
 		coverURL := row.CoverURL
+		if coverURL == "" && row.Cover != nil {
+			coverURL = row.Cover.URL
+		}
 		if coverURL == "" && row.Pic != nil {
 			if row.Pic.Large != "" {
 				coverURL = row.Pic.Large
