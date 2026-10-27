@@ -3,7 +3,7 @@
   "announcement": {
     "enabled": true,
     "title": "欢迎使用真果鉴",
-    "message": "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可联系我们（反馈卡内附 QQ：963484350）。",
+    "message": "感谢使用真果鉴！主页左上角长按选择分类，点按备用线路，遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可联系我（反馈卡内附 QQ：963484350）。",
     "button": "我知道了",
     "link": "",
     "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
