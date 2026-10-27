@@ -1,7 +1,7 @@
 name: duanju_app
 description: 独立运行的多端短剧应用
 publish_to: none
-version: 0.2.96+2217
+version: 0.2.96+2219
 environment:
   sdk: '>=3.12.0 <4.0.0'
 
@@ -52,3 +52,10 @@ flutter:
   assets:
     - assets/video_enhancement/
     - assets/icons/
+    # 播放器专用图标：增量构建时目录通配可能不收录后加的文件，显式登记兜底
+    - assets/icons/player-play.svg
+    - assets/icons/player-pause.svg
+    - assets/icons/player-lock.svg
+    - assets/icons/player-lock-open.svg
+    - assets/icons/player-cast.svg
+    - assets/icons/player-cast-connected.svg
