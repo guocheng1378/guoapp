@@ -20,7 +20,27 @@ func (fn rankingTransport) RoundTrip(request *http.Request) (*http.Response, err
 }
 
 // rankingTestDownloader：带注入传输层与空白数据目录的 Downloader。
+// 红果签名请求前会先向设备注册接口（log.snssdk.com）登记设备号，这是产品
+// 固有行为；统一在测试传输层应答，各测试只处理自己的业务请求，调用计数也
+// 不会被注册请求污染。
 func rankingTestDownloader(t *testing.T, fn func(*http.Request) (*http.Response, error)) *Downloader {
+	t.Helper()
+	d := &Downloader{cfg: defaultConfig()}
+	d.cfg.dataDir = t.TempDir()
+	d.client = &http.Client{Transport: rankingTransport(func(request *http.Request) (*http.Response, error) {
+		if strings.Contains(request.URL.Host, "snssdk.com") {
+			return rankingHTTPResponse(request, 200, hongguoTestRegisteredDevice), nil
+		}
+		return fn(request)
+	})}
+	d.limiter = newRequestLimiter(8, time.Nanosecond)
+	d.loadRankingCache()
+	return d
+}
+
+// rankingTestDownloaderRaw：与 rankingTestDownloader 相同，但不拦截设备
+// 注册请求——传输层完全交给调用方，供需要精细控制注册响应的测试使用。
+func rankingTestDownloaderRaw(t *testing.T, fn func(*http.Request) (*http.Response, error)) *Downloader {
 	t.Helper()
 	d := &Downloader{cfg: defaultConfig()}
 	d.cfg.dataDir = t.TempDir()

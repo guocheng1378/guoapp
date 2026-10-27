@@ -41,6 +41,7 @@ type Config struct {
 
 type Downloader struct {
 	rankings              rankingCache
+	live                  liveCache
 	cfg                   Config
 	client                *http.Client
 	huangdouDetails       map[string]huangdouDetailEntry
@@ -98,6 +99,8 @@ type nativeInput struct {
 	StartMS          int64                   `json:"startMs"`
 	DurationMS       int64                   `json:"durationMs"`
 	Board            string                  `json:"board"`
+	ListID           string                  `json:"listId"`
+	LiveURLs         []string                `json:"liveUrls"`
 	Entries          []nativeDownloadEpisode `json:"entries"`
 	JobID            string                  `json:"jobId"`
 	Command          string                  `json:"command"`

@@ -50,7 +50,7 @@ func reopenCatalogEngine(t *testing.T, directory string, transport sourceFixture
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.downloads.close)
-	engine.downloader.client.Transport = transport
+	engine.downloader.client.Transport = withDeviceRegistration(transport)
 	engine.downloader.limiter = newRequestLimiter(3, 0)
 	engine.downloader.cfg.Retries = 1
 	return engine
