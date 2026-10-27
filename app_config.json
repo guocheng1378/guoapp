@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2217,
-    "notes": "本次更新：\n· 修复红果部分新剧点开空白、无法播放（已支持新版加密播放信息格式）\n· 播放地址为空时自动退避重试，并自动更换被风控的线路身份，开播成功率明显提升\n· 播放鉴权前增加设备注册，减少「拿不到播放地址」的情况\n· 含 2216 及以前全部改进（竖横屏双全屏键、选集白卡、屏幕锁真正锁方向、新播放器图标）",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2217/zhenguojian-0.2.96+2217-arm64-v8a.apk"
+    "build": 2218,
+    "notes": "本次更新：\n· 播放器横屏底栏补「转竖屏全屏」旋转钮（视频类全屏后也有旋转入口）；顶栏短剧旋转钮去重，不再与底栏重复\n· 内嵌小窗改用极简单行控制条（播放 + 全屏钮，窄宽不溢出）\n· 手机端清晰度改为右侧抽屉面板，与增强画质设置合入同一滚动视图\n· 含 2217 及以前全部改进（红果新剧播放、竖横屏双全屏键、选集白卡、屏幕锁、新播放器图标）",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2218/zhenguojian-0.2.96+2218-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
