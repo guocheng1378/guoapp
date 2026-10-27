@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2218,
-    "notes": "本次更新：\n· 播放器横屏底栏补「转竖屏全屏」旋转钮（视频类全屏后也有旋转入口）；顶栏短剧旋转钮去重，不再与底栏重复\n· 内嵌小窗改用极简单行控制条（播放 + 全屏钮，窄宽不溢出）\n· 手机端清晰度改为右侧抽屉面板，与增强画质设置合入同一滚动视图\n· 含 2217 及以前全部改进（红果新剧播放、竖横屏双全屏键、选集白卡、屏幕锁、新播放器图标）",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2218/zhenguojian-0.2.96+2218-arm64-v8a.apk"
+    "build": 2219,
+    "notes": "本次更新：\n· 修复 真果·鉴 起播慢的问题：起播改为缓存优先，已解析过的线路直接用，不再每次全链重拉，起播从 25 秒~2 分钟降到十几秒内\n· 线路失效时仍会自动刷新，不影响正常播放",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96.2219/zhenguojian-0.2.96+2219-arm64-v8a.apk"
   },
   "sourceConfig": {}
 }
