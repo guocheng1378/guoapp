@@ -146,6 +146,52 @@ func (s *Source) base(host provider.Host) string {
 	return s.spec.Base
 }
 
+// bases 返回请求 base 候选：运行时覆盖值优先，内置 spec.Base 兜底。
+// 源站换域名时运营可先下发新域；新域半死或尚未生效时仍能回退内置域，
+// 不至于整个源直接不可用（单 base 语义下覆盖即等于砍掉原域）。
+func (s *Source) bases(host provider.Host) []string {
+	primary := strings.TrimRight(s.base(host), "/")
+	builtin := strings.TrimRight(s.spec.Base, "/")
+	switch {
+	case primary == "":
+		return []string{builtin}
+	case builtin == "" || strings.EqualFold(primary, builtin):
+		return []string{primary}
+	}
+	return []string{primary, builtin}
+}
+
+// page 按 base 候选顺序抓页面，任一成功即返回（同时返回命中的 base）。
+// 命中的 base 必须用于卡片相对地址补全与 Referer，保证与实际请求域一致。
+func (s *Source) page(ctx context.Context, host provider.Host, build func(base string) (string, error)) (*html.Node, string, error) {
+	if host == nil {
+		return nil, "", errors.New("站源地址不可用")
+	}
+	var lastErr error
+	for _, base := range s.bases(host) {
+		if base == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		address, err := build(base)
+		if err != nil {
+			// 地址构造失败与 base 无关（分类非法等），换域重试没有意义。
+			return nil, "", err
+		}
+		document, err := s.fetchPage(ctx, host, address, base+"/")
+		if err == nil {
+			return document, base, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("站源地址不可用")
+	}
+	return nil, "", lastErr
+}
+
 func (s *Source) fetchPage(ctx context.Context, host provider.Host, address, referer string) (*html.Node, error) {
 	body, err := host.Text(ctx, provider.Request{Source: s.spec.ID, Address: address, Referer: referer})
 	if err != nil {
@@ -165,12 +211,9 @@ func (s *Source) Categories(ctx context.Context, host provider.Host) ([]provider
 }
 
 func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, category, query string) ([]provider.Drama, bool, error) {
-	base := s.base(host)
-	address, err := s.profile.catalogAddress(base, category, page)
-	if err != nil {
-		return nil, false, err
-	}
-	document, err := s.fetchPage(ctx, host, address, base+"/")
+	document, base, err := s.page(ctx, host, func(base string) (string, error) {
+		return s.profile.catalogAddress(base, category, page)
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -179,9 +222,43 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 }
 
 func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string) (provider.Drama, []provider.Chapter, error) {
-	base := s.base(host)
+	if host == nil {
+		return provider.Drama{}, nil, errors.New("站源地址不可用")
+	}
+	type candidate struct {
+		base    string
+		address string
+	}
+	bases := make([]string, 0, 2)
+	for _, base := range s.bases(host) {
+		if base != "" {
+			bases = append(bases, base)
+		}
+	}
+	pathSets := make([][]string, len(bases))
+	maxPaths := 0
+	for i, base := range bases {
+		pathSets[i] = s.profile.detailURLs(base, sourceID)
+		if len(pathSets[i]) > maxPaths {
+			maxPaths = len(pathSets[i])
+		}
+	}
+	// 按「候选路径 × 候选域」交错展开：先在所有域上试第一条候选路径，再试下一条。
+	// 死域只消耗一次超时就能回退到可用域，不必把每条路径都在死域上试一遍。
+	candidates := make([]candidate, 0, len(bases)*maxPaths)
+	for path := 0; path < maxPaths; path++ {
+		for i, base := range bases {
+			if path < len(pathSets[i]) {
+				candidates = append(candidates, candidate{base: base, address: pathSets[i][path]})
+			}
+		}
+	}
 	var lastErr error
-	for _, address := range s.profile.detailURLs(base, sourceID) {
+	for _, item := range candidates {
+		if err := ctx.Err(); err != nil {
+			return provider.Drama{}, nil, err
+		}
+		base, address := item.base, item.address
 		document, err := s.fetchPage(ctx, host, address, base+"/")
 		if err != nil {
 			lastErr = err
@@ -226,12 +303,9 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 }
 
 func (s *Source) Search(ctx context.Context, host provider.Host, query string) ([]provider.Drama, error) {
-	base := s.base(host)
-	address, err := s.profile.searchAddress(base, query)
-	if err != nil {
-		return nil, err
-	}
-	document, err := s.fetchPage(ctx, host, address, base+"/")
+	document, base, err := s.page(ctx, host, func(base string) (string, error) {
+		return s.profile.searchAddress(base, query)
+	})
 	if err != nil {
 		return nil, err
 	}

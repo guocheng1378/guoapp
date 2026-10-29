@@ -94,21 +94,70 @@ func (s *Source) baseURL(host provider.Host) string {
 	return s.spec.Base
 }
 
+// bases 返回请求 base 候选：运行时覆盖值优先，内置 spec.Base 兜底。
+// 源站换域名时运营可先下发新域；新域半死或未生效时仍能回退内置域，
+// 不至于让整个源直接不可用（单 base 语义下覆盖即等于砍掉原域）。
+func (s *Source) bases(host provider.Host) []string {
+	primary := strings.TrimRight(s.baseURL(host), "/")
+	builtin := strings.TrimRight(s.spec.Base, "/")
+	switch {
+	case primary == "":
+		return []string{builtin}
+	case builtin == "" || strings.EqualFold(primary, builtin):
+		return []string{primary}
+	}
+	return []string{primary, builtin}
+}
+
+// text 按 base 候选顺序发请求，任一成功即返回（同时返回命中的 base）。
+// locked 非空时只用该 base：分页等多步请求复用首次命中的域，避免每页重复试错。
+// 返回的 base 必须用于 Referer/章节地址，保证与实际请求域一致。
+func (s *Source) text(ctx context.Context, host provider.Host, locked string, build func(base string) provider.Request) (string, string, error) {
+	if host == nil {
+		return "", "", errors.New("maccms-api 源未配置")
+	}
+	bases := s.bases(host)
+	if locked != "" {
+		bases = []string{locked}
+	}
+	var lastErr error
+	for _, base := range bases {
+		if base == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
+		raw, err := host.Text(ctx, build(base))
+		if err == nil {
+			return raw, base, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("maccms-api 源未配置")
+	}
+	return "", "", lastErr
+}
+
 func (s *Source) Categories(ctx context.Context, host provider.Host) ([]provider.CatalogCategory, error) {
-	base := s.baseURL(host)
-	if base == "" {
+	if s.baseURL(host) == "" {
 		return nil, errors.New("maccms-api 源未配置")
 	}
 	seen := map[string]string{}
+	base := ""
 	for page := 1; page <= 2; page++ {
-		raw, err := host.Text(ctx, provider.Request{
-			Source:  s.spec.ID,
-			Address: catalogURL(base, "", page),
-			Referer: base + "/",
+		raw, used, err := s.text(ctx, host, base, func(candidate string) provider.Request {
+			return provider.Request{
+				Source:  s.spec.ID,
+				Address: catalogURL(candidate, "", page),
+				Referer: candidate + "/",
+			}
 		})
 		if err != nil {
 			break
 		}
+		base = used
 		var decoded response
 		if json.Unmarshal([]byte(raw), &decoded) != nil {
 			break
@@ -159,15 +208,16 @@ func (s *Source) Categories(ctx context.Context, host provider.Host) ([]provider
 }
 
 func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, category, query string) ([]provider.Drama, bool, error) {
-	base := s.baseURL(host)
-	if base == "" {
+	if s.baseURL(host) == "" {
 		return nil, false, errors.New("maccms-api 源未配置")
 	}
-	address := catalogURL(base, strings.TrimSpace(category), page)
-	raw, err := host.Text(ctx, provider.Request{
-		Source:  s.spec.ID,
-		Address: address,
-		Referer: base + "/",
+	keyword := strings.TrimSpace(category)
+	raw, _, err := s.text(ctx, host, "", func(base string) provider.Request {
+		return provider.Request{
+			Source:  s.spec.ID,
+			Address: catalogURL(base, keyword, page),
+			Referer: base + "/",
+		}
 	})
 	if err != nil {
 		return nil, false, err
@@ -214,15 +264,15 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 }
 
 func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string) (provider.Drama, []provider.Chapter, error) {
-	base := s.baseURL(host)
-	if base == "" {
+	if s.baseURL(host) == "" {
 		return provider.Drama{}, nil, errors.New("maccms-api 源未配置")
 	}
-	address := fmt.Sprintf("%s/api.php/provide/vod/?ac=detail&ids=%s", base, url.QueryEscape(sourceID))
-	raw, err := host.Text(ctx, provider.Request{
-		Source:  s.spec.ID,
-		Address: address,
-		Referer: base + "/",
+	raw, base, err := s.text(ctx, host, "", func(candidate string) provider.Request {
+		return provider.Request{
+			Source:  s.spec.ID,
+			Address: fmt.Sprintf("%s/api.php/provide/vod/?ac=detail&ids=%s", candidate, url.QueryEscape(sourceID)),
+			Referer: candidate + "/",
+		}
 	})
 	if err != nil {
 		return provider.Drama{}, nil, err
@@ -383,15 +433,15 @@ func vodText(value any) string {
 }
 
 func (s *Source) Search(ctx context.Context, host provider.Host, query string) ([]provider.Drama, error) {
-	base := s.baseURL(host)
-	if base == "" {
+	if s.baseURL(host) == "" {
 		return nil, errors.New("maccms-api 源未配置")
 	}
-	address := fmt.Sprintf("%s/api.php/provide/vod/?ac=list&wd=%s&pg=1", base, url.QueryEscape(query))
-	raw, err := host.Text(ctx, provider.Request{
-		Source:  s.spec.ID,
-		Address: address,
-		Referer: base + "/",
+	raw, _, err := s.text(ctx, host, "", func(base string) provider.Request {
+		return provider.Request{
+			Source:  s.spec.ID,
+			Address: fmt.Sprintf("%s/api.php/provide/vod/?ac=list&wd=%s&pg=1", base, url.QueryEscape(query)),
+			Referer: base + "/",
+		}
 	})
 	if err != nil {
 		return nil, err
