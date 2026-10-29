@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"duanjuapp/native/provider"
@@ -76,6 +77,9 @@ type Source struct {
 	spec    provider.Spec
 	typeID  string
 	catalog func(base, typeID string, page int) string
+
+	hitMu sync.Mutex
+	hit   baseHit
 }
 
 func New(spec provider.Spec, typeID string) *Source {
@@ -109,6 +113,49 @@ func (s *Source) bases(host provider.Host) []string {
 	return []string{primary, builtin}
 }
 
+// baseHitTTL 是命中域复用的有效期。过期后重新按「覆盖域优先」试一次，
+// 避免覆盖域修好之后仍被永久降级到内置域。
+const baseHitTTL = 10 * time.Minute
+
+// baseHit 记录最近一次成功的请求域，用于跨调用复用。
+// primary 是记录当时的覆盖值：远程换了域名就作废，不能让旧判断压过新配置。
+type baseHit struct {
+	base    string
+	primary string
+	at      time.Time
+}
+
+// orderedBases 返回本次请求的 base 顺序。最近命中的域排最前，
+// 使分页/详情/搜索这些逐次调用的请求不必每轮都重试一次死域；
+// 命中域失败后仍会继续试其余候选，成功后由 rememberHit 改写。
+func (s *Source) orderedBases(host provider.Host) []string {
+	candidates := s.bases(host)
+	primary := strings.TrimRight(s.baseURL(host), "/")
+	s.hitMu.Lock()
+	hit := s.hit
+	s.hitMu.Unlock()
+	if hit.base == "" || hit.primary != primary || time.Since(hit.at) > baseHitTTL {
+		return candidates
+	}
+	ordered := make([]string, 0, len(candidates)+1)
+	ordered = append(ordered, hit.base)
+	for _, base := range candidates {
+		if base != hit.base {
+			ordered = append(ordered, base)
+		}
+	}
+	return ordered
+}
+
+func (s *Source) rememberHit(host provider.Host, base string) {
+	if base == "" {
+		return
+	}
+	s.hitMu.Lock()
+	s.hit = baseHit{base: base, primary: strings.TrimRight(s.baseURL(host), "/"), at: time.Now()}
+	s.hitMu.Unlock()
+}
+
 // text 按 base 候选顺序发请求，任一成功即返回（同时返回命中的 base）。
 // locked 非空时只用该 base：分页等多步请求复用首次命中的域，避免每页重复试错。
 // 返回的 base 必须用于 Referer/章节地址，保证与实际请求域一致。
@@ -116,7 +163,7 @@ func (s *Source) text(ctx context.Context, host provider.Host, locked string, bu
 	if host == nil {
 		return "", "", errors.New("maccms-api 源未配置")
 	}
-	bases := s.bases(host)
+	bases := s.orderedBases(host)
 	if locked != "" {
 		bases = []string{locked}
 	}
@@ -130,6 +177,7 @@ func (s *Source) text(ctx context.Context, host provider.Host, locked string, bu
 		}
 		raw, err := host.Text(ctx, build(base))
 		if err == nil {
+			s.rememberHit(host, base)
 			return raw, base, nil
 		}
 		lastErr = err

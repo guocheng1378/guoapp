@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 
@@ -129,6 +131,9 @@ type episode struct {
 type Source struct {
 	spec    provider.Spec
 	profile profile
+
+	hitMu sync.Mutex
+	hit   baseHit
 }
 
 func New(spec provider.Spec) *Source {
@@ -161,6 +166,49 @@ func (s *Source) bases(host provider.Host) []string {
 	return []string{primary, builtin}
 }
 
+// baseHitTTL 是命中域复用的有效期。过期后重新按「覆盖域优先」试一次，
+// 避免覆盖域修好之后仍被永久降级到内置域。
+const baseHitTTL = 10 * time.Minute
+
+// baseHit 记录最近一次成功的请求域，用于跨调用复用。
+// primary 是记录当时的覆盖值：远程换了域名就作废，不能让旧判断压过新配置。
+type baseHit struct {
+	base    string
+	primary string
+	at      time.Time
+}
+
+// orderedBases 返回本次请求的 base 顺序。最近命中的域排最前，
+// 使分页/详情/搜索这些逐次调用的请求不必每轮都重试一次死域；
+// 命中域失败后仍会继续试其余候选，成功后由 rememberHit 改写。
+func (s *Source) orderedBases(host provider.Host) []string {
+	candidates := s.bases(host)
+	primary := strings.TrimRight(s.base(host), "/")
+	s.hitMu.Lock()
+	hit := s.hit
+	s.hitMu.Unlock()
+	if hit.base == "" || hit.primary != primary || time.Since(hit.at) > baseHitTTL {
+		return candidates
+	}
+	ordered := make([]string, 0, len(candidates)+1)
+	ordered = append(ordered, hit.base)
+	for _, base := range candidates {
+		if base != hit.base {
+			ordered = append(ordered, base)
+		}
+	}
+	return ordered
+}
+
+func (s *Source) rememberHit(host provider.Host, base string) {
+	if base == "" {
+		return
+	}
+	s.hitMu.Lock()
+	s.hit = baseHit{base: base, primary: strings.TrimRight(s.base(host), "/"), at: time.Now()}
+	s.hitMu.Unlock()
+}
+
 // page 按 base 候选顺序抓页面，任一成功即返回（同时返回命中的 base）。
 // 命中的 base 必须用于卡片相对地址补全与 Referer，保证与实际请求域一致。
 func (s *Source) page(ctx context.Context, host provider.Host, build func(base string) (string, error)) (*html.Node, string, error) {
@@ -168,7 +216,7 @@ func (s *Source) page(ctx context.Context, host provider.Host, build func(base s
 		return nil, "", errors.New("站源地址不可用")
 	}
 	var lastErr error
-	for _, base := range s.bases(host) {
+	for _, base := range s.orderedBases(host) {
 		if base == "" {
 			continue
 		}
@@ -182,6 +230,7 @@ func (s *Source) page(ctx context.Context, host provider.Host, build func(base s
 		}
 		document, err := s.fetchPage(ctx, host, address, base+"/")
 		if err == nil {
+			s.rememberHit(host, base)
 			return document, base, nil
 		}
 		lastErr = err
@@ -230,7 +279,7 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 		address string
 	}
 	bases := make([]string, 0, 2)
-	for _, base := range s.bases(host) {
+	for _, base := range s.orderedBases(host) {
 		if base != "" {
 			bases = append(bases, base)
 		}
@@ -264,6 +313,7 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 			lastErr = err
 			continue
 		}
+		s.rememberHit(host, base)
 		episodes := episodesFromDocument(document)
 		if len(episodes) == 0 {
 			lastErr = errors.New("未解析到分集列表")

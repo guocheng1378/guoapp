@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"duanjuapp/native/provider"
 )
@@ -133,6 +134,57 @@ func TestDetailFallsBackToBuiltinBase(t *testing.T) {
 	}
 	if len(host.calls) != 2 || !strings.HasPrefix(host.calls[1], "https://builtin.example.cn") {
 		t.Fatalf("详情应先试覆盖域再回退内置域: %v", host.calls)
+	}
+}
+
+// TestCatalogPageReusesHitBaseAcrossCalls 目录翻页是逐次调用，
+// 命中域必须在调用之间记住，否则每页都要再等一次死域超时。
+func TestCatalogPageReusesHitBaseAcrossCalls(t *testing.T) {
+	source := fallbackSource()
+	host := &fallbackHost{primary: "https://mirror.example.cn", body: fallbackCatalogBody}
+	if _, _, err := source.CatalogPage(context.Background(), host, 1, "", ""); err != nil {
+		t.Fatalf("第一页: %v", err)
+	}
+	if len(host.calls) != 2 {
+		t.Fatalf("第一页应两跳后命中: %v", host.calls)
+	}
+	host.calls = nil
+	if _, _, err := source.CatalogPage(context.Background(), host, 2, "", ""); err != nil {
+		t.Fatalf("第二页: %v", err)
+	}
+	if len(host.calls) != 1 || !strings.HasPrefix(host.calls[0], "https://builtin.example.cn") {
+		t.Fatalf("第二页应直接复用命中域: %v", host.calls)
+	}
+}
+
+// TestOrderedBasesDropsHitWhenOverrideChanges 远程换了覆盖域，旧命中判断必须作废。
+func TestOrderedBasesDropsHitWhenOverrideChanges(t *testing.T) {
+	source := fallbackSource()
+	host := &fallbackHost{primary: "https://mirror.example.cn", body: fallbackCatalogBody}
+	if _, _, err := source.CatalogPage(context.Background(), host, 1, "", ""); err != nil {
+		t.Fatalf("CatalogPage: %v", err)
+	}
+	host.primary = "https://mirror2.example.cn"
+	got := source.orderedBases(host)
+	if len(got) != 2 || got[0] != "https://mirror2.example.cn" || got[1] != "https://builtin.example.cn" {
+		t.Fatalf("覆盖域变更后应重新按新覆盖域优先: %v", got)
+	}
+}
+
+// TestOrderedBasesIgnoresExpiredHit 命中域会过期，避免覆盖域修好后仍永久降级。
+func TestOrderedBasesIgnoresExpiredHit(t *testing.T) {
+	source := fallbackSource()
+	host := &fallbackHost{primary: "https://mirror.example.cn"}
+	source.hitMu.Lock()
+	source.hit = baseHit{
+		base:    "https://builtin.example.cn",
+		primary: "https://mirror.example.cn",
+		at:      time.Now().Add(-baseHitTTL - time.Minute),
+	}
+	source.hitMu.Unlock()
+	got := source.orderedBases(host)
+	if len(got) != 2 || got[0] != "https://mirror.example.cn" {
+		t.Fatalf("命中域过期后应回到覆盖域优先: %v", got)
 	}
 }
 
