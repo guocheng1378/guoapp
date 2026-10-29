@@ -191,8 +191,11 @@ func (d *Downloader) fetchHongguoWebChapters(ctx context.Context, sourceID strin
 	return title, chapters, nil
 }
 
+// reRouterData 原先写在 parseRouterData 内，播放解析每次都会走这条路径。
+var reRouterData = regexp.MustCompile(`(?s)(?:window\.)?_ROUTER_DATA\s*=\s*`)
+
 func parseRouterData(raw string) map[string]any {
-	idx := regexp.MustCompile(`(?s)(?:window\.)?_ROUTER_DATA\s*=\s*`).FindStringIndex(raw)
+	idx := reRouterData.FindStringIndex(raw)
 	if idx == nil {
 		return nil
 	}
@@ -226,8 +229,25 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
 		return providerMedia{}, fmt.Errorf("红果章节 ID 无效，请重新获取章节")
 	}
-	// 红果已把公开 SEO 直链降级为 10 秒试看片段（播放页元数据仍谎报完整时长），
-	// 完整播放必须走受保护的 play-info 接口拿签名全量地址。
+	// App 取流优先：video_model 接口直接给出完整播放地址 + CENC 密钥
+	// （spade_a 解出），是唯一能同时拿到两者的路径。站点 2026-10-26 把
+	// 受保护 play-info 接口改成返回加密 DASH（play_info.kid +
+	// player_access_key），密钥推导尚未逆向成功，只能作地址兜底。
+	// App 网关会随机抽样返回 HTTP 200 空包（实测约六分之一），接口内部已做
+	// 3~4 次重试，这里再兜一轮，规避连续空包把唯一可用路径打穿。
+	var appErr error
+	for round := 0; round < 2; round++ {
+		media, nativeErr := d.resolveHongguoAppMedia(ctx, videoID)
+		if nativeErr == nil {
+			return media, nil
+		}
+		appErr = nativeErr
+		if err := ctx.Err(); err != nil {
+			return providerMedia{}, err
+		}
+	}
+	// 兜底一：受保护 play-info 接口（新结构只有地址、无可用密钥，加密媒体
+	// 播不了；站点若回退旧结构或返回未加密地址时仍可用）。
 	media, protectedErr := d.resolveHongguoProtectedMedia(ctx, seriesID, videoID)
 	if protectedErr == nil {
 		return media, nil
@@ -235,15 +255,7 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if err := ctx.Err(); err != nil {
 		return providerMedia{}, err
 	}
-	// 兜底：App 取流 / 网页播放页 / Playback API。公开直链已失效，这些路径仅在
-	// play-info 接口整体不可用时作为最后手段，不会把试看片段冒充整集。
-	media, nativeErr := d.resolveHongguoAppMedia(ctx, videoID)
-	if nativeErr == nil {
-		return media, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return providerMedia{}, err
-	}
+	// 兜底二：网页播放页（内部同样收敛到受保护接口）。
 	media, pageErr := d.resolveHongguoWebMedia(ctx, seriesID, videoID)
 	if pageErr == nil {
 		return media, nil
@@ -251,11 +263,12 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if err := ctx.Err(); err != nil {
 		return providerMedia{}, err
 	}
+	// 兜底三：Playback API（第三方聚合，已停止服务该批内容）。
 	media, apiErr := d.resolveHongguoPlaybackAPI(ctx, seriesID, videoID)
 	if apiErr == nil {
 		return media, nil
 	}
-	return providerMedia{}, fmt.Errorf("红果取流失败：受保护接口 %v；App %v；网页 %v；备用 %w", publicError(protectedErr), publicError(nativeErr), publicError(pageErr), apiErr)
+	return providerMedia{}, fmt.Errorf("红果取流失败：App %v；受保护接口 %v；网页 %v；备用 %w", publicError(appErr), publicError(protectedErr), publicError(pageErr), apiErr)
 }
 
 // hongguoWebUserAgent 站点网页路由（详情/播放页）只放行桌面浏览器 UA，
@@ -370,8 +383,11 @@ const hongguoProtectedPlayInfoPath = "/api/video/protected/play-info"
 
 // resolveHongguoProtectedMedia 经受保护的 play-info 接口取回完整签名地址。
 //
-// 该接口对公开剧集返回全量 mp4（而非 SEO 直链的 10 秒试看）。站点偶发随机 404，
-// 这里做有限重试，与网页/直链预热行为保持一致。
+// 2026-10-26 起该接口返回 play_info 结构：地址是全量签名 DASH（main_url/
+// backup_url），但媒体为 CENC 加密（kid + player_access_key），密钥推导尚未
+// 逆向成功——此路径只能给出地址，加密内容播不了，仅作 App 取流失败后的兜底
+// （站点若回退旧结构或返回未加密地址时仍可用）。站点偶发随机 404，这里做有限
+// 重试，与网页/直链预热行为保持一致。
 func (d *Downloader) resolveHongguoProtectedMedia(ctx context.Context, seriesID, videoID string) (providerMedia, error) {
 	if !hongguoNumericID.MatchString(seriesID) || !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, fmt.Errorf("红果播放请求缺少有效的剧集 ID")
@@ -436,6 +452,13 @@ func (d *Downloader) resolveHongguoProtectedMedia(ctx context.Context, seriesID,
 }
 
 // parseHongguoProtectedPlayInfo 解析受保护播放信息接口响应，提取完整媒体地址。
+//
+// 站点 2026-10-26 起把响应结构从 legacy_play_info 换成 play_info（实测全站生效）：
+// 地址字段同名（main_url/backup_url），清晰度挪到 definition（"720p"），时长仍是秒。
+// play_info 附带 kid + player_access_key（CENC 加密材料，媒体为 encv/sinf/tenc +
+// senc 加密 DASH），该密钥的推导尚未逆向成功——加密媒体只能经 App 取流路径
+// （video_model 的 spade_a）获得密钥，故本函数对新旧两种结构都只负责给出地址，
+// 由调用链按序尝试（App 优先，见 resolveHongguoMedia）。
 func parseHongguoProtectedPlayInfo(body []byte) (providerMedia, error) {
 	var envelope struct {
 		LegacyPlayInfo struct {
@@ -443,23 +466,55 @@ func parseHongguoProtectedPlayInfo(body []byte) (providerMedia, error) {
 			Height   string  `json:"height"`
 			Duration float64 `json:"duration"`
 		} `json:"legacy_play_info"`
+		PlayInfo struct {
+			MainURL    string  `json:"main_url"`
+			BackupURL  string  `json:"backup_url"`
+			Definition string  `json:"definition"`
+			Height     string  `json:"height"`
+			Duration   float64 `json:"duration"`
+		} `json:"play_info"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&envelope); err != nil {
 		return providerMedia{}, errors.New("红果受保护播放接口返回了无效数据")
 	}
-	address := strings.TrimSpace(envelope.LegacyPlayInfo.MainURL)
+	// 新结构优先；旧结构（legacy_play_info）字段同名，作为回退保留兼容。
+	address := strings.TrimSpace(envelope.PlayInfo.MainURL)
+	backup := strings.TrimSpace(envelope.PlayInfo.BackupURL)
+	height := envelope.PlayInfo.Height
+	definition := envelope.PlayInfo.Definition
+	duration := envelope.PlayInfo.Duration
+	if address == "" {
+		address = strings.TrimSpace(envelope.LegacyPlayInfo.MainURL)
+		backup = ""
+		height = envelope.LegacyPlayInfo.Height
+		definition = ""
+		duration = envelope.LegacyPlayInfo.Duration
+	}
 	if address == "" || len(address) > 8192 || !isProviderHTTPMediaURL(address) {
 		return providerMedia{}, errors.New("红果受保护播放接口返回的媒体地址无效")
 	}
-	quality, _ := strconv.Atoi(hongguoQualityNumber.FindString(envelope.LegacyPlayInfo.Height))
+	quality := 0
+	if number, err := strconv.Atoi(hongguoQualityNumber.FindString(height)); err == nil {
+		quality = number
+	}
+	if quality == 0 {
+		if number, err := strconv.Atoi(hongguoQualityNumber.FindString(definition)); err == nil {
+			quality = number
+		}
+	}
 	media := providerMedia{
 		URL:      address,
 		Quality:  quality,
-		Duration: time.Duration(envelope.LegacyPlayInfo.Duration * float64(time.Second)),
+		Duration: time.Duration(duration * float64(time.Second)),
 	}
 	media.Variants = []providerMedia{media}
+	if backup != "" && backup != address && len(backup) <= 8192 && isProviderHTTPMediaURL(backup) {
+		variant := media
+		variant.URL = backup
+		media.Variants = append(media.Variants, variant)
+	}
 	return media, nil
 }
 

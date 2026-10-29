@@ -109,12 +109,18 @@ func (d *Downloader) discoverAPIHosts(ctx context.Context) ([]string, error) {
 	return nil, errors.New("官网前端未提供可识别的 API 地址，请稍后重试或更新应用")
 }
 
+// 这两条正则原先写在函数内：探测每次重建一次 DFA，属纯浪费。
+var (
+	reLegacyScriptSrc = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc=["']([^"']+)["']`)
+	reCloudFrontHost  = regexp.MustCompile(`https://[a-z0-9]+\.cloudfront\.net`)
+)
+
 func (d *Downloader) fetchLegacyFrontendScript(ctx context.Context) (string, error) {
 	page, err := d.fetchProviderText(ctx, legacyFrontendURL+"/", legacyFrontendURL+"/")
 	if err != nil {
 		return "", err
 	}
-	scripts := regexp.MustCompile(`(?i)<script\b[^>]*\bsrc=["']([^"']+)["']`).FindAllStringSubmatch(page, -1)
+	scripts := reLegacyScriptSrc.FindAllStringSubmatch(page, -1)
 	for _, script := range scripts {
 		if !strings.Contains(script[1], "/main-") || !strings.HasSuffix(script[1], ".js") {
 			continue
@@ -134,7 +140,7 @@ func (d *Downloader) fetchLegacyFrontendScript(ctx context.Context) (string, err
 }
 
 func parseAPIHosts(script string) []string {
-	matches := regexp.MustCompile(`https://[a-z0-9]+\.cloudfront\.net`).FindAllString(script, -1)
+	matches := reCloudFrontHost.FindAllString(script, -1)
 	seen := map[string]bool{}
 	var hosts []string
 	for _, host := range matches {

@@ -62,7 +62,32 @@ var (
 	reDateText        = regexp.MustCompile(`\d{4}-\d{1,2}-\d{1,2}`)
 	reViewsText       = regexp.MustCompile(`(?i)[0-9]+(?:\.[0-9]+)?\s*[w万]?\s*次播放`)
 	reScoreText       = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s*分`)
+
+	// 以下正则原先写在函数体内：cleanText 一次编译 3 条，卡片解析逐条调用，
+	// 一页 20 张卡就是 60+ 次重编译（实测 cleanText 慢 3.7 倍）。提到包级只编译一次。
+	reOgTitle          = regexp.MustCompile(`(?is)<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>`)
+	reVideoInitialData = regexp.MustCompile(`(?is)<script\b[^>]*id=["']videoInitialData["'][^>]*>(.*?)</script>`)
+	reJSONLDBlock      = regexp.MustCompile(`(?is)<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
+	reEpPathNumber     = regexp.MustCompile(`/ep-(\d+)(?:/|$)`)
+	reHgTag            = regexp.MustCompile(`(?is)<[^>]+class=["'][^"']*hg-tag[^"']*["'][^>]*>(.*?)</[^>]+>`)
+	reScriptBlock      = regexp.MustCompile(`(?is)<script\b.*?</script>`)
+	reStyleBlock       = regexp.MustCompile(`(?is)<style\b.*?</style>`)
+	reAnyTag           = regexp.MustCompile(`(?is)<[^>]+>`)
 )
+
+// dynamicRegexCache 缓存「按参数拼出来的」正则（extractAttr 的属性名、
+// extractByClassText 的类名）。这些模式由代码里固定的少量字符串产生，
+// key 数量有界，不会随抓取内容增长。
+var dynamicRegexCache sync.Map
+
+func cachedPattern(pattern string) *regexp.Regexp {
+	if value, ok := dynamicRegexCache.Load(pattern); ok {
+		return value.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(pattern)
+	dynamicRegexCache.Store(pattern, re)
+	return re
+}
 
 // huangguoAIMirrorsMu 保护 huangguoAIBaseMirrors：提供方请求并发读，config.source 热更写。
 var huangguoAIMirrorsMu sync.RWMutex
@@ -385,9 +410,12 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 	return "", lastErr
 }
 
+// providerURLCandidates 展开黄果AI的固定镜像与动态猜解域（只按 path 换 host）。
+// 不要求 rawURL 落在 huangguoai.com：base 被热更覆盖成新域后仍要能继续展开镜像，
+// 限定源的责任在调用方（Downloader.providerURLCandidates 已按 source 过滤）。
 func providerURLCandidates(rawURL string) []string {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() != "huangguoai.com" {
+	if err != nil || u.Host == "" {
 		return []string{rawURL}
 	}
 	mirrors := huangguoAIMirrorList()
@@ -547,7 +575,7 @@ func splitHuangguoAICardBlocks(raw string) []string {
 func parseHuangguoAIJSONLDDramas(raw, category string) []Drama {
 	var out []Drama
 	seen := map[string]bool{}
-	for _, block := range regexp.MustCompile(`(?is)<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`).FindAllStringSubmatch(raw, -1) {
+	for _, block := range reJSONLDBlock.FindAllStringSubmatch(raw, -1) {
 		if len(block) < 2 {
 			continue
 		}
@@ -751,8 +779,7 @@ func parseAIVideoURL(rawHTML, pageURL string) string {
 }
 
 func parseAIVideoInitialData(rawHTML, pageURL string) string {
-	re := regexp.MustCompile(`(?is)<script\b[^>]*id=["']videoInitialData["'][^>]*>(.*?)</script>`)
-	m := re.FindStringSubmatch(rawHTML)
+	m := reVideoInitialData.FindStringSubmatch(rawHTML)
 	if len(m) < 2 {
 		return ""
 	}
@@ -768,7 +795,7 @@ func parseAIVideoInitialData(rawHTML, pageURL string) string {
 		return ""
 	}
 	preferred := firstNonEmpty(mapString(data, "ep", "episode"))
-	if m := regexp.MustCompile(`/ep-(\d+)(?:/|$)`).FindStringSubmatch(pageURL); len(m) > 1 {
+	if m := reEpPathNumber.FindStringSubmatch(pageURL); len(m) > 1 {
 		preferred = m[1]
 	}
 	if preferred != "" {
@@ -800,8 +827,7 @@ func parseDataHLS(rawHTML, pageURL string) string {
 // 播放地址（key=集序号字符串）。2026-10-20 起单集页（/video/{epID}/）在全部镜像
 // 入口上要么 301 死循环要么跳「最新地址」发布页，播放地址只随详情页下发。
 func parseAIEpisodeMediaMap(rawHTML, pageURL string) map[string]string {
-	re := regexp.MustCompile(`(?is)<script\b[^>]*id=["']videoInitialData["'][^>]*>(.*?)</script>`)
-	m := re.FindStringSubmatch(rawHTML)
+	m := reVideoInitialData.FindStringSubmatch(rawHTML)
 	if len(m) < 2 {
 		return nil
 	}
@@ -1000,7 +1026,7 @@ func extractPageTitle(rawHTML string) string {
 			return t
 		}
 	}
-	if m := regexp.MustCompile(`(?is)<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>`).FindStringSubmatch(rawHTML); len(m) > 1 {
+	if m := reOgTitle.FindStringSubmatch(rawHTML); len(m) > 1 {
 		if t := strings.TrimSpace(html.UnescapeString(m[1])); t != "" {
 			return t
 		}
@@ -1020,7 +1046,7 @@ func extractDescription(rawHTML string) string {
 
 func extractAttr(block string, names ...string) string {
 	for _, name := range names {
-		re := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(name) + `\s*=\s*["']([^"']+)["']`)
+		re := cachedPattern(`(?is)\b` + regexp.QuoteMeta(name) + `\s*=\s*["']([^"']+)["']`)
 		if m := re.FindStringSubmatch(block); len(m) > 1 {
 			return strings.TrimSpace(html.UnescapeString(m[1]))
 		}
@@ -1032,7 +1058,7 @@ func extractByClassText(raw, className string) string {
 	if className == "" {
 		return ""
 	}
-	re := regexp.MustCompile(`(?is)<[^>]+class=["'][^"']*` + regexp.QuoteMeta(className) + `[^"']*["'][^>]*>(.*?)</[^>]+>`)
+	re := cachedPattern(`(?is)<[^>]+class=["'][^"']*` + regexp.QuoteMeta(className) + `[^"']*["'][^>]*>(.*?)</[^>]+>`)
 	if m := re.FindStringSubmatch(raw); len(m) > 1 {
 		return cleanText(m[1])
 	}
@@ -1047,10 +1073,9 @@ func firstMatchText(re *regexp.Regexp, raw string) string {
 }
 
 func extractTags(raw string) []string {
-	re := regexp.MustCompile(`(?is)<[^>]+class=["'][^"']*hg-tag[^"']*["'][^>]*>(.*?)</[^>]+>`)
 	seen := map[string]bool{}
 	var out []string
-	for _, m := range re.FindAllStringSubmatch(raw, -1) {
+	for _, m := range reHgTag.FindAllStringSubmatch(raw, -1) {
 		if len(m) < 2 {
 			continue
 		}
@@ -1103,9 +1128,9 @@ func normalizeViews(s string) string {
 }
 
 func cleanText(s string) string {
-	s = regexp.MustCompile(`(?is)<script\b.*?</script>`).ReplaceAllString(s, " ")
-	s = regexp.MustCompile(`(?is)<style\b.*?</style>`).ReplaceAllString(s, " ")
-	s = regexp.MustCompile(`(?is)<[^>]+>`).ReplaceAllString(s, " ")
+	s = reScriptBlock.ReplaceAllString(s, " ")
+	s = reStyleBlock.ReplaceAllString(s, " ")
+	s = reAnyTag.ReplaceAllString(s, " ")
 	s = html.UnescapeString(s)
 	s = spaceChars.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
