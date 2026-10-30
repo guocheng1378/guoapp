@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'glass.dart';
 import 'app_icons.dart';
@@ -41,6 +42,60 @@ class _SearchInputState extends State<SearchInput> {
   bool _selected = false;
   final _cache = <String, List<SearchSuggestion>>{};
 
+  /// 搜索历史（最近 10 条，去重置顶）：localStorage 持久化。
+  /// 面板由 _history 驱动渲染而非走 options 通道——RawAutocomplete 的
+  /// options 只在输入变化时重算，删除单条后列表不会刷新。
+  static const _historyKey = 'search_history.v1';
+  static const _historyLimit = 10;
+  final ValueNotifier<List<String>> _history = ValueNotifier(const []);
+  bool _historyShown = false;
+  bool _tooLong = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadHistory());
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      _history.value = prefs.getStringList(_historyKey) ?? const [];
+    } catch (_) {
+      // 测试宿主/异常环境无 SharedPreferences：历史静默不可用。
+    }
+  }
+
+  Future<void> _persistHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_historyKey, _history.value);
+    } catch (_) {
+      // 持久化失败不影响本次使用。
+    }
+  }
+
+  void _rememberHistory(String query) {
+    final next = <String>[query, ..._history.value.where((w) => w != query)];
+    if (next.length > _historyLimit) {
+      next.removeRange(_historyLimit, next.length);
+    }
+    _history.value = next;
+    unawaited(_persistHistory());
+  }
+
+  void _removeHistoryAt(int index) {
+    final next = [..._history.value]..removeAt(index);
+    _history.value = next;
+    unawaited(_persistHistory());
+  }
+
+  void _clearHistory() {
+    _history.value = const [];
+    unawaited(_persistHistory());
+  }
+
   void _cancel() {
     _timer?.cancel();
     widget.onCancel?.call();
@@ -66,10 +121,22 @@ class _SearchInputState extends State<SearchInput> {
   Future<Iterable<SearchSuggestion>> _options(TextEditingValue value) async {
     _cancel();
     final query = value.text.trim();
-    if (query.isEmpty ||
-        query.length > 100 ||
-        widget.suggestions == null ||
-        !value.composing.isCollapsed) {
+    if (query.isEmpty) {
+      _tooLong = false;
+      _suggestFailed = false;
+      // 空词聚焦时展示搜索历史面板（由 optionsViewBuilder 渲染）。
+      _historyShown = _history.value.isNotEmpty;
+      return const [];
+    }
+    if (query.length > 100) {
+      // 超长词不再静默：给一行可见提示。
+      _tooLong = true;
+      _historyShown = false;
+      return const [];
+    }
+    _tooLong = false;
+    _historyShown = false;
+    if (widget.suggestions == null || !value.composing.isCollapsed) {
       return const [];
     }
     if (_cache.containsKey(query)) return _cache[query]!;
@@ -99,12 +166,14 @@ class _SearchInputState extends State<SearchInput> {
 
   void _submit(String value) {
     _cancel();
+    final query = value.trim();
+    if (query.isNotEmpty) _rememberHistory(query);
     widget.controller.value = TextEditingValue(
       text: value,
       selection: TextSelection.collapsed(offset: value.length),
     );
     _focus.unfocus();
-    widget.onSearch(value.trim());
+    widget.onSearch(query);
   }
 
   /// 建议点选：可直达播放的走富回调，其余填词搜索。
@@ -151,6 +220,34 @@ class _SearchInputState extends State<SearchInput> {
   }
 
   bool _suggestFailed = false;
+
+  /// options 区顶部单行提示条（建议失败/搜索词过长共用）。
+  Widget _noticeRow(Widget leading, String text, {Key? key}) => Align(
+    alignment: Alignment.topLeft,
+    child: GlassSurface(
+      variant: GlassVariant.surface,
+      radius: GlassTokens.radiusChip,
+      elevated: false,
+      child: Material(
+        type: MaterialType.transparency,
+        child: SizedBox(
+          width: MediaQuery.sizeOf(context).width,
+          height: 48,
+          child: ListTile(
+            key: key,
+            leading: leading,
+            title: Text(
+              text,
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => RawAutocomplete<SearchSuggestion>(
@@ -226,6 +323,21 @@ class _SearchInputState extends State<SearchInput> {
           MediaQuery.viewInsetsOf(context).bottom;
       // 建议请求失败时给一行可见反馈，不再静默吞异常。
       if (values.isEmpty && _suggestFailed) {
+        return _noticeRow(
+          AppIcon(AppIcons.cloudOff, size: 18),
+          '搜索建议加载失败',
+        );
+      }
+      // 超长搜索词提示（原为静默返回空建议）。
+      if (_tooLong) {
+        return _noticeRow(
+          AppIcon(AppIcons.search, size: 18),
+          '搜索词过长，请精简后再试',
+          key: const ValueKey('search-too-long'),
+        );
+      }
+      // 搜索历史面板：空词聚焦时出现，单条可删、可一键清空。
+      if (_historyShown && _history.value.isNotEmpty) {
         return Align(
           alignment: Alignment.topLeft,
           child: GlassSurface(
@@ -234,19 +346,70 @@ class _SearchInputState extends State<SearchInput> {
             elevated: false,
             child: Material(
               type: MaterialType.transparency,
-              child: SizedBox(
-                width: MediaQuery.sizeOf(context).width,
-                height: 48,
-                child: ListTile(
-                  leading: AppIcon(AppIcons.cloudOff, size: 18),
-                  title: Text(
-                    '搜索建议加载失败',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+              child: ValueListenableBuilder<List<String>>(
+                valueListenable: _history,
+                builder: (context, words, _) {
+                  if (words.isEmpty) return const SizedBox.shrink();
+                  return SizedBox(
+                    width: MediaQuery.sizeOf(context).width,
+                    height: min(
+                      min(300.0, max(96.0, available * .45)),
+                      (words.length + 1) * 48.0,
                     ),
-                  ),
-                ),
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 4, 0),
+                          child: Row(
+                            children: [
+                              Text(
+                                '搜索历史',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const Spacer(),
+                              TextButton(
+                                key: const ValueKey('search-history-clear'),
+                                onPressed: _clearHistory,
+                                child: const Text('清空'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            itemCount: words.length,
+                            itemBuilder: (context, index) {
+                              final word = words[index];
+                              return ListTile(
+                                key: ValueKey('search-history-$index'),
+                                dense: true,
+                                leading: AppIcon(AppIcons.history, size: 18),
+                                title: Text(
+                                  word,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: IconButton(
+                                  key: ValueKey('search-history-del-$index'),
+                                  tooltip: '删除该条',
+                                  icon: AppIcon(AppIcons.close, size: 16),
+                                  onPressed: () => _removeHistoryAt(index),
+                                ),
+                                onTap: () => _submit(word),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
           ),

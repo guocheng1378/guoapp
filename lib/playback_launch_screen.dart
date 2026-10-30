@@ -84,7 +84,11 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
     final generation = ++_generation;
     setState(() => _error = null);
     try {
-      final detail = await widget.repository.detail(widget.drama);
+      // 超时兜底：解析链挂起时不再无限转圈，20s 后浮错误卡可重试
+      // （底层请求不取消，重试期间原请求若完成也只作废）。
+      final detail = await widget.repository
+          .detail(widget.drama)
+          .timeout(const Duration(seconds: 20));
       if (!mounted ||
           generation != _generation ||
           _profileEpoch != widget.store.profileEpoch) {
@@ -171,12 +175,44 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       );
     } catch (error) {
       if (!mounted || generation != _generation) return;
-      setState(() => _error = error.toString());
+      setState(() => _error = friendlyError(error));
       widget.repository.catalogUpdates.publish(
         widget.repository.catalogUpdates.current(widget.drama),
         retryCover: true,
       );
     }
+  }
+
+  /// 加载中的白瓷圆片 + 来源名标注。
+  Widget _buildLoadingCard() {
+    final sourceName =
+        SourceSite.byId(widget.drama.source)?.name ??
+        (widget.drama.source.isEmpty ? null : widget.drama.source);
+    return GlassSurface(
+      radius: 28,
+      tint: GlassTint.pill,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 30,
+            height: 30,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
+          if (sourceName != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              '正在加载 · $sourceName',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -194,19 +230,8 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
                   ? const SizedBox.shrink()
                   : Center(
                       // 白瓷面小圆片：亮色海报上转圈仍可辨，无整页底色。
-                      child: GlassSurface(
-                        radius: 999,
-                        // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
-                        tint: GlassTint.pill,
-                        child: const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: SizedBox(
-                            width: 30,
-                            height: 30,
-                            child: CircularProgressIndicator(strokeWidth: 3),
-                          ),
-                        ),
-                      ),
+                      // 下方标注加载中的来源，用户知道在等谁。
+                      child: _buildLoadingCard(),
                     ))
             : Center(
                 // 错误卡：连续文字面用实底档，保证可读；可返回可重试。
