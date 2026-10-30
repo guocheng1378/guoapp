@@ -10,6 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Windows%20%7C%20Android%20TV-2B2B2E?style=flat-square)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47-54C5F8?style=flat-square&logo=flutter&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)
+![License](https://img.shields.io/badge/license-GPL--3.0-2B2B2E?style=flat-square)
 
 </div>
 
@@ -100,7 +101,7 @@
 
 - **站源插件化**：所有站源实现统一的 `Provider` 契约（目录 / 详情 / 搜索 / 媒体解析），注册进 `native/provider` 注册表，新增站源零侵入
 - **无服务端架构**：请求、解析、缓存、下载全部在本地完成，隐私数据不出设备
-- 详细的架构与站源接入文档见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- 架构与实现详解见 [docs/](docs/README.md)（编号文档 01–05）
 - **想新增站源？** 五步接入指南（Spec 登记 → 能力实现 → 注册聚合 → 验收）见 [docs/SOURCE-GUIDE.md](docs/SOURCE-GUIDE.md)
 
 ## 🛠 从源码构建
@@ -121,7 +122,15 @@ flutter build windows --dart-define=ALL_SOURCES=true
 python scripts/package_release.py --platform android --all-sources
 ```
 
-> 变体说明：`ALL_SOURCES=true` 构建为**真果鉴**（25 源）；不传该参数构建为**红果鉴**（默认单源精简版）。Go 原生核心需先行编译：在 `native` 目录执行 `go build ./core`，Android / Windows 交叉编译命令见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+> 变体说明：`ALL_SOURCES=true` 构建为**真果鉴**（25 源）；不传该参数构建为**红果鉴**（默认单源精简版）。Go 原生核心需先行编译：在 `native` 目录执行 `go build ./core`，Android / Windows 交叉编译命令见 [docs/05_项目运行与构建.md](docs/05_项目运行与构建.md)。
+
+## 💬 反馈与贡献
+
+- **使用问题**：先查 [docs/FAQ.md](docs/FAQ.md)；未解决可提 [Issue](../../issues)——App 内 **设置 → 反馈 Bug** 会自动附带版本与系统信息
+- **功能建议**：[Issue](../../issues) 选「功能建议」模板
+- **参与开发**：见 [CONTRIBUTING.md](CONTRIBUTING.md)（双变体测试、提交规范、站源接入）
+- **版本变化**：见 [CHANGELOG.md](CHANGELOG.md)
+- **安全漏洞**：见 [SECURITY.md](.github/SECURITY.md)，请勿在公开 Issue 描述可利用细节
 
 ## ⚠️ 免责声明
 

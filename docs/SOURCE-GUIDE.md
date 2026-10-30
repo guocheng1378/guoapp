@@ -1,6 +1,6 @@
 # 独立站源开发指南
 
-> 适用版本 v0.2.94+101 及以后 · 配套阅读 [DEVELOPMENT.md](DEVELOPMENT.md)（Go 核心编译）· 本文所有代码均摘自现有源包的真实实现（`native/sources/fanguo`、`native/sources/maccmsapi`），可直接照抄改造。
+> 适用版本 v0.2.94+101 及以后 · 配套阅读 [03_Go原生核心详解.md](03_Go原生核心详解.md) 与 [05_项目运行与构建.md](05_项目运行与构建.md)（Go 核心与交叉编译）· 本文所有代码均摘自现有源包的真实实现（`native/sources/fanguo`、`native/sources/maccmsapi`），可直接照抄改造。
 
 ---
 
@@ -516,7 +516,7 @@ go test -run TestManualSourceHealth -v -timeout 120m ./core/
 - [ ] 下载：单集与批量下载成功，本地文件可导出
 - [ ] 门控：不带 `ALL_SOURCES` 的精简构建里该源按预期隐藏
 - [ ] `go test ./...` 全绿
-- [ ] **重新编译 Go 核心并打包**（测试通过 ≠ App 内核更新，交叉编译命令见 [DEVELOPMENT.md](DEVELOPMENT.md)）
+- [ ] **重新编译 Go 核心并打包**（测试通过 ≠ App 内核更新，交叉编译命令见 [05_项目运行与构建.md](05_项目运行与构建.md)）
 
 ---
 

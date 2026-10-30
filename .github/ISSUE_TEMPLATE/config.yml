@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 使用问题（先查 FAQ）
+    url: https://github.com/guocheng1378/guoapp/blob/main/docs/FAQ.md
+    about: 「不能播 / 没弹幕 / 下载失败 / 更新弹窗」等常见问题的答案大多在 FAQ 中
