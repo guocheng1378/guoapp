@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2244,
-    "notes": "本次更新（v0.2.96+2244）：\n· 性能优化版本：播放进度保存改为静默写入，退出播放页立即同步到追剧页\n· 弹幕数量多时滚动更流畅\n· 原生解析提速：切源、换集、起播更快\n· 启动提速：首页加载与设备信息并行\n· 长时间观看写盘合并，更省电\n· 修复部分视频源 Referer 兜底不匹配导致的播放失败",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2244/zhenguojian-0.2.96+2244-arm64-v8a.apk"
+    "build": 2249,
+    "notes": "本次更新（v0.2.96+2249）：\n· 播放页半屏模式：简介与选集合并为一页，切集更顺手\n· 真果·鉴官方线路修复：线路更全、起播更稳\n· 下载增强：新增下载汇总与自定义下载目录\n· 新增云备份与自定义站源\n· 多项性能与稳定性优化",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2249/zhenguojian-0.2.96+2249-arm64-v8a.apk"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
