@@ -531,7 +531,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
             children: [
               header,
               const SizedBox(height: 8),
-              Text(admin ? '已关闭，开启后在首页、搜索和记录中显示' : '已关闭，仅管理员可以开启'),
+              Text(
+                source.loginRequired
+                    ? '站点已要求登录才能播放（App 内无法使用），默认关闭；站点恢复匿名可播后可再开启'
+                    : admin
+                    ? '已关闭，开启后在首页、搜索和记录中显示'
+                    : '已关闭，仅管理员可以开启',
+              ),
               if (closedError.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -556,6 +562,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
             header,
             const SizedBox(height: 8),
             Text('最近更新：${sourceTimestamp(status?.updatedAt)}'),
+            if (source.loginRequired)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '站点要求登录后才能播放：目录可浏览，播放会失败',
+                  style: TextStyle(color: colors.error),
+                ),
+              ),
             if (status != null && status.count > 0)
               Text(
                 '已加载至第 ${status.page} 页${status.hasMore ? ' · 可继续加载' : ' · 当前分页已加载完'}',

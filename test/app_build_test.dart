@@ -21,7 +21,8 @@ void main() {
     SharedPreferences.setMockInitialValues({'source': 'huangdou'});
     final store = LocalStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
-    expect(store.sources.length, allSourcesEnabled ? 20 : 1);
+    // 青空源需登录默认关闭（2026-10-30），全源默认可见数减一。
+    expect(store.sources.length, allSourcesEnabled ? 19 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
       isFalse,

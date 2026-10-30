@@ -151,7 +151,8 @@ class LocalStore extends ChangeNotifier {
   ];
 
   bool sourceEnabled(String source) =>
-      _sourceSwitches[source] ?? !SourceSite.isRestricted(source);
+      _sourceSwitches[source] ??
+      !(SourceSite.isRestricted(source) || SourceSite.isLoginRequired(source));
 
   Future<void> setSourceEnabled(String source, bool enabled) {
     if (!SourceSite.isAvailable(source)) {

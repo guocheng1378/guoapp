@@ -170,6 +170,16 @@ class SourceSite {
   // 默认关闭，开启需管理员密码；其余分类的站源一律默认开放。
   static bool isRestricted(String id) =>
       huangguoCategoryIds.contains(id) || adultCategoryIds.contains(id);
+
+  /// 需登录站源：站点侧加了账号墙——登录 + 滑块验证码才能播放、无试看，
+  /// App 无账号体系，播放必然失败（2026-10-30 真网取证：青空 play 接口
+  /// 返回 canPlay:false「请先登录」，目录/详情接口仍正常）。默认关闭并在
+  /// 站源管理里标注原因；站点恢复匿名可播后用户可在站源管理自行开启。
+  /// 与 [isRestricted] 的区别：不涉及内容分级，开启不需要管理员密码。
+  static const loginRequiredIds = <String>{'sorani'};
+  static bool isLoginRequired(String id) => loginRequiredIds.contains(id);
+  bool get loginRequired => SourceSite.isLoginRequired(id);
+
   /// 按 id 查站源；未知或已彻底下线的 id 返回 null，不再静默回退红果，
   /// 调用方按展示场景选择默认值或「未知源」。
   static SourceSite? byId(String id) {
