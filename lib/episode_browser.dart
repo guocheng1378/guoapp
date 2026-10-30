@@ -169,6 +169,7 @@ class EpisodeBrowser extends StatefulWidget {
     this.keyPrefix = 'episode',
     this.title = '选集',
     this.compact = false,
+    this.dense = false,
     this.note = '',
     this.onExitUp,
     this.onExitDown,
@@ -180,6 +181,10 @@ class EpisodeBrowser extends StatefulWidget {
   final String keyPrefix;
   final String title;
   final bool compact;
+
+  /// 小格子密度档：窄容器（播放器右侧面板 320dp）里 3 列大格子太占地方，
+  /// 打开后按每行 5 列、42dp 行高排，接近主流短剧片单的密度。
+  final bool dense;
   /// 标题追加的剧集状态（已完结 / 连载中），空则不显示。
   final String note;
   final VoidCallback? onExitUp;
@@ -254,26 +259,29 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                     max(value, episode.number.toString().length),
               );
               final scale = MediaQuery.textScalerOf(context);
+              // dense 只在窄容器（播放器右侧面板）里生效：电视仍按大格走。
+              final dense = widget.dense && !television;
               final columns =
-                  ((constraints.maxWidth - (widget.compact ? 8 : 36)) /
+                  ((constraints.maxWidth - (dense ? 24 : 36)) /
                           max(
-                            widget.compact
-                                ? 64
+                            dense
+                                ? 46
                                 : television
                                 ? 100
                                 : 82,
-                            scale.scale(widget.compact ? 18 : 20) *
-                                    digits *
-                                    .65 +
-                                (widget.compact ? 28 : 40),
+                            scale.scale(dense ? 18 : 20) * digits * .65 +
+                                (dense ? 24 : 40),
                           ))
                       .floor()
-                      .clamp(widget.compact ? 4 : 1, 12);
+                      .clamp(1, 12);
               final extent = max(
-                widget.compact ? 46.0 : 56.0,
-                scale.scale(widget.compact ? 18 : 20) +
-                    (widget.compact ? 24 : 30),
+                dense ? 40.0 : 56.0,
+                scale.scale(dense ? 18 : 20) + (dense ? 20 : 30),
               );
+              final spacing = dense ? 6.0 : 8.0;
+              final padding = dense
+                  ? const EdgeInsets.fromLTRB(12, 2, 12, 12)
+                  : const EdgeInsets.fromLTRB(18, 2, 18, 18);
               final target = max(
                 0,
                 visible.indexWhere(
@@ -290,8 +298,8 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                     return;
                   }
                   _scroll.jumpTo(
-                    (18 +
-                            target ~/ columns * (extent + 8) -
+                    (padding.left +
+                            target ~/ columns * (extent + spacing) -
                             constraints.maxHeight / 2 +
                             extent / 2)
                         .clamp(0.0, _scroll.position.maxScrollExtent),
@@ -310,15 +318,15 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                     .toList(),
                 columns: columns,
                 itemExtent: extent,
-                spacing: widget.compact ? 6 : 8,
-                padding: widget.compact
-                    ? const EdgeInsets.fromLTRB(4, 4, 4, 12)
-                    : const EdgeInsets.fromLTRB(18, 2, 18, 18),
+                spacing: spacing,
+                padding: padding,
                 itemBuilder: (_, index, node, onFocus) {
                   final episode = visible[index];
                   return RemoteEpisodeButton(
                     key: ValueKey('${widget.keyPrefix}-${episode.number}'),
                     number: episode.number,
+                    label: episode.remoteLabel,
+                    semanticsLabel: episode.title,
                     vip: episode.vip,
                     compact: widget.compact,
                     current:
@@ -437,6 +445,8 @@ class _EpisodeBrowserState extends State<EpisodeBrowser> {
                 return RemoteEpisodeButton(
                   key: ValueKey('${widget.keyPrefix}-${episode.number}'),
                   number: episode.number,
+                  label: episode.remoteLabel,
+                  semanticsLabel: episode.title,
                   vip: episode.vip,
                   compact: true,
                   current:

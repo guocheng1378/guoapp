@@ -29,6 +29,7 @@ class HomeCarousel extends StatefulWidget {
     required this.onOpen,
     required this.fallbackItems,
     required this.anchor,
+    this.remoteItems,
     this.height = 188,
   });
 
@@ -47,6 +48,11 @@ class HomeCarousel extends StatefulWidget {
   /// 用首页当前源条目补位（home_screen 传入排好序的可见条目，轮播自行
   /// 截取去重）。
   final List<Drama> fallbackItems;
+
+  /// 站点主推板块（远端主页「大家都在看」）的卡片：非空时轮播直接播它，
+  /// 不再走本地榜单选片——首页轮播的内容跟站点首页保持一致。
+  final List<Drama>? remoteItems;
+
   final double height;
 
   @override
@@ -85,10 +91,15 @@ class _HomeCarouselState extends State<HomeCarousel> {
       oldWidget.fallbackItems,
       widget.fallbackItems,
     );
+    final remoteChanged = !_sameItems(
+      oldWidget.remoteItems ?? const <Drama>[],
+      widget.remoteItems ?? const <Drama>[],
+    );
     // 切源后必须重算选片，否则会一直挂着上一个锚点的内容；条目变化只在
     // 轮播带补位卡时跟随刷新——豆瓣命中已满格时补位不上屏，分页/筛选
     // 不该重拉搜索请求（当天缓存已挡住重复请求，这里只是少一次空转）。
     if (anchorChanged ||
+        remoteChanged ||
         (itemsChanged &&
             !categoryPicksFill(HomeCarousel.maxItems, widget.anchor))) {
       _load();
@@ -107,6 +118,19 @@ class _HomeCarouselState extends State<HomeCarousel> {
 
   Future<void> _load() async {
     final generation = ++_generation;
+    // 站点主推板块（远端主页「大家都在看」）优先：轮播内容跟站点首页一致。
+    final remote = widget.remoteItems;
+    if (remote != null && remote.isNotEmpty) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _entries = [
+          for (final drama in remote.take(HomeCarousel.maxItems))
+            _Entry(drama),
+        ];
+      });
+      _startTimer();
+      return;
+    }
     try {
       // 跟随主页当前大类播对应榜单（视频→豆瓣、短剧→红果、黄果→黄果）。
       final picks = await loadCategoryRankingPicks(
@@ -308,7 +332,7 @@ class _CarouselCardState extends State<_CarouselCard> {
     final subtitle = [
       if (showSourceName && sourceName != null && sourceName.isNotEmpty)
         sourceName,
-      if (drama.episodes > 0) '共 ${drama.episodes} 集',
+      if (drama.episodes > 0) drama.episodeLabel,
     ].join(' · ');
     return GestureDetector(
       onTapDown: (_) {

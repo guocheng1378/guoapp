@@ -8,12 +8,69 @@ func resetSourceConfigForTest(t *testing.T) {
 	t.Helper()
 	prevMirrors := huangguoAIMirrorList()
 	prevDongpiandi := dongpiandiBaseURL()
+	huangjuConfigMu.RLock()
+	prevHuangjuAPI := huangjuAPIBaseURLHot
+	huangjuConfigMu.RUnlock()
 	prevHosts := providerHostsSeed()
 	t.Cleanup(func() {
 		setHuangguoAIMirrors(prevMirrors)
 		setDongpiandiBaseURL(prevDongpiandi)
+		setHuangjuAPIBase(prevHuangjuAPI)
 		setProviderHosts(prevHosts)
 	})
+}
+
+// TestApplySourceConfigHuangjuAPIBase 剧果 API 域独立热更：站点域走 providerHosts，
+// API 域走 huangjuAPIBaseURL。client 由 sync.Once 缓存，base 必须动态读，
+// 否则远程下发新域后要重建引擎才生效。
+func TestApplySourceConfigHuangjuAPIBase(t *testing.T) {
+	resetSourceConfigForTest(t)
+	downloader := setLiveEngineForTest(t, nil)
+	client := downloader.huangjuClient()
+	if got := client.apiBase(); got != huangjuAPIBase() {
+		t.Fatalf("初始 API 根地址不符: %q", got)
+	}
+
+	value, err := applySourceConfig(map[string]any{
+		"huangjuAPIBaseURL": "https://api.hj.example.com/",
+		"providerHosts":     map[string]any{"huangju": "https://hj.example.com/"},
+	})
+	if err != nil {
+		t.Fatalf("applySourceConfig: %v", err)
+	}
+	if result, ok := value.(map[string]any); !ok || result["applied"] != true {
+		t.Fatalf("applied 期望 true，实际 %v", value)
+	}
+	if got := huangjuAPIBase(); got != "https://api.hj.example.com" {
+		t.Fatalf("API 根地址未热更: %q", got)
+	}
+	if got := client.apiBase(); got != "https://api.hj.example.com" {
+		t.Fatalf("已缓存 client 未跟随热更: %q", got)
+	}
+	if got := client.siteBase(); got != "https://hj.example.com" {
+		t.Fatalf("站点域未跟随覆盖: %q", got)
+	}
+
+	// cfg 注入（测试桩/内置配置）优先级高于热更值。
+	downloader.cfg.HuangjuAPIURL = "https://api.injected.example.com"
+	if got := client.apiBase(); got != "https://api.injected.example.com" {
+		t.Fatalf("cfg 注入优先级错误: %q", got)
+	}
+	downloader.cfg.HuangjuAPIURL = ""
+
+	// 非法值整段丢弃，保留当前生效值。
+	for _, bad := range []any{"ftp://api.bad.example.com", 42} {
+		out, err := applySourceConfig(map[string]any{"huangjuAPIBaseURL": bad})
+		if err != nil {
+			t.Fatalf("非法下发不应报错: %v", err)
+		}
+		if result, ok := out.(map[string]any); !ok || result["applied"] != false {
+			t.Fatalf("非法 API 根地址未被拒绝: %v", out)
+		}
+	}
+	if got := huangjuAPIBase(); got != "https://api.hj.example.com" {
+		t.Fatalf("非法下发污染了生效值: %q", got)
+	}
 }
 
 // setLiveEngineForTest 把带 Downloader 的最小引擎挂上 nativeState，
@@ -143,6 +200,7 @@ func TestApplySourceConfigProviderHostsApply(t *testing.T) {
 		"providerHosts": map[string]any{
 			"cloudfront": "https://mirror-cf.example.com/",
 			"huangdou":   "https://mirror-hd.example.com/",
+			"huangju":    "https://mirror-hj.example.com/",
 		},
 	})
 	if err != nil {
@@ -165,6 +223,10 @@ func TestApplySourceConfigProviderHostsApply(t *testing.T) {
 	if got := downloader.providerBaseURL("cloudfront"); got != "https://mirror-cf.example.com" {
 		t.Fatalf("providerBaseURL 未消费覆盖：%s", got)
 	}
+	// 剧果站点域同样消费覆盖（此前被 sanitize 整表拒收，覆盖是死配置）。
+	if got := downloader.providerBaseURL(sourceHuangju); got != "https://mirror-hj.example.com" {
+		t.Fatalf("剧果站点域未消费覆盖：%s", got)
+	}
 	// 封面 Referer（huangdou 回退路径）消费覆盖。
 	if got := nativeCoverReferer(downloader, sourceHuangdou, "https://cdn.other.example.com/x.jpg"); got != "https://mirror-hd.example.com/home" {
 		t.Fatalf("封面 Referer 未消费覆盖：%s", got)
@@ -181,12 +243,11 @@ func TestApplySourceConfigProviderHostsRejects(t *testing.T) {
 		{"providerHosts": "https://text.example.com"},
 		{"providerHosts": map[string]any{"notasource": "https://a.example.com"}},
 		{"providerHosts": map[string]any{"douban": "https://a.example.com"}},
-		{"providerHosts": map[string]any{"huangju": "https://a.example.com"}},
 		{"providerHosts": map[string]any{"yeguo": "https://a.example.com"}},
 		{"providerHosts": map[string]any{"cloudfront": "ftp://a.example.com"}},
 		{"providerHosts": map[string]any{"cloudfront": "https://"}},
 		{"providerHosts": map[string]any{"cloudfront": 42}},
-		{"providerHosts": map[string]any{"cloudfront": "https://ok.example.com", "huangju": "https://bad.example.com"}},
+		{"providerHosts": map[string]any{"cloudfront": "https://ok.example.com", "yeguo": "https://bad.example.com"}},
 	}
 	for i, config := range cases {
 		value, err := applySourceConfig(config)

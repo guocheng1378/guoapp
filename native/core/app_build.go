@@ -68,6 +68,11 @@ func nativeAuthorizeInput(input nativeInput) error {
 		if !found || !nativeSourceAvailable(board.Source) {
 			return errNativeBuildSource
 		}
+	// 首页板块取自远端主页：requested source 必须可用，否则核心会拿不到数据。
+	case "homeFeed", "homeSection", "homeCalendar":
+		if !nativeSourceAvailable(input.Source) {
+			return errNativeBuildSource
+		}
 	case "catalog", "cached", "categories", "sourceStatus", "sourceJob", "cancelSourceJob":
 		if !nativeSourceAvailable(input.Source) {
 			return errNativeBuildSource

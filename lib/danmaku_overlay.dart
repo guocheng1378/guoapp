@@ -80,6 +80,31 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
   Object? _layout;
   List<DanmakuFlight> _schedule = const [];
 
+  /// [_schedule] 按 timeMs 升序（planDanmaku 保证），二分定位可见窗口起点，
+  /// 把每帧 O(全部弹幕) 的线性过滤降为 O(log n + 可见数)。
+  int _lowerBoundMs(int ms) {
+    var low = 0;
+    var high = _schedule.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (_schedule[mid].item.timeMs < ms) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  Iterable<DanmakuFlight> _visibleFlights(int positionMs) sync* {
+    final from = _lowerBoundMs(positionMs - danmakuLifetimeMs + 1);
+    for (var i = from; i < _schedule.length; i++) {
+      final flight = _schedule[i];
+      if (flight.item.timeMs > positionMs) break;
+      yield flight;
+    }
+  }
+
   @override
   Widget build(BuildContext context) => IgnorePointer(
     child: ExcludeSemantics(
@@ -157,11 +182,10 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                     return Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        for (final flight in _schedule)
-                          if (controller.positionMs >= flight.item.timeMs &&
-                              controller.positionMs <
-                                  flight.item.timeMs + danmakuLifetimeMs)
-                            Positioned(
+                        for (final flight in _visibleFlights(
+                          controller.positionMs,
+                        ))
+                          Positioned(
                               key: ValueKey('danmaku-item-${flight.item.id}'),
                               left: 0,
                               top: 8 + flight.lane * rowHeight,

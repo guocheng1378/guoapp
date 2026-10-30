@@ -56,23 +56,25 @@ bool matchesLocalGenre(Drama drama, String genre) {
   return drama.title.contains(genre) || drama.description.contains(genre);
 }
 
-/// 短剧/长剧的分界：单集时长超过 10 分钟（600 秒）即长剧。
-/// 全源统一规则，与站源注册分类无关。
-const int longDramaThresholdSeconds = 600;
-
 /// 「长剧/短剧」本地分类 id。local: 前缀走本地过滤，但与题材词
 /// （'local:<词>'）不同源，home_screen 侧需先按这两个 id 分流。
 const String localLongCategory = 'local:kind:long';
 const String localShortCategory = 'local:kind:short';
 
-/// 判定条目是长剧还是短剧：
-/// 1. 有单集时长数据 → 时长 >600 秒即长剧；
-/// 2. 无时长数据 → 条目短剧信号兜底（分类/标签含「短剧」，如真果·鉴
-///    的 short_drama 条目与 maccms 短剧频道）；
-/// 3. 仍无信号 → 站源注册分类（短剧源→短剧），最后默认长剧
-///    （视频类内容以电视剧/电影为主，宁判长不冒充短剧）。
+/// 判定条目是长剧还是短剧（**不看时长**）：
+/// 1. 显式定性 [Drama.contentKind]（'short'/'long'）优先；
+/// 2. 条目短剧信号（分类/标签含「短剧」，如真果·鉴的 short_drama 条目与
+///    maccms 短剧频道）；
+/// 3. 站源注册分类（短剧源→短剧）；
+/// 4. 仍无信号 → 默认长剧（视频类内容以电视剧/电影为主，宁判长不冒充短剧）。
+///
+/// 时长曾是第一判据（>600 秒即长剧），但时长会漂移：条目缓存里有无、
+/// 详情回填自愈都可能改变取值，同一部剧前后判定不一致 → 首页「长剧/短剧」
+/// 分类档忽隐忽现、播放器形态在切集时跳变。故已移除时长判据。
 bool dramaIsLongDrama(Drama drama, SourceSite? site) {
-  if (drama.duration > 0) return drama.duration > longDramaThresholdSeconds;
+  final kind = drama.contentKind;
+  if (kind == 'short') return false;
+  if (kind == 'long') return true;
   if (drama.category.contains('短剧')) return false;
   for (final tag in drama.tags) {
     if (tag.contains('短剧')) return false;
@@ -112,6 +114,16 @@ class CatalogBrowser {
   /// 缓存（_contentfulCache）失效重算，避免 build 期全量重复匹配。
   int _libraryEpoch = 0;
   final _contentfulCache = <String, (int, Set<String>)>{};
+
+  /// 源站分类菜单版本号：loadCategories 写入 _menus 后递增。
+  int _menusEpoch = 0;
+
+  /// 分类条结果缓存（按分组键）。home_screen 的 build 每帧都会读
+  /// _categories，而 categories() 要遍历全部条目池聚合分类名（O(N)），
+  /// 不缓存就等于每帧扫一遍整库。键里同时带两个 epoch：条目池变化
+  /// （详情回填可能改分类）与源站菜单到达都必须失效重算。
+  final _categoriesCache =
+      <String, (int libraryEpoch, int menusEpoch, List<CatalogCategory>)>{};
 
   Future<void> cancel() {
     _generation++;
@@ -184,6 +196,7 @@ class CatalogBrowser {
           source.id,
           force: force,
         );
+        _menusEpoch++;
       } catch (_) {
         failures.add(source.groupName);
       }
@@ -245,7 +258,15 @@ class CatalogBrowser {
   }
 
   List<CatalogCategory> categories(SourceGroup group) {
-    final known = _choices(group)
+    final key = group.sources.map((source) => source.id).join('|');
+    final cached = _categoriesCache[key];
+    if (cached != null &&
+        cached.$1 == _libraryEpoch &&
+        cached.$2 == _menusEpoch) {
+      return cached.$3;
+    }
+    final choices = _choices(group);
+    final known = choices
         .map((choice) => choice.category.name)
         .toSet()
       // 「未分类」是空 category 的兜底名，不算源站自带分组。
@@ -255,15 +276,17 @@ class CatalogBrowser {
     // category: 源站上报组不在此列——其内容在服务端，本地浏览缓存只是
     // 冰山一角，按池判定会误杀。
     final hits = _contentfulLocals(group);
-    return [
+    final listed = <CatalogCategory>[
       CatalogCategory.all,
-      // 短剧/长剧固定档：按单集时长（>10 分钟=长剧）全源统一划分，
-      // 不依赖源站分类上报，与题材词兜底互不冲突。
+      // 长剧/短剧固定档：按条目内容定性全源统一划分，不依赖源站分类上报。
+      // 名字恒带「·内容」后缀：短剧源自己就上报「短剧」分类，撞名时若按
+      // 冲突与否改名，条目池/菜单是异步到达的，条上文字会先显示「短剧」
+      // 再跳成「短剧·内容」——恒定命名既保证名字唯一，又不会跳字。
       if (hits.contains(localLongCategory))
-        const CatalogCategory(localLongCategory, '长剧', local: true),
+        CatalogCategory(localLongCategory, '长剧·内容', local: true),
       if (hits.contains(localShortCategory))
-        const CatalogCategory(localShortCategory, '短剧', local: true),
-      for (final choice in _choices(group)) choice.category,
+        CatalogCategory(localShortCategory, '短剧·内容', local: true),
+      for (final choice in choices) choice.category,
       // 固定题材词表只作兜底：源站自己上报过分类（条目带分类字段）时
       // 不再追加提示词分组，避免与源自带分组重复/冲突；完全无分类的
       // 源（如部分 maccms 采集站）才下发词表。
@@ -272,6 +295,14 @@ class CatalogBrowser {
           if (hits.contains('local:$genre'))
             CatalogCategory('local:$genre', genre, local: true),
     ];
+    // 兜底去重：不同 ID 同名的分类在条上无法区分，只保留先出现的一项。
+    final seen = <String>{};
+    final result = [
+      for (final category in listed)
+        if (seen.add(category.name)) category,
+    ];
+    _categoriesCache[key] = (_libraryEpoch, _menusEpoch, result);
+    return result;
   }
 
   _CatalogChoice? _choice(SourceGroup group, String category) => _choices(

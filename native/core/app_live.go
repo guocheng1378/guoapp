@@ -184,6 +184,10 @@ func (d *Downloader) liveFileName() string {
 }
 
 func (d *Downloader) loadLiveCache() {
+	d.liveOnce.Do(d.loadLiveCacheLocked)
+}
+
+func (d *Downloader) loadLiveCacheLocked() {
 	d.live.entries, d.live.pending = map[string]liveListEntry{}, map[string]*liveCall{}
 	data, err := os.ReadFile(d.liveFileName())
 	if err != nil || len(data) == 0 {
@@ -680,6 +684,7 @@ func liveGroupsFromLists(lists ...[]liveChannel) ([]liveGroup, int) {
 
 // nativeLive 处理 live.channels：按 listId 取内置列表 + 合并 liveUrls 自填源。
 func (engine *nativeEngine) nativeLive(ctx context.Context, input nativeInput) (any, error) {
+	engine.ensureLoaded()
 	d := engine.downloader
 	listID := strings.TrimSpace(input.ListID)
 	if listID == "" {

@@ -105,12 +105,16 @@ func (engine *nativeEngine) loadResourceSettings() {
 }
 
 func (engine *nativeEngine) resourceSettings() nativeResourceSettings {
+	engine.ensureSettingsLoaded()
 	engine.settingsMu.Lock()
 	defer engine.settingsMu.Unlock()
 	if engine.settings.ProxyMode == "" {
 		return defaultResourceSettings()
 	}
 	settings := engine.settings
+	if engine.downloader == nil || engine.downloader.proxyRouter == nil {
+		return settings
+	}
 	system := engine.downloader.proxyRouter.systemSettings()
 	settings.SystemProxyStatus = "自动读取系统静态代理及环境变量"
 	if system.PAC && system.HTTP == "" && system.HTTPS == "" {
@@ -122,17 +126,22 @@ func (engine *nativeEngine) resourceSettings() nativeResourceSettings {
 }
 
 func (engine *nativeEngine) applyResourceSettings(settings nativeResourceSettings) {
-	router := engine.downloader.proxyRouter
+	if engine.downloader == nil {
+		return
+	}
 	manual, _ := url.Parse(settings.ProxyURL)
-	router.mu.Lock()
-	router.mode, router.manual = settings.ProxyMode, manual
-	router.mu.Unlock()
-	limiter := engine.downloader.limiter
-	limiter.mu.Lock()
-	limiter.concurrency = settings.CatalogConcurrency
-	limiter.interval = time.Duration(settings.CatalogIntervalMS) * time.Millisecond
-	limiter.notifyLocked()
-	limiter.mu.Unlock()
+	if router := engine.downloader.proxyRouter; router != nil {
+		router.mu.Lock()
+		router.mode, router.manual = settings.ProxyMode, manual
+		router.mu.Unlock()
+	}
+	if limiter := engine.downloader.limiter; limiter != nil {
+		limiter.mu.Lock()
+		limiter.concurrency = settings.CatalogConcurrency
+		limiter.interval = time.Duration(settings.CatalogIntervalMS) * time.Millisecond
+		limiter.notifyLocked()
+		limiter.mu.Unlock()
+	}
 	if engine.downloads != nil {
 		engine.downloads.mu.Lock()
 		engine.downloads.concurrency = settings.DownloadConcurrency
@@ -143,6 +152,7 @@ func (engine *nativeEngine) applyResourceSettings(settings nativeResourceSetting
 }
 
 func (engine *nativeEngine) saveResourceSettings(settings nativeResourceSettings) (nativeResourceSettings, error) {
+	engine.ensureSettingsLoaded()
 	settings.ProxyURL = strings.TrimSpace(settings.ProxyURL)
 	settings.Warning = ""
 	settings.SystemProxyStatus = ""

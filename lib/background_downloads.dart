@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core_bridge.dart';
+import 'local_snapshot_files.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'app_build.dart';
@@ -72,9 +74,15 @@ class DownloadTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     await repository.initialize();
+    // 重键文件层目录先解析好，LocalSnapshot 才能以就绪态启动；后台实例与
+    // 前台实例共用同一 <支持目录>/library，避免两边各写一套。
+    final support = await getApplicationSupportDirectory();
     library = MediaLibrary(
       repository,
-      LocalStore(await SharedPreferences.getInstance()),
+      LocalStore(
+        await SharedPreferences.getInstance(),
+        files: DirectorySnapshotFiles(directory: support),
+      ),
       automaticWorker: true,
     );
     await _update();

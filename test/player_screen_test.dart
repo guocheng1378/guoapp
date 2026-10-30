@@ -1,6 +1,9 @@
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
+import 'package:duanju_app/playback_preferences.dart';
 import 'package:duanju_app/player_screen.dart';
+import 'package:duanju_app/related_catalog_screen.dart';
+import 'package:duanju_app/related_dramas.dart';
 import 'package:duanju_app/app_layout.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +27,8 @@ void main() {
     ScriptedPlayer platform, {
     Size? size,
     FakeViewPadding? padding,
+    int preferredQuality = 0,
+    Drama? drama,
   }) async {
     SharedPreferences.setMockInitialValues({});
     if (size != null) {
@@ -34,7 +39,12 @@ void main() {
       tester.view.padding = padding;
     }
     final store = LocalStore(await SharedPreferences.getInstance());
-    final detail = await repository.detail(FixtureRepository.free);
+    if (preferredQuality > 0) {
+      await store.setPlaybackPreferences(
+        PlaybackPreferences(quality: preferredQuality),
+      );
+    }
+    final detail = await repository.detail(drama ?? FixtureRepository.free);
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData.dark(),
@@ -68,11 +78,9 @@ void main() {
       final repository = RouteRepository();
       final player = ScriptedPlayer();
       await mount(tester, repository, player);
-      await tester.tap(find.byKey(const ValueKey('player-speed')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('1.5x').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('关闭菜单'));
+      // 半屏（内嵌）把倍速等三颗大按钮收进了下方详情页，这里直接用播放器
+      // 接口设倍速：要验证的是恢复重开时倍速状态被保留。
+      await player.setRate(1.5);
       await tester.pumpAndSettle();
       await player.seek(const Duration(seconds: 28));
       await tester.pump();
@@ -181,7 +189,9 @@ void main() {
         find.byKey(const ValueKey('player-picture-in-picture')),
         findsOneWidget,
       );
-      expect(find.text('选集'), findsOneWidget);
+      // 下行工具行有一枚「选集」文字钮，下方详情面板还有一个选集 tab，
+      // 所以这里是多个而不是一个（PiP 隐藏后应全部消失，见下方断言）。
+      expect(find.text('选集'), findsWidgets);
       expect(find.text('简介'), findsOneWidget);
       expect(find.text('下载'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('player-picture-in-picture')));
@@ -260,7 +270,35 @@ void main() {
     }
   });
 
-  testWidgets('compact player tools stay clustered instead of evenly spread', (
+  testWidgets('mobile landscape player is not pushed right by the display cutout', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      // 本机横屏时挖孔在左边缘占 144px（dumpsys：displayCutout frame [0,0][144,1200]）。
+      await mount(
+        tester,
+        repository,
+        player,
+        size: const Size(844, 390),
+        padding: const FakeViewPadding(left: 144, top: 32),
+      );
+      final surface = tester.getRect(
+        find.byKey(const ValueKey('player-gesture-surface')),
+      );
+      // 画面层不能被挖孔推走（改前这里是 144），也不能被状态栏压下去。
+      expect(surface.left, 0);
+      expect(surface.top, 0);
+      await unmount(tester, player);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPadding();
+    }
+  });
+
+  testWidgets('控制层分成上下两条栏：进度在上、按钮行在下、状态钮贴右', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -276,28 +314,217 @@ void main() {
       final repository = RouteRepository();
       final player = ScriptedPlayer();
       await mount(tester, repository, player, size: const Size(390, 844));
-      final speed = tester.getRect(find.byKey(const ValueKey('player-speed')));
       final quality = tester.getRect(
         find.byKey(const ValueKey('player-quality')),
       );
       final pip = tester.getRect(
         find.byKey(const ValueKey('player-picture-in-picture')),
       );
-      // 线路键（plan 带备用线路时显示）与画面比例键插在清晰度与画中画之间，
-      // 仍需保持聚类（不铺满整行）。
-      final route = tester.getRect(find.byKey(const ValueKey('player-route')));
       final display = tester.getRect(
         find.byKey(const ValueKey('player-display')),
       );
-      expect(quality.left - speed.right, lessThan(8));
-      expect(route.left - quality.right, lessThan(8));
-      expect(display.left - route.right, lessThan(8));
-      expect(pip.left - display.right, lessThan(8));
+      final toggle = tester.getRect(
+        find.byKey(const ValueKey('player-portrait-fullscreen')),
+      );
+      final landscapeToggle = tester.getRect(
+        find.byKey(const ValueKey('player-landscape-fullscreen')),
+      );
+      final progress = tester.getRect(
+        find.byKey(const ValueKey('player-progress')),
+      );
+
+      // 半屏（内嵌）把三颗大按钮收进下方详情页，视频区只留播放与两颗全屏键。
+      expect(find.byKey(const ValueKey('player-route')), findsNothing);
+      expect(find.byKey(const ValueKey('player-speed')), findsNothing);
+      expect(find.byKey(const ValueKey('player-episodes')), findsNothing);
+
+      // 上行：画质标签与「画面（比例+片头尾）」/投屏/画中画同在标题行。
+      expect(pip.center.dy, closeTo(quality.center.dy, 14));
+      expect(display.center.dy, closeTo(quality.center.dy, 14));
       expect(pip.right, greaterThan(330));
+
+      // 进度条在按钮行上方（本次改版的核心版式诉求）。
+      expect(progress.bottom, lessThanOrEqualTo(toggle.top + 1));
+
+      // 两颗全屏键并排贴右下：竖屏全屏 ⇄ 横屏全屏（相邻，不留空隙）。
+      expect(landscapeToggle.left, greaterThanOrEqualTo(toggle.right));
+      expect(landscapeToggle.right, greaterThan(330));
       await unmount(tester, player);
     } finally {
       messenger.setMockMethodCallHandler(AppDevice.channel, null);
       debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('narrow portrait player keeps every tool inside the screen', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(AppDevice.channel, (call) async {
+      if (call.method == 'pictureInPictureStatus') {
+        return {'supported': true, 'active': false};
+      }
+      return null;
+    });
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      // 320 宽（窄屏/竖屏短剧）：工具项总宽超过屏宽时必须整行等比缩，
+      // 而不是让右侧全屏键溢出屏幕（红果竖屏实机现象）。修复前这里是
+      // RenderFlex overflow，umount 的 takeException 断言会红。
+      await mount(tester, repository, player, size: const Size(320, 844));
+      // 半屏只剩两颗全屏键，右边缘仍要贴住屏幕内侧（不溢出）。
+      final toggle = tester.getRect(
+        find.byKey(const ValueKey('player-landscape-fullscreen')),
+      );
+      expect(toggle.left, greaterThanOrEqualTo(0));
+      expect(toggle.right, lessThanOrEqualTo(320));
+      expect(toggle.right, greaterThan(300));
+      await unmount(tester, player);
+    } finally {
+      messenger.setMockMethodCallHandler(AppDevice.channel, null);
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('quality tool shows the actual played tier, never 自动', (
+    tester,
+  ) async {
+    final repository = RouteRepository()..quality = 720;
+    final player = ScriptedPlayer();
+    await mount(tester, repository, player);
+    expect(find.byKey(const ValueKey('player-quality')), findsOneWidget);
+    expect(find.text('720P'), findsOneWidget);
+    expect(find.text('自动'), findsNothing);
+    await unmount(tester, player);
+  });
+
+  testWidgets('quality tool hides itself when the site has no quality tiers', (
+    tester,
+  ) async {
+    // 站点只给一条直链、没有任何画质档位：以前会硬塞一个「高清」标签，
+    // 点开是空面板——纯属误导，现在整颗按钮不渲染。
+    final repository = RouteRepository()
+      ..quality = 0
+      ..qualities = const [];
+    final player = ScriptedPlayer();
+    await mount(tester, repository, player);
+    expect(find.byKey(const ValueKey('player-quality')), findsNothing);
+    expect(find.text('高清'), findsNothing);
+    // 半屏（内嵌）下其余可见工具键不受影响：两颗全屏键仍在原位。
+    expect(
+      find.byKey(const ValueKey('player-portrait-fullscreen')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('player-landscape-fullscreen')),
+      findsOneWidget,
+    );
+    await unmount(tester, player);
+  });
+
+  testWidgets('quality tool prefers the actual tier over a stale preference', (
+    tester,
+  ) async {
+    // 偏好里存着 1080P，但这个源只有 720P：后端（nativePlaybackChoices）
+    // 找不到该档就退到实际可播的最高档，标签必须跟着实际走。
+    final repository = RouteRepository()
+      ..quality = 720
+      ..qualities = const [720];
+    final player = ScriptedPlayer();
+    await mount(tester, repository, player, preferredQuality: 1080);
+    expect(find.text('720P'), findsOneWidget);
+    expect(find.text('1080P'), findsNothing);
+    await unmount(tester, player);
+  });
+
+  testWidgets('quality panel lists the tiers the site actually offers', (
+    tester,
+  ) async {
+    final repository = RouteRepository();
+    final player = ScriptedPlayer();
+    await mount(tester, repository, player);
+    await tester.tap(find.byKey(const ValueKey('player-quality')));
+    await tester.pumpAndSettle();
+    // 菜单标题与段标题都叫「清晰度」，命中两处属正常。
+    expect(find.text('清晰度'), findsWidgets);
+    expect(find.byKey(const ValueKey('menu-quality-1080')), findsOneWidget);
+    expect(find.byKey(const ValueKey('menu-quality-720')), findsOneWidget);
+    // 没存过画质偏好时，高亮的是本集实际播放的档（fixture 实际 1080P），
+    // 而不是整排胶囊全是未选中态。
+    final current = tester.widget<ChoiceChip>(
+      find.byKey(const ValueKey('menu-quality-1080')),
+    );
+    expect(current.selected, isTrue);
+    // 面板里同样不存在「自动」档。
+    expect(find.text('自动'), findsNothing);
+    await tester.tap(find.byTooltip('关闭菜单'));
+    await tester.pumpAndSettle();
+    await unmount(tester, player);
+  });
+
+  // 播放器「简介」tab 是详情页信息区的第二份实现：站源名/分类/标签同样
+  // 要能点出结果页（2026-10-25 用户反馈「简介页的东西都不能点击跳转」）。
+  // hongguo 源在两个变体下都可见，本用例不依赖 ALL_SOURCES。
+  const linked = Drama(
+    id: 'hongguo:player-synopsis',
+    source: 'hongguo',
+    title: '播放器简介剧',
+    episodes: 12,
+    category: '都市',
+    tags: ['甜宠', '逆袭'],
+    releaseStatus: 'ongoing',
+    // 显式定性长剧：短剧会走竖屏全屏形态，播放面板（含简介 tab）根本不
+    // 渲染，用例看到的是全屏播放器而不是下方的功能面板。
+    contentKind: 'long',
+    duration: 1200,
+  );
+
+  testWidgets('player synopsis tab links to related results', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final platform = ScriptedPlayer();
+      await mount(
+        tester,
+        repository,
+        platform,
+        // 高机身：简介是 ListView，窄机身下标签排在视口外没法点。
+        size: const Size(390, 1400),
+        padding: const FakeViewPadding(top: 32),
+        drama: linked,
+      );
+
+      await tester.tap(find.text('简介'));
+      await settleOperations(tester);
+
+      // 播放器里的「相关推荐」与详情页是同一组件（2026-10-25 用户反馈
+      // 「简介页没有推荐的剧」指的就是这里）。
+      expect(find.byType(RelatedDramaRail), findsOneWidget);
+
+      // 简介 tab 里的「相关推荐」会自己拉一次同源目录：清掉这条自动请求，
+      // 下面的断言才只看用户点击产生的。
+      repository.queries.clear();
+
+      // 分类「都市」不是 dongpiandi 的 content_kind，落不到站点 kind，走关键词搜索。
+      await tester.tap(find.text('都市'));
+      await settleOperations(tester);
+      expect(find.byType(RelatedCatalogScreen), findsOneWidget);
+      expect(repository.queries, <String>['都市']);
+
+      await tester.pageBack();
+      await settleOperations(tester);
+
+      await tester.tap(find.text('甜宠'));
+      await settleOperations(tester);
+      expect(find.byType(RelatedCatalogScreen), findsOneWidget);
+      expect(repository.queries, <String>['都市', '甜宠']);
+      await unmount(tester, platform);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.resetPadding();
     }
   });
 }

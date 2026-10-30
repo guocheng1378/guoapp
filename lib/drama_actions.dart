@@ -13,7 +13,6 @@ Future<void> showDramaActions(
   BuildContext context, {
   required Drama drama,
   required LocalStore store,
-  VoidCallback? onContinue,
   VoidCallback? onDownload,
   VoidCallback? onSelect,
   VoidCallback? onFindSource,
@@ -22,9 +21,9 @@ Future<void> showDramaActions(
 }) async {
   final epoch = store.profileEpoch;
   final following = store.following(drama.id);
+  // 不再提供「继续观看」条目：点剧卡本身就是按观看记录续播，
+  // 菜单里再放一条完全等价的入口只是误导。
   final choices = <(String, String, Widget)>[
-    if (onContinue != null && store.watched(drama.id) != null)
-      ('continue', '继续观看', AppIcon(AppIcons.play, size: 22)),
     ('favorite', following == null ? '加入追剧' : '取消追剧', AppIcon(AppIcons.bookmark, size: 22)),
     for (final status in FollowStatus.values)
       (
@@ -111,8 +110,6 @@ Future<void> showDramaActions(
     return;
   }
   switch (choice) {
-    case 'continue':
-      onContinue?.call();
     case 'favorite':
       await saveUserChange(context, () => store.toggleFavorite(drama));
     case 'read':
@@ -135,7 +132,6 @@ class DramaActionButton extends StatefulWidget {
     super.key,
     required this.drama,
     required this.store,
-    this.onContinue,
     this.onDownload,
     this.onSelect,
     this.onFindSource,
@@ -143,7 +139,6 @@ class DramaActionButton extends StatefulWidget {
   });
   final Drama drama;
   final LocalStore store;
-  final VoidCallback? onContinue;
   final VoidCallback? onDownload;
   final VoidCallback? onSelect;
   final VoidCallback? onFindSource;
@@ -160,7 +155,6 @@ class _DramaActionButtonState extends State<DramaActionButton> {
     context,
     drama: widget.drama,
     store: widget.store,
-    onContinue: widget.onContinue,
     onDownload: widget.onDownload,
     onSelect: widget.onSelect,
     onFindSource: widget.onFindSource,

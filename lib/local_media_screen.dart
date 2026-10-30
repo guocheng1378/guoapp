@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
+import 'app_scaffold.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'media_library.dart';
@@ -206,18 +207,15 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
       final items = library.items
           .where((item) => item.merged == _merged)
           .toList();
-      return Scaffold(
-        appBar: AppBar(
-          flexibleSpace: const TopFog(),
-          title: const Text('本地媒体'),
-          actions: [
-            IconButton(
-              tooltip: '刷新',
-              onPressed: library.busy ? null : _refresh,
-              icon: AppIcon(AppIcons.refresh),
-            ),
-          ],
-        ),
+      return AppScaffold(
+        title: '本地媒体',
+        actions: [
+          IconButton(
+            tooltip: '刷新',
+            onPressed: library.busy ? null : _refresh,
+            icon: AppIcon(AppIcons.refresh),
+          ),
+        ],
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

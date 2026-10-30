@@ -55,6 +55,10 @@ func (engine *nativeEngine) checkSource(ctx context.Context, source string, sele
 	report := nativeSourceHealth{CheckedAt: time.Now(), State: "checking", Steps: []nativeHealthStep{}}
 	trace := &sourceResponseTrace{}
 	ctx = context.WithValue(ctx, sourceTraceKey{}, trace)
+	// 健康诊断不受「仅官方线路」播放偏好影响：诊断要反映站源本身是否可达，
+	// 样本剧恰好没有官方线（或票据兑换失败）时，不能把健康的站源误判成
+	// 失败——用户看到的正是站源管理页「未返回有效播放地址」。
+	ctx = context.WithValue(ctx, officialOnlyBypassKey{}, true)
 	publish := func() {
 		copy := report
 		copy.Steps = append([]nativeHealthStep{}, report.Steps...)

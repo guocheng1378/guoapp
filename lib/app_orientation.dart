@@ -15,6 +15,9 @@ class AppOrientationController {
   bool? _nativeTelevision;
   Object? _playbackOwner;
   List<DeviceOrientation> _playbackOrientations = DeviceOrientation.values;
+  /// 锁屏期间锁定的方向集合：非 null 时只允许这些方向，
+  /// 旋转物理设备画面也不跟随。null = 不锁（跟随系统）。
+  List<DeviceOrientation>? _lockedOrientations;
   List<DeviceOrientation>? _appliedOrientations;
   Future<void> _pending = Future<void>.value();
 
@@ -23,21 +26,33 @@ class AppOrientationController {
     bool fullscreen = false,
     double aspectRatio = 1,
     bool forceLandscape = false,
+    bool forcePortrait = false,
   }) {
-    if (television ||
-        fullscreen && (forceLandscape || aspectRatio >= 1)) {
+    if (television) {
       return const [
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
       ];
     }
-    if (fullscreen) {
+    if (!fullscreen) return DeviceOrientation.values;
+    // 竖屏全屏优先于比例判定：长剧（aspectRatio ≥ 1）也能竖屏沉浸，
+    // 否则一进全屏就被锁成横屏。
+    if (forcePortrait) {
       return const [
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
       ];
     }
-    return DeviceOrientation.values;
+    if (forceLandscape || aspectRatio >= 1) {
+      return const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ];
+    }
+    return const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ];
   }
 
   Future<void> setTelevision(bool television) {
@@ -54,6 +69,7 @@ class AppOrientationController {
     required bool fullscreen,
     required double aspectRatio,
     bool forceLandscape = false,
+    bool forcePortrait = false,
   }) async {
     final previousOwner = _playbackOwner;
     final previousOrientations = _playbackOrientations;
@@ -64,6 +80,7 @@ class AppOrientationController {
         fullscreen: fullscreen,
         aspectRatio: aspectRatio,
         forceLandscape: forceLandscape,
+        forcePortrait: forcePortrait,
       );
     }
     final requested = _playbackOrientations;
@@ -86,7 +103,18 @@ class AppOrientationController {
     if (!identical(_playbackOwner, owner)) return Future<void>.value();
     _playbackOwner = null;
     _playbackOrientations = DeviceOrientation.values;
+    // 播放器交还方向控制权时，锁屏钉住的方向必须一起松开，
+    // 否则离开播放页后整个 App 的方向都被锁住。
+    _lockedOrientations = null;
     return _apply();
+  }
+
+  /// 锁定/解除屏幕方向：传入锁定期间允许的方向集合（null = 恢复跟随）。
+  /// 锁定期间 setPlayback 的方向计算被忽略。
+  Future<void> lockOrientations(List<DeviceOrientation>? orientations) {
+    if (listEquals(_lockedOrientations, orientations)) return _pending;
+    _lockedOrientations = orientations;
+    return _apply(force: true);
   }
 
   Future<void> refresh() => _apply(force: true);
@@ -114,7 +142,7 @@ class AppOrientationController {
       if (_disposed || television != _television) return;
       final preferred = television
           ? orientations(television: true)
-          : _playbackOrientations;
+          : (_lockedOrientations ?? _playbackOrientations);
       if (force || !listEquals(preferred, _appliedOrientations)) {
         await SystemChrome.setPreferredOrientations(preferred);
         if (!_disposed) _appliedOrientations = preferred;

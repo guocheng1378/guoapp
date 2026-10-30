@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'core_bridge.dart';
@@ -14,8 +15,10 @@ import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'glass_preferences.dart';
 import 'fog_tuning.dart';
+import 'soft_glass.dart';
 import 'home_screen.dart';
 import 'live_route_memory.dart';
+import 'local_snapshot_files.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
 import 'media_library.dart';
@@ -41,8 +44,9 @@ Future<void> main(List<String> arguments) async {
     await runPackageSmoke(arguments);
     return;
   }
-  final device = await AppDevice.detect();
-  runApp(AppBootstrap(device: device));
+  // 设备探测（是否电视 / 安装包版本号）不再挡首帧：先把界面挂起来，探测在
+  // bootstrap 内与偏好读取、原生核心初始化并行，回填后再重建（见 _refreshDevice）。
+  runApp(const AppBootstrap());
 }
 
 class AppBootstrap extends StatefulWidget {
@@ -59,6 +63,7 @@ class _AppBootstrapState extends State<AppBootstrap>
   LocalStore? store;
   Object? error;
   late AppDevice device = widget.device;
+  Future<void>? _deviceProbe;
 
   @override
   void dispose() {
@@ -75,6 +80,8 @@ class _AppBootstrapState extends State<AppBootstrap>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 探测先跑起来，_initialize 只 await 这个已发起的 Future，不额外多等一段。
+    _deviceProbe = _refreshDevice();
     _initialize();
   }
 
@@ -82,6 +89,13 @@ class _AppBootstrapState extends State<AppBootstrap>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && Platform.isAndroid) {
       unawaited(_refreshDevice());
+    }
+    // 剧库落盘走合并窗（连续翻页只落盘一次）：切后台/退出前冲一次，
+    // 别让窗口里待写的快照随进程一起消失。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      unawaited(flushNativeCatalogWrites());
     }
     if (!Platform.isIOS) return;
     final library = MediaLibrary.current;
@@ -102,7 +116,13 @@ class _AppBootstrapState extends State<AppBootstrap>
   }
 
   Future<void> _refreshDevice() async {
-    final detected = await AppDevice.detect(fallback: device);
+    final AppDevice detected;
+    try {
+      detected = await AppDevice.detect(fallback: device);
+    } on Object {
+      // 探测失败保持当前值：默认非电视 + 编译期版本，功能不受影响。
+      return;
+    }
     if (!mounted ||
         (device.television == detected.television &&
             device.version == detected.version)) {
@@ -116,16 +136,42 @@ class _AppBootstrapState extends State<AppBootstrap>
       error = null;
     });
     try {
-      final preferences = await SharedPreferences.getInstance();
-      await GlassPreferences.load(preferences);
-      await FogTuningStore.load(preferences);
-    await LiveRouteMemory.load(preferences);
-      await _refreshDevice();
-      await repository.initialize();
+      // 启动三件互不依赖的事并行跑：偏好读取、设备探测、原生核心初始化。
+      // 串行时首屏要多等「平台通道往返 + 核心 initialize」两段（项 6）。
+      final Future<void> deviceReady = _deviceProbe ??= _refreshDevice();
+      final List<Object?> bootstrap = await Future.wait<Object?>([
+        SharedPreferences.getInstance(),
+        deviceReady,
+        repository.initialize(),
+        // 剧库重键文件层（library/*.json.gz）所在目录，一并并行解析。
+        getApplicationSupportDirectory(),
+      ]);
+      final preferences = bootstrap.first as SharedPreferences;
+      final libraryDirectory = bootstrap[3] as Directory;
+      // 四个偏好集合各自读不同 key，互不依赖，一并并行。
+      await Future.wait<void>([
+        GlassPreferences.load(preferences),
+        FogTuningStore.load(preferences),
+        SoftGlassStore.load(preferences),
+        LiveRouteMemory.load(preferences),
+      ]);
+      // 顶栏渐变档与形态开关整档已删除（2026-10-29），清掉盘上遗留键，
+      // 免得旧值留在 prefs 里没人知道它是干嘛的。
+      await preferences.remove('top_gradient.v1');
+      await preferences.remove('top_bar_style.v1');
       if (mounted) {
         setState(() {
-          store = LocalStore(preferences);
+          store = LocalStore(
+            preferences,
+            files: DirectorySnapshotFiles(directory: libraryDirectory),
+          );
           repository.access = store;
+          // 核心侧默认「官方优先 + 三方兜底」，这里把设备上存的选择同步下去。
+          unawaited(
+            repository.setDongpiandiOfficialOnly(
+              store!.dongpiandiOfficialOnly,
+            ),
+          );
           MediaLibrary.attach(repository, store!);
           LanController.current?.dispose();
           final link = LanController(
@@ -219,7 +265,13 @@ class DuanjuApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([store]),
+    // 材质定稿（SoftGlassStore.revision）与玻璃开关变化都要求重建主题：
+    // 主题层挂不了 BackdropFilter，只能用材质色近似，故需整壳刷新。
+    animation: Listenable.merge([
+      store,
+      SoftGlassStore.revision,
+      GlassPreferences.enabled,
+    ]),
     builder: (_, _) => _application(),
   );
 

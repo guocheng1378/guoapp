@@ -312,7 +312,9 @@ class Drama {
     this.score = '',
     this.duration = 0,
     this.tags = const [],
+    this.actors = const [],
     this.releaseStatus = '',
+    this.contentKind,
   }) : vipStatus = vip;
   final String id;
   final String source;
@@ -331,16 +333,32 @@ class Drama {
   final String year;
   final String score;
 
-  /// 单集时长（秒）。0 = 未知；短剧/长剧判定 >600 秒为长剧，
-  /// 未知时按条目短剧信号与站源分类兜底（见 catalog_browser.dramaIsLongDrama）。
+  /// 单集时长（秒）。0 = 未知。**仅用于展示**，不再参与短剧/长剧判定
+  /// （时长会漂移：缓存里有无、详情回填自愈，同一部剧前后判定不一致会
+  /// 让播放器形态在切集时跳变）。
   final int duration;
+
+  /// 显式内容类型：'short'=短剧、'long'=长剧、null=未提供（走信号链）。
+  /// 长短剧判定的最高优先级信号（见 catalog_browser.dramaIsLongDrama）。
+  final String? contentKind;
   final List<String> tags;
+
+  /// 主演（按源站顺序，取前 8 位）；简介页「同主演推荐」用第一个。
+  /// 红果不暴露主演数据，该源恒为空（相关推荐自动降级到分类链）。
+  final List<String> actors;
   final String releaseStatus;
   String get releaseLabel => switch (releaseStatus) {
     'finished' || 'completed' => '已完结',
     'ongoing' => '连载中',
     _ => '状态未知',
   };
+
+  /// 集数文案。连载中的条目，内核给的是「已更新集数」（站点原文就是
+  /// 「更新至74集」），一律写「共 N 集」等于宣称全集已放出，所以按连载
+  /// 状态切换措辞；状态未知时沿用「共 N 集」。
+  String get episodeLabel => episodes <= 0
+      ? ''
+      : (releaseStatus == 'ongoing' ? '更新至 $episodes 集' : '共 $episodes 集');
 
   factory Drama.fromJson(Map<String, dynamic> json) => Drama(
     id: json['id'] as String? ?? '',
@@ -366,7 +384,9 @@ class Drama {
     score: json['score']?.toString() ?? '',
     duration: intValue(json['duration']),
     tags: (json['tags'] as List? ?? const []).whereType<String>().toList(),
+    actors: (json['actors'] as List? ?? const []).whereType<String>().toList(),
     releaseStatus: json['releaseStatus'] as String? ?? '',
+    contentKind: json['contentKind'] as String?,
   );
   Map<String, dynamic> toJson() => {
     'metadataSchema': 1,
@@ -387,7 +407,9 @@ class Drama {
     'score': score,
     'duration': duration,
     'tags': tags,
+    'actors': actors,
     'releaseStatus': releaseStatus,
+    'contentKind': contentKind,
   };
 
   Drama merge(Drama fresh) {
@@ -427,10 +449,13 @@ class Drama {
       year: fresh.year.isEmpty ? year : fresh.year,
       score: fresh.score.isEmpty ? score : fresh.score,
       tags: fresh.tags.isEmpty ? tags : fresh.tags,
+      actors: fresh.actors.isEmpty ? actors : fresh.actors,
       releaseStatus:
           fresh.releaseStatus.isEmpty || fresh.releaseStatus == 'unknown'
           ? releaseStatus
           : fresh.releaseStatus,
+      // 显式定性：详情回填的取值优先（缺省保留原值）。
+      contentKind: fresh.contentKind ?? contentKind,
     );
   }
 }
@@ -444,7 +469,7 @@ class Episode {
           : fallback,
       vip = raw['vip'] == true,
       // 红果详情下发的分集横竖屏标记（null=未提供）：竖屏短剧
-      // 判定优先取官方标记，缺失时回退客户端时长启发式。
+      // 判定优先取官方标记（按整剧聚合），缺失时回退全局信号链。
       vertical = raw['vertical'] as bool?;
   final Map<String, dynamic> raw;
   final String id;
@@ -452,6 +477,27 @@ class Episode {
   final int number;
   final bool vip;
   final bool? vertical;
+
+  /// 站点下发的分集标题里真正带信息的那一版：批次打包的「第1-20集」、
+  /// 附加内容的「陪看1」「第3集彩蛋」都靠它才有正确语义；而站点没给
+  /// 标题、由序号兜底生成的「第N集」返回 null——那种显示数字就够了
+  /// （平铺 96 集时硬写文字只会挤爆格子）。
+  ///
+  /// 选集格子很窄（播放器面板一格只有六十来像素），站点原文直接塞进去
+  /// 会被省略号切成「第1…」「第3…」，等于没显示。所以这里归一到**紧凑
+  /// 写法**：批次「第1-20集」→「1-20」，带后缀的「第3集彩蛋」→「彩蛋3」
+  /// （集号留在后面，才读得出是第几个彩蛋）；其余（陪看1/正片/预告）原样。
+  /// 完整标题仍是 [title]，读屏用 [title] 播报，不受这里影响。
+  String? get remoteLabel {
+    final compact = title.replaceAll(RegExp(r'\s+'), '');
+    if (compact.isEmpty) return null;
+    if (compact == '第$number集') return null;
+    final range = RegExp(r'^第?(\d+)[-~至](\d+)集?$').firstMatch(compact);
+    if (range != null) return '${range.group(1)}-${range.group(2)}';
+    final suffixed = RegExp(r'^第(\d+)集(.+)$').firstMatch(compact);
+    if (suffixed != null) return '${suffixed.group(2)}${suffixed.group(1)}';
+    return compact;
+  }
 }
 
 class DramaDetail {

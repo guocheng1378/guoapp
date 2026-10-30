@@ -30,6 +30,7 @@ type vod struct {
 	VodPic      string          `json:"vod_pic"`
 	VodContent  string          `json:"vod_content"`
 	VodRemarks  string          `json:"vod_remarks"`
+	VodActor    string          `json:"vod_actor"`
 	VodTime     json.RawMessage `json:"vod_time"`
 	VodArea     any             `json:"vod_area"`
 	VodYear     any             `json:"vod_year"`
@@ -305,6 +306,7 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 			Year:          vodText(item.VodYear),
 			Score:         vodText(item.VodScore),
 			Duration:      vodDurationSeconds(item.VodDuration),
+			Actors:        vodActors(item.VodActor),
 			ChannelName:   channel,
 		})
 	}
@@ -405,9 +407,34 @@ func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string
 		Year:         vodText(item.VodYear),
 		Score:        vodText(item.VodScore),
 		Duration:     vodDurationSeconds(item.VodDuration),
+		Actors:       vodActors(item.VodActor),
 		ChannelName:  provider.SourceName(s.spec.ID),
 	}
 	return drama, chapters, nil
+}
+
+// vodActors 拆分 vod_actor：采集站常见逗号/顿号/斜杠分隔，空格兜底；
+// 只保留前 8 位主演（「主演推荐」只需要首个），脏值丢弃。
+func vodActors(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == '、' || r == '/' || r == '|'
+	})
+	var out []string
+	for _, name := range fields {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
 }
 
 // maccms 无热度/播放量数据（采集站 vod_hits 恒空），「上线日期」即源站 vod_time。

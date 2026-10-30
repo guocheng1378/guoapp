@@ -24,6 +24,7 @@ class CatalogFilters extends StatefulWidget {
     this.onExitUp,
     this.onExitDown,
     this.proxListenable,
+    this.inheritBlur = false,
   });
 
   final List<CatalogCategory> categories;
@@ -40,6 +41,11 @@ class CatalogFilters extends StatefulWidget {
   /// 接近度信号（demo 真值，首页传入）：内容滚动时分类胶囊白描边随
   /// h=滚动距离/50 亮起、回顶熄灭；不传=静态描边（其余页面不变）。
   final ValueListenable<double>? proxListenable;
+
+  /// 继承上层整条模糊（吸顶分类条用）：吸顶头已有一条整条模糊层盖住
+  /// 状态栏→顶栏→分类条，分类胶囊再自带 σ 就是同层双采样 → 发灰。
+  /// 置 true 时分类胶囊只画 tint + 柔光特征。
+  final bool inheritBlur;
 
   /// 分类条高度（单一来源）：条内公式 extra=4；首页吸顶 pinned header
   /// 传 extra=12，避免两处魔法数漂移。手机横屏紧凑档降一档（与沉浸
@@ -159,6 +165,7 @@ class _CatalogFiltersState extends State<CatalogFilters> {
                               // 胶囊视觉保持小米 ~32px，命中区撑到 48px。
                               hitTarget: 48,
                               proxListenable: widget.proxListenable,
+                              inheritBlur: widget.inheritBlur,
                             ),
                           ),
                         ),

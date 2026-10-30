@@ -127,7 +127,10 @@ func (cache *nativeCoverCache) loadAddress(ctx context.Context, drama nativeDram
 		source = sourceFromDramaID(drama.ID)
 	}
 	referer := nativeCoverReferer(cache.downloader, source, drama.Cover)
-	digest := sha256.Sum256([]byte(source + "\x00" + drama.Cover + "\x00" + referer))
+	// 缓存键只认「来源 + 图片地址」：Referer 是请求头，不是资源身份。
+	// 之前把 referer 也算进键里，站源优选域名一变（学到的镜像换了），
+	// 同一张图就算成新资源——已缓存的封面全部失效，过期兜底也跟着失效。
+	digest := sha256.Sum256([]byte(source + "\x00" + drama.Cover))
 	key := hex.EncodeToString(digest[:])
 	path := filepath.Join(cache.directory, key+".img")
 	cache.mu.Lock()

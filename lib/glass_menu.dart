@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'app_icons.dart';
+import 'soft_glass.dart';
 
 class GlassMenuEntry<T> {
   const GlassMenuEntry(
@@ -87,7 +88,10 @@ Future<T?> showGlassMenu<T>({
       }
       // 任一条目带对勾时，右侧预留对勾图标位。
       final checkSpace = entries.any((entry) => entry.checked) ? 26.0 : 0.0;
-      final menuWidth = (labelWidth + 32 + checkSpace).clamp(96.0, 280.0);
+      // +32 = 条目左右内边距；另留 10px 余量：宽度与文字宽正好相等时，
+      // 像素取整会让文字溢出触发 ellipsis（真机「设置与备份」被截成
+      // 「设置与 …」）。余量后文字完整显示。
+      final menuWidth = (labelWidth + 42 + checkSpace).clamp(96.0, 280.0);
       var left = topLeft.dx;
       if (left + menuWidth > screenSize.width - 12) {
         left = (topLeft.dx + anchorSize.width - menuWidth).clamp(
@@ -187,25 +191,29 @@ class _GlassMenuTile extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(24),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-            child: Row(
-              children: [
-                Expanded(
-                  child:                   Text(
-                    entry.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _menuLabelStyle.copyWith(
-                      color: entry.checked ? scheme.primary : foreground,
+          // 「点按有光，操作有回应」：跟随指针的局部高光 + 全区轻微增亮
+          // （对齐官方 InteractiveHighlight）。
+          child: SoftGlassPressHighlight(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      entry.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _menuLabelStyle.copyWith(
+                        color: entry.checked ? scheme.primary : foreground,
+                      ),
                     ),
                   ),
-                ),
-                if (entry.checked) ...[
-                  const SizedBox(width: 6),
-                  AppIcon(AppIcons.check, size: 20, color: scheme.primary),
+                  if (entry.checked) ...[
+                    const SizedBox(width: 6),
+                    AppIcon(AppIcons.check, size: 20, color: scheme.primary),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

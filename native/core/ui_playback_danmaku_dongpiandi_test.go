@@ -207,9 +207,9 @@ func TestDongpiandiDanmakuWindow(t *testing.T) {
 
 func TestDongpiandiPositionMS(t *testing.T) {
 	cases := []struct {
-		raw     any
-		want    int64
-		wantOK  bool
+		raw    any
+		want   int64
+		wantOK bool
 	}{
 		{float64(366), 366_000, true},
 		{"120", 120_000, true},

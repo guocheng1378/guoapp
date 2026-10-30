@@ -67,6 +67,7 @@ type Drama struct {
 	Area              string             `json:"area,omitempty"`
 	Year              string             `json:"year,omitempty"`
 	Tags              []string           `json:"tags,omitempty"`
+	Actors            []string           `json:"actors,omitempty"`
 	ReleaseStatus     string             `json:"releaseStatus,omitempty"`
 	SortMetadata      *SortMetadataState `json:"sortMetadata,omitempty"`
 }

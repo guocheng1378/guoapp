@@ -1,0 +1,6 @@
+相关推荐：同系列/同主演候选链 + 主演全链透传；在途工作快照 v0.2.96+2245
+
+- related_dramas：新候选链 同系列（剥第N部/第N季/番外/续集数字后缀搜主干，剥后>=3字才启用）-> 同主演（首个>=2字主演作搜索词）-> 原分类链（content_kind/分类关键词/标签x6/全部兜底），拿到内容即停，全空静默隐藏
+- Drama.actors 全链透传：provider.Drama -> dongpiandi card/detail -> maccms vod_actor（,，、/| 脏分隔符拆分取前8）-> nativeNormalize -> merge 缓存回填 -> Dart fromJson/toJson/merge；红果不暴露主演自动落分类链
+- 测试：maccmsapi 2 例 + core 3 例 + detail_related_rail 2 例（ALL_SOURCES 变体 8/8 全绿）
+- pubspec 0.2.96+2244 -> 2245；含各并行会话在途改动快照

@@ -205,21 +205,80 @@ func (d *Downloader) huangdouFreeHLSPlayback(ctx context.Context, sourceID strin
 	return providerMedia{}, errors.New("免费 hls 线路不提供该集")
 }
 
-// call 并行快速探测前 7 个 mirror（各自独立 15s 超时），第一个成功的胜出。
-// 不使用共享 context.WithTimeout，避免一个慢请求 cancel 掉其他并行请求。
+// huangdouPreferredTimeout 首阶段只打「已学/已配置优选域名」的超时预算。
+// 命中即返回，正常只发 1 个请求；超时或失败再降级扩散全池。
+const huangdouPreferredTimeout = 5 * time.Second
+
+// huangdouHostName 从 c.host（可能带 scheme 或端口）提取主机名，用于与镜像池去重。
+func huangdouHostName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "://") {
+		return strings.TrimRight(trimmed, "/")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
+}
+
+// huangdouProbeCandidates 扩散阶段的镜像池：排除首阶段已试过的同一 hostname，
+// 避免对刚失败的那个域名立刻重复请求。
+func huangdouProbeCandidates(current string) []string {
+	tried := huangdouHostName(current)
+	candidates := make([]string, 0, len(huangdouAPIMirrors))
+	for _, host := range huangdouQuickHosts() {
+		if tried != "" && strings.EqualFold(host, tried) {
+			continue
+		}
+		candidates = append(candidates, host)
+	}
+	return candidates
+}
+
 // 只有用户手动配置 HuangdouURL 时才走串行单 host。
+// 否则分两阶段：先打已学优选域名，失败再并发扩散全池——后者保证「任一镜像可用
+// 即成功」的能力不变，前者避免每个 API 调用都打满 17 个 host（每个 host 还要
+// 串行试 3 个 platform key，最坏 51 个请求/次）。
+// 外层 ctx 预算紧张时跳过首阶段，直接并发抢最快镜像（保持原有抢快特性）。
 func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[string]any, out *any) error {
 	if c.d.cfg.HuangdouURL != "" {
 		return c.callOnceAllKeys(ctx, path, data, out)
 	}
-	quick := huangdouQuickHosts()
-	resultCh := make(chan error, len(quick))
+	var preferredErr error
+	budget := huangdouPreferredTimeout
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < budget*2 {
+		budget = 0
+	}
+	if host := strings.TrimSpace(c.host); host != "" && budget > 0 {
+		probeCtx, cancel := context.WithTimeout(ctx, budget)
+		var dec any
+		preferred := *c
+		preferred.host = host
+		preferredErr = preferred.callOnceAllKeys(probeCtx, path, data, &dec)
+		cancel()
+		if preferredErr == nil {
+			*out = dec
+			return nil
+		}
+	}
+	candidates := huangdouProbeCandidates(c.host)
+	if len(candidates) == 0 {
+		if preferredErr != nil {
+			return preferredErr
+		}
+		return fmt.Errorf("所有黄豆节点均不可用：请检查网络或切换代理")
+	}
+	resultCh := make(chan error, len(candidates))
 	// 并发镜像下只有一个 goroutine 允许写 out：resultCh 容量等于并发数，
 	// 缓冲永远装得下所有发送，下方 select 的 default 不会拦截第二个
 	// 成功者——若无 CAS，多个成功镜像会同时执行 *out = dec 与主流程
 	// 读 out（call 返回后调用方立即反序列化）构成数据竞争。
 	var winner atomic.Bool
-	for _, host := range quick {
+	for _, host := range candidates {
 		go func(h string) {
 			cc := *c
 			cc.host = "https://" + h
@@ -227,9 +286,7 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 			err := cc.callOnceAllKeys(ctx, path, data, &dec)
 			if err == nil && winner.CompareAndSwap(false, true) {
 				*out = dec
-				c.d.providerMu.Lock()
-				c.d.providerHosts[sourceHuangdou] = cc.host
-				c.d.providerMu.Unlock()
+				c.d.rememberProviderHost(sourceHuangdou, cc.host)
 			}
 			select {
 			case resultCh <- err:
@@ -238,9 +295,10 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 		}(host)
 	}
 	// select 提前返回：第一个 nil 胜出；全部失败或 20s 兜底超时则返回最后错误
+	deadline := time.After(20 * time.Second)
 	var lastErr error
 	failCount := 0
-	for failCount < len(quick) {
+	for failCount < len(candidates) {
 		select {
 		case err := <-resultCh:
 			if err == nil {
@@ -248,15 +306,21 @@ func (c *huangdouAPIClient) call(ctx context.Context, path string, data map[stri
 			}
 			lastErr = err
 			failCount++
-		case <-time.After(20 * time.Second):
+		case <-deadline:
 			if lastErr != nil {
 				return lastErr
+			}
+			if preferredErr != nil {
+				return preferredErr
 			}
 			return fmt.Errorf("黄豆节点探测超时（20s）")
 		}
 	}
 	if lastErr != nil {
 		return lastErr
+	}
+	if preferredErr != nil {
+		return preferredErr
 	}
 	return fmt.Errorf("所有黄豆节点均不可用：请检查网络或切换代理")
 }

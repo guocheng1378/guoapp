@@ -54,7 +54,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
         );
         if (file == null || !mounted) return;
         final size = await file.length();
-        if (size == null || size > 8 * 1024 * 1024) {
+        if (size == null || size > 64 * 1024 * 1024) {
           throw const FormatException('备份文件过大或无法读取');
         }
         final content = utf8.decode(await file.readAsBytes());

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_build.dart';
+import '../glass.dart';
 import 'license.dart';
 import 'license_codec.dart';
 import 'qq_launch.dart';
@@ -139,7 +140,10 @@ class _ActivationScreenState extends State<ActivationScreen> {
     final theme = Theme.of(context);
     final record = widget.record ?? _activatedRecord;
     return Scaffold(
-      appBar: AppBar(title: Text('激活 $appName')),
+      appBar: AppBar(
+        flexibleSpace: const TopFog(),
+        title: Text('激活 $appName'),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

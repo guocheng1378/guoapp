@@ -257,7 +257,8 @@ void main() {
     expect(find.byKey(const ValueKey('player-download')), findsNothing);
     expect(find.byKey(const ValueKey('player-favorite')), findsNothing);
     expect(find.byKey(const ValueKey('player-volume')), findsNothing);
-    expect(find.text('选集'), findsOneWidget);
+    // 下行工具行也有一枚「选集」，加上详情面板的 tab 共两处。
+    expect(find.text('选集'), findsWidgets);
     expect(find.text('简介'), findsOneWidget);
     expect(find.text('下载'), findsOneWidget);
     expect(find.text('追剧'), findsNothing);

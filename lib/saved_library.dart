@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
@@ -11,6 +12,7 @@ import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
+import 'watch_calendar_strip.dart';
 
 class SavedLibrary extends StatefulWidget {
   const SavedLibrary({
@@ -22,6 +24,7 @@ class SavedLibrary extends StatefulWidget {
     required this.onContinue,
     this.onDownload,
     this.onFindSource,
+    this.filterRequest,
     this.remoteAutofocus = false,
     this.onExitLeft,
     this.onExitUp,
@@ -39,6 +42,10 @@ class SavedLibrary extends StatefulWidget {
   /// 追剧/最近卡 ⋯ 菜单「换个源找」：回发现页用剧名触发全源搜索；
   /// 单源变体不传该回调，菜单项自然消失。
   final ValueChanged<String>? onFindSource;
+
+  /// 外部筛选请求（如首页「追剧有 N 部更新」→「去看看」自动选「有更新」）。
+  /// 可选：不传时筛选完全由页面内部状态决定。
+  final ValueListenable<String>? filterRequest;
   final bool remoteAutofocus;
   final VoidCallback? onExitLeft;
   final VoidCallback? onExitUp;
@@ -56,10 +63,17 @@ class SavedLibrary extends StatefulWidget {
 class _SavedLibraryState extends State<SavedLibrary> {
   final _search = TextEditingController();
   String _filter = '';
+  // 搜索框默认收起（只留标题行的图标）：追剧页首屏要留给剧卡。
+  bool _searchOpen = false;
 
   @override
   void initState() {
     super.initState();
+    final request = widget.filterRequest;
+    if (request != null) {
+      _filter = request.value;
+      request.addListener(_onFilterRequest);
+    }
     _healEpisodeCounts();
     // 打开追剧/最近即预取条目详情（≤12 部）：配合 30 分钟详情缓存，
     // 用户再点开任何一部都是零网络等待。基类 no-op，测试天然安全。
@@ -92,7 +106,36 @@ class _SavedLibraryState extends State<SavedLibrary> {
   }
 
   @override
+  void didUpdateWidget(covariant SavedLibrary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.filterRequest != widget.filterRequest) {
+      oldWidget.filterRequest?.removeListener(_onFilterRequest);
+      final request = widget.filterRequest;
+      if (request != null) {
+        _filter = request.value;
+        request.addListener(_onFilterRequest);
+      }
+    }
+  }
+
+  /// 外部筛选请求变化（首页更新提醒「去看看」→ 'updates'）。
+  void _onFilterRequest() {
+    final value = widget.filterRequest?.value ?? '';
+    if (!mounted || value.isEmpty || value == _filter) return;
+    setState(() => _filter = value);
+  }
+
+  /// 搜索框展开/收起：收起时清空关键词，避免"看不见搜索框却还在过滤"。
+  void _toggleSearch() {
+    setState(() {
+      _searchOpen = !_searchOpen;
+      if (!_searchOpen) _search.clear();
+    });
+  }
+
+  @override
   void dispose() {
+    widget.filterRequest?.removeListener(_onFilterRequest);
     _search.dispose();
     super.dispose();
   }
@@ -128,7 +171,6 @@ class _SavedLibraryState extends State<SavedLibrary> {
     drama: drama,
     store: widget.store,
     history: widget.history,
-    onContinue: () => widget.onContinue(drama),
     onDownload: widget.onDownload == null
         ? null
         : () => widget.onDownload!(drama),
@@ -136,6 +178,54 @@ class _SavedLibraryState extends State<SavedLibrary> {
         ? null
         : () => widget.onFindSource!(drama.title),
   );
+
+  /// 「继续追剧」紧凑胶囊：与状态筛选 chips 同一行，首屏不再被整宽卡片吃掉。
+  Widget _resumePill(BuildContext context, WatchEntry entry) {
+    final theme = Theme.of(context);
+    return GlassSurface(
+      radius: GlassTokens.radiusChip,
+      elevated: false,
+      tint: GlassTint.pill,
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          key: const ValueKey('continue-watching'),
+          borderRadius: BorderRadius.circular(GlassTokens.radiusChip),
+          onTap: () => widget.onContinue(entry.drama),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AppIcon(AppIcons.playCircle, size: 18),
+                const SizedBox(width: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 148),
+                  child: Text(
+                    '继续追剧 · ${entry.drama.title}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '第 ${entry.episode} 集 · ${formatPosition(entry.position)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _tile(Drama drama, {FocusNode? focusNode, VoidCallback? onFocus}) {
     final watched = widget.store.watched(drama.id);
@@ -155,7 +245,6 @@ class _SavedLibraryState extends State<SavedLibrary> {
         drama: drama,
         store: widget.store,
         history: widget.history,
-        onContinue: () => widget.onContinue(drama),
         onDownload: widget.onDownload == null
             ? null
             : () => widget.onDownload!(drama),
@@ -188,18 +277,24 @@ class _SavedLibraryState extends State<SavedLibrary> {
                 : state?.status.name == _filter);
       }).toList();
       final ids = items.map((drama) => drama.id).toSet();
-      final resume = history
-          .where(
-            (entry) =>
-                ids.contains(entry.drama.id) &&
-                (!entry.finished ||
-                    entry.drama.episodes <= 0 ||
-                    entry.episode < entry.drama.episodes),
-          )
-          .firstOrNull;
+      // 「继续追剧」只在追剧页出现：最近观看页的列表本身按时间倒序，
+      // 第一条就是"继续观看"，再挂一个入口只是把第一行抄一遍。
+      // 搜索词非空时也不挂——免得搜 A 剧时顶上冒出 B 剧的续播入口。
+      final resume = widget.history || _search.text.trim().isNotEmpty
+          ? null
+          : history
+                .where(
+                  (entry) =>
+                      ids.contains(entry.drama.id) &&
+                      (!entry.finished ||
+                          entry.drama.episodes <= 0 ||
+                          entry.episode < entry.drama.episodes),
+                )
+                .firstOrNull;
       final header = [
+        // 标题行：搜索收进图标（点开才展开输入框），先把首屏还给剧卡。
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+          padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
           child: Row(
             children: [
               Expanded(
@@ -214,39 +309,58 @@ class _SavedLibraryState extends State<SavedLibrary> {
                   onPressed: _clearHistory,
                   icon: AppIcon(AppIcons.delete),
                 ),
+              IconButton(
+                key: const ValueKey('follow-search-toggle'),
+                tooltip: _searchOpen ? '收起搜索' : '搜索',
+                onPressed: _toggleSearch,
+                icon: AppIcon(
+                  _searchOpen ? AppIcons.searchOff : AppIcons.search,
+                ),
+              ),
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: RemoteTextInput(
-            child: TextField(
-              key: ValueKey(
-                widget.history ? 'history-search' : 'favorites-search',
-              ),
-              controller: _search,
-              onChanged: (_) => setState(() {}),
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: widget.history ? '搜索观看记录' : '搜索追剧',
-                prefixIcon: AppIcon(AppIcons.search),
-                suffixIcon: _search.text.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: '清空搜索',
-                        onPressed: () => setState(_search.clear),
-                        icon: AppIcon(AppIcons.close),
-                      ),
+        if (_searchOpen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: RemoteTextInput(
+              child: TextField(
+                key: ValueKey(
+                  widget.history ? 'history-search' : 'favorites-search',
+                ),
+                controller: _search,
+                autofocus: true,
+                onChanged: (_) => setState(() {}),
+                // 移动端 TextField 默认点在框外不收键盘：点卡片起播时
+                // 焦点会留在输入框，键盘一路跟着进播放器。
+                onTapOutside: (_) => FocusScope.of(context).unfocus(),
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: widget.history ? '搜索观看记录' : '搜索追剧',
+                  prefixIcon: AppIcon(AppIcons.search),
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清空搜索',
+                          onPressed: () => setState(_search.clear),
+                          icon: AppIcon(AppIcons.close),
+                        ),
+                ),
               ),
             ),
           ),
-        ),
+        // 追剧页：一行横滑 =「继续追剧」紧凑胶囊 + 状态筛选 chips。
+        // 两者同排，首屏才腾得出位置给剧卡；最近观看页整行不渲染。
         if (!widget.history)
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Row(
               children: [
+                if (resume != null) ...[
+                  _resumePill(context, resume),
+                  const SizedBox(width: 8),
+                ],
                 for (final filter in [
                   ('', '全部'),
                   for (final status in FollowStatus.values)
@@ -265,25 +379,20 @@ class _SavedLibraryState extends State<SavedLibrary> {
               ],
             ),
           ),
-        if (resume != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Card(
-              margin: EdgeInsets.zero,
-              child: ListTile(
-                key: const ValueKey('continue-watching'),
-                leading: AppIcon(AppIcons.playCircle),
-                title: Text(
-                  '继续观看 · ${resume.drama.title}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  '第 ${resume.episode} 集 · ${formatPosition(resume.position)}',
-                ),
-                onTap: () => widget.onContinue(resume.drama),
-              ),
-            ),
+        // 「本周追剧」：追剧页专属的"追新"视角（站点周表）；不支持的源/
+        // 拉不到就整条不渲染。历史页不渲染，顺带省一次周表请求。
+        if (!widget.history)
+          WatchCalendarStrip(
+            repository: widget.repository,
+            store: widget.store,
+            source: widget.store.source,
+            onOpen: (drama, {download = false}) {
+              if (download) {
+                widget.onDownload?.call(drama);
+                return;
+              }
+              widget.onOpen(drama);
+            },
           ),
       ];
       final empty = StatusPanel(

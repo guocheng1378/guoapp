@@ -141,7 +141,17 @@ class _LiveScreenState extends State<LiveScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
+        // 顶栏雾面（渐变模糊 + 官方三层混色）。
         flexibleSpace: const TopFog(),
+        // 分组条挂进 AppBar：flexibleSpace 的雾面会连同状态栏、顶栏、分组条
+        // 均匀盖成一整块，与主页「顶栏 + 吸顶分类条」同形态（此前分组条在
+        // body 里，只有顶栏那条有雾，下面是一截纯色背景带）。
+        bottom: page == null || page.groups.isEmpty
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(48),
+                child: _groupBar(page),
+              ),
         titleSpacing: 12,
         title: _pill(
           child: const Padding(
@@ -200,6 +210,20 @@ class _LiveScreenState extends State<LiveScreen> {
     return FogPill(prox: _prox, child: FolmePress(child: child));
   }
 
+  /// 频道分组胶囊条（挂在 AppBar.bottom，随顶栏一起被雾面覆盖）。
+  Widget _groupBar(LivePage page) => SingleChildScrollView(
+    key: const Key('live-group-bar'),
+    scrollDirection: Axis.horizontal,
+    padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
+    child: Row(
+      children: [
+        _groupChip('全部', ''),
+        for (final group in page.groups)
+          _groupChip(group.name, group.name),
+      ],
+    ),
+  );
+
   Widget _buildBody(BuildContext context, LivePage? page) {
     final scheme = Theme.of(context).colorScheme;
     if (_loading) {
@@ -255,6 +279,8 @@ class _LiveScreenState extends State<LiveScreen> {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: GlassSurface(
               radius: 14,
+              // 形态：方形圆角矩形（宽扁提示条不做药丸）。
+              borderRadius: BorderRadius.circular(14),
               tint: GlassTint.pill,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -270,21 +296,6 @@ class _LiveScreenState extends State<LiveScreen> {
               ),
             ),
           ),
-        SizedBox(
-          height: 48,
-          child: SingleChildScrollView(
-            key: const Key('live-group-bar'),
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
-            child: Row(
-              children: [
-                _groupChip('全部', ''),
-                for (final group in page.groups)
-                  _groupChip(group.name, group.name),
-              ],
-            ),
-          ),
-        ),
         Expanded(
           child: channels.isEmpty
               ? Center(

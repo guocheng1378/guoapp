@@ -5,7 +5,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'local_profiles.dart';
 import 'local_snapshot.dart';
+import 'local_snapshot_files.dart';
 import 'models.dart';
+import 'player_skip_marks.dart';
 import 'playback_preferences.dart';
 import 'download_preferences.dart';
 import 'catalog_sort.dart';
@@ -15,12 +17,20 @@ import 'lan_sync_models.dart';
 
 part 'local_store_sync.dart';
 
+/// 观看历史落盘/内存上限（updatedAt 降序取前 N）。
+const int _watchHistoryLimit = 300;
+
 class LocalStore extends ChangeNotifier {
-  LocalStore(this.preferences) {
+  LocalStore(this.preferences, {SnapshotFiles? files})
+      : files = files ?? createDefaultSnapshotFiles() {
     _initialize();
   }
 
   final SharedPreferences preferences;
+
+  /// 剧库重键（收藏/历史等大块数据）的文件层。生产传入指向应用支持目录的
+  /// [DirectorySnapshotFiles]；测试注入 [MemorySnapshotFiles] 或临时目录实现。
+  final SnapshotFiles files;
   LocalSnapshot? _snapshot;
   LanDocument? _lanDocumentCache;
   int _lanRevision = 0;
@@ -59,7 +69,7 @@ class LocalStore extends ChangeNotifier {
 
   void _initialize() {
     try {
-      _snapshot = LocalSnapshot(preferences);
+      _snapshot = LocalSnapshot(preferences, files: files);
       // 快照就位后再读站源开关；此前在快照赋值前调用，开关永远读空，
       // 重启后用户显式设置的开/关状态会全部回落到默认值。
       _loadSourceSwitches();
@@ -373,6 +383,14 @@ class LocalStore extends ChangeNotifier {
       _configurationError == null ? _bool('restrictedUnlocked') ?? false : false;
   Future<void> setRestrictedUnlocked(bool value) =>
       _setting('restrictedUnlocked', value);
+
+  /// 真果·鉴「仅官方线路」：开启后站点第三方直连线路一律不参与（没有官方
+  /// 票据的集会提示不可播）。设备级全局开关，默认关闭（官方优先 + 三方兜底）。
+  bool get dongpiandiOfficialOnly => _configurationError == null
+      ? _bool('dongpiandiOfficialOnly') ?? false
+      : false;
+  Future<void> setDongpiandiOfficialOnly(bool value) =>
+      _setting('dongpiandiOfficialOnly', value);
   String get displayMode {
     final value = _configurationError == null ? _string('displayMode') : null;
     return {'auto', 'television', 'standard'}.contains(value) ? value! : 'auto';
@@ -439,6 +457,43 @@ class LocalStore extends ChangeNotifier {
     } catch (_) {
       return const [];
     }
+  }
+
+  /// 片头/片尾标记：整份 Map（剧 id -> 标记）。
+  Map<String, EpisodeSkipMarks> get skipMarks {
+    if (locked) return const {};
+    final raw = _string(_key('skipMarks'));
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      return decoded.map((key, value) => MapEntry(
+            key.toString(),
+            EpisodeSkipMarks.fromJson(
+              value is Map ? Map<String, dynamic>.from(value) : const {},
+            ),
+          ));
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// 某部剧（或本地视频 id）的片头/片尾标记，没标定过就是空标记。
+  EpisodeSkipMarks skipMarksOf(String id) =>
+      skipMarks[id] ?? const EpisodeSkipMarks();
+
+  /// 写一份标记；传空标记等于删掉这部剧的标定。
+  Future<void> setSkipMarks(String id, EpisodeSkipMarks value) {
+    final entries = Map<String, EpisodeSkipMarks>.of(skipMarks);
+    if (value.isEmpty) {
+      entries.remove(id);
+    } else {
+      entries[id] = value;
+    }
+    return _setting(
+      _key('skipMarks'),
+      jsonEncode(entries.map((key, marks) => MapEntry(key, marks.toJson()))),
+    );
   }
 
   Future<void> setCatalogView(CatalogView value) =>
@@ -647,7 +702,12 @@ class LocalStore extends ChangeNotifier {
     });
   }
 
-  Future<void> saveWatch(WatchEntry entry) {
+  /// 保存观看进度。
+  ///
+  /// 播放页每 5 秒调用一次（[notify] 默认 false）：只做单条内存增量更新 +
+  /// 落盘，不再全量重解析与整树通知。退出播放页 / 切集 / 播完自动下一集等
+  /// 「继续观看」可见时机由调用方传 `notify: true` 主动刷新。
+  Future<void> saveWatch(WatchEntry entry, {bool notify = false}) {
     final epoch = _epoch;
     return _queue(() async {
       if (!allowsSource(entry.drama.source) || epoch != _epoch) return;
@@ -661,31 +721,51 @@ class LocalStore extends ChangeNotifier {
               duration: entry.duration,
               updatedAt: entry.updatedAt,
             );
-      final entries = Map.of(_history)..[entry.drama.id] = current;
-      final sorted = entries.values.toList()
-        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      // 超出上限时才排序裁剪一次（绝大多数用户远低于 300 条）。
+      final trim = _history.length >= _watchHistoryLimit;
+      final entries = trim
+          ? (Map.of(_history)..[entry.drama.id] = current)
+          : (_history..[entry.drama.id] = current);
       final following = _followStates[entry.drama.id];
-      final states = Map.of(_followStates);
-      final favorites = Map.of(_favorites);
-      if (following != null) {
-        states[entry.drama.id] = following.afterPlayback(current);
-        favorites[entry.drama.id] = favorites[entry.drama.id]!.merge(
-          current.drama,
-        );
-      }
+      final nextState = following?.afterPlayback(current);
+      final nextFavorite = following == null
+          ? null
+          : _favorites[entry.drama.id]?.merge(current.drama);
       await _commit({
         _key('history'): jsonEncode(
-          sorted.take(300).map((entry) => entry.toJson()).toList(),
+          trim
+              ? (entries.values.toList()
+                  ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)))
+                  .take(_watchHistoryLimit)
+                  .map((entry) => entry.toJson())
+                  .toList()
+              : entries.values.map((entry) => entry.toJson()).toList(),
         ),
-        if (following != null) ...{
-          _key('followStates'): _encodeFollowStates(states),
+        if (nextState != null) ...{
+          _key('followStates'): _encodeFollowStates(
+            Map.of(_followStates)..[entry.drama.id] = nextState,
+          ),
+        },
+        if (nextFavorite != null) ...{
           _key('favorites'): jsonEncode(
-            favorites.values.map((entry) => entry.toJson()).toList(),
+            (Map.of(_favorites)..[entry.drama.id] = nextFavorite)
+                .values
+                .map((entry) => entry.toJson())
+                .toList(),
           ),
         },
       }, syncUrgent: false);
-      _loadLibrary();
-      _notify();
+      if (trim) {
+        final sorted = entries.entries.toList()
+          ..sort((a, b) => b.value.updatedAt.compareTo(a.value.updatedAt));
+        _history
+          ..clear()
+          ..addEntries(sorted.take(_watchHistoryLimit));
+      }
+      if (nextState != null) _followStates[entry.drama.id] = nextState;
+      if (nextFavorite != null) _favorites[entry.drama.id] = nextFavorite;
+      _lanDocumentCache = null;
+      if (notify) _notify();
     });
   }
 
@@ -1052,15 +1132,15 @@ class LocalStore extends ChangeNotifier {
           },
       },
     });
-    if (utf8.encode(content).length > 8 * 1024 * 1024) {
-      throw StateError('备份超过 8 MiB 保存上限，请先整理记录；尚未写出备份文件');
+    if (utf8.encode(content).length > 64 * 1024 * 1024) {
+      throw StateError('备份超过 64 MiB 保存上限，请先整理记录；尚未写出备份文件');
     }
     validateBackup(content);
     return content;
   }
 
   Map<String, dynamic> validateBackup(String content) {
-    if (utf8.encode(content).length > 8 * 1024 * 1024) {
+    if (utf8.encode(content).length > 64 * 1024 * 1024) {
       throw const FormatException('备份文件过大');
     }
     final data = jsonDecode(content) as Map<String, dynamic>;
@@ -1232,7 +1312,7 @@ class LocalStore extends ChangeNotifier {
             : backupAdmin;
         if (!verifier.protected) throw StateError('无法验证管理员身份，请使用包含管理员密码的备份恢复');
         await _checkPin(verifier, pin);
-        _snapshot ??= LocalSnapshot.empty(preferences);
+        _snapshot ??= LocalSnapshot.empty(preferences, files: files);
         await _installBackup(data);
       });
 

@@ -226,6 +226,24 @@ class MainActivity : FlutterActivity() {
                             window.attributes = lp
                             result.success(true)
                         }
+                        "battery" -> {
+                            // 播放器状态区电量：BATTERY_PROPERTY_CAPACITY 不需要任何权限，
+                            // 取不到（模拟器/极简 ROM）返回 null，Dart 侧整颗图标隐藏。
+                            val manager = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                            val level = manager?.getIntProperty(
+                                BatteryManager.BATTERY_PROPERTY_CAPACITY
+                            ) ?: -1
+                            if (level < 0) {
+                                result.success(null)
+                            } else {
+                                result.success(
+                                    mapOf(
+                                        "level" to level.coerceIn(0, 100),
+                                        "charging" to (manager?.isCharging ?: false)
+                                    )
+                                )
+                            }
+                        }
                         else -> result.notImplemented()
                     }
                 }

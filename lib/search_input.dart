@@ -165,14 +165,22 @@ class _SearchInputState extends State<SearchInput> {
         GlassSurface(
       variant: GlassVariant.surface,
       radius: 28,
+      // 形态：方形圆角矩形（用户 2026-10-29「那些大胶囊换成方的」——宽扁的
+      // 搜索框不做药丸）。
+      borderRadius: BorderRadius.circular(28),
       elevated: false,
-      // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+      // 双态玻璃材质：与分类条/底栏同源（pill 档）。
       tint: GlassTint.pill,
       child: TextField(
         controller: controller,
         focusNode: focus,
         autofocus: widget.autofocus,
         textInputAction: TextInputAction.search,
+        // 移动端 TextField 默认点在框外不收键盘：搜索态直接点结果卡，
+        // 焦点仍留在输入框，键盘会跟着 opaque:false 浮层一路弹进播放器。
+        // RawAutocomplete 把输入框与建议列表放在同一 TapRegion 组，
+        // 点建议项不会被误判为「外部点击」。
+        onTapOutside: (_) => focus.unfocus(),
         // 不再每次按键 setState 重建整个 RawAutocomplete：只有清空
         // 按钮的显隐依赖输入内容，交给局部的 ValueListenableBuilder。
         onChanged: (value) => widget.onChanged?.call(value),

@@ -50,10 +50,38 @@ func reopenCatalogEngine(t *testing.T, directory string, transport sourceFixture
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.downloads.close)
-	engine.downloader.client.Transport = transport
+	engine.downloader.client.Transport = withDeviceRegistration(transport)
 	engine.downloader.limiter = newRequestLimiter(3, 0)
 	engine.downloader.cfg.Retries = 1
+	// 懒加载：测试直接读引擎字段前先触发一次加载（语义与旧版一致）。
+	engine.ensureLoaded()
 	return engine
+}
+
+// flushCatalogDiskForTest 立刻把合并窗里待写的剧库快照落盘。
+// 落盘改成合并窗后，测试要断言盘上内容时必须显式冲刷一次。
+func flushCatalogDiskForTest(t *testing.T, engine *nativeEngine) {
+	t.Helper()
+	if err := engine.flushCatalogDisk(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// awaitCatalogSaveError 等合并窗里的后台写盘落地并回报失败。
+// 写盘失败改为后台感知后，测试不能假设错误在同一个调用栈里返回。
+func awaitCatalogSaveError(t *testing.T, engine *nativeEngine) error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		engine.mu.Lock()
+		err := engine.catalogSaveError
+		engine.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil
 }
 
 func TestNativeHongguoCursorRestartsPerCatalog(t *testing.T) {
@@ -271,6 +299,8 @@ func TestNativeCatalogSaveFailureRetriesWithoutAdvancing(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(engine.directory, "catalogs.json")
+	// 落盘合并窗：先冲一次，拿到「已保存的那一份」再做破坏性改动。
+	flushCatalogDiskForTest(t, engine)
 	original, _ := os.ReadFile(path)
 	if err := os.Rename(path, path+".saved"); err != nil {
 		t.Fatal(err)
@@ -279,9 +309,16 @@ func TestNativeCatalogSaveFailureRetriesWithoutAdvancing(t *testing.T) {
 		t.Fatal(err)
 	}
 	input.Page = 2
-	result, err := engine.nativeCatalog(context.Background(), input)
-	if err != nil || result.Warning == "" || result.Fresh || result.saveError == nil {
-		t.Fatal("save failure was reported as a fresh catalog", err, result.Warning)
+	if _, err := engine.nativeCatalog(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	// 写盘改走合并窗后，落盘失败由后台感知：错误不再是同一个调用栈返回，
+	// 但必须照样冒出来，且未落盘的数据不许继续翻页。
+	if saveErr := awaitCatalogSaveError(t, engine); saveErr == nil {
+		t.Fatal("save failure was not reported")
+	}
+	if cached := engine.nativeCached("hongguo|short_play"); cached.Warning == "" || cached.saveError == nil || cached.Fresh {
+		t.Fatal("save failure was reported as a fresh catalog", cached.Warning)
 	}
 	if len(engine.nativeCached("hongguo|short_play").Items) != 3 {
 		t.Fatal("save failure discarded usable memory data")
@@ -320,6 +357,94 @@ func TestNativeCatalogSaveFailureRetriesWithoutAdvancing(t *testing.T) {
 	}
 }
 
+// TestNativeCatalogCoalescesDeferredWrites 验证落盘合并窗：窗口内的连续变更
+// 只落盘一次，且落的是最新快照（不是第一份）。
+func TestNativeCatalogCoalescesDeferredWrites(t *testing.T) {
+	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("network forbidden")
+	})
+	path := filepath.Join(engine.directory, "catalogs.json")
+	if err := engine.saveCatalogCache(sourceHongguo, &nativeCatalogResult{
+		Items: []nativeDrama{{ID: "hongguo:1", Title: "第一页"}}, Page: 1, HasMore: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.saveCatalogCache(sourceHongguo, &nativeCatalogResult{
+		Items: []nativeDrama{{ID: "hongguo:1", Title: "第一页"}, {ID: "hongguo:2", Title: "第二页"}}, Page: 2, HasMore: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("目录变更被立即写盘，落盘合并窗没有生效")
+	}
+	flushCatalogDiskForTest(t, engine)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk nativeCatalogDisk
+	if err := json.Unmarshal(body, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if len(disk.Catalogs[sourceHongguo]) != 2 {
+		t.Fatal("合并窗落盘的不是最新快照", len(disk.Catalogs[sourceHongguo]))
+	}
+	if disk.States[sourceHongguo].Page != 2 {
+		t.Fatal("合并窗落盘的翻页位置不是最新的", disk.States[sourceHongguo].Page)
+	}
+	// 冲刷后内存与盘上一致，重开引擎读到的就是最新状态。
+	restarted := reopenCatalogEngine(t, engine.directory, nil)
+	if cached := restarted.nativeCached(sourceHongguo); len(cached.Items) != 2 || cached.Page != 2 {
+		t.Fatal("冲刷后重开引擎没有读到合并窗里的最新快照", cached.Page, len(cached.Items))
+	}
+}
+
+// TestNativeCatalogCacheLoadsOnFirstUse 验证磁盘缓存改成懒加载：构造引擎不再
+// 读盘，第一次真正用到时才加载，且加载后语义与原来一致（目录与状态都在）。
+func TestNativeCatalogCacheLoadsOnFirstUse(t *testing.T) {
+	directory := t.TempDir()
+	stamp := time.Now().Add(-nativeCatalogTTL - time.Minute)
+	body, err := json.Marshal(nativeCatalogDisk{
+		Version: 3,
+		Catalogs: map[string][]nativeDrama{
+			sourceHongguo: {{ID: "hongguo:1", Title: "磁盘记录"}},
+		},
+		States: map[string]nativeCatalogState{
+			sourceHongguo: {UpdatedAt: stamp, Page: 3, HasMore: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "catalogs.json"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := newNativeEngine(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(engine.downloads.close)
+	engine.mu.Lock()
+	loaded := len(engine.catalogs) > 0
+	engine.mu.Unlock()
+	if loaded {
+		t.Fatal("构造引擎时就把磁盘目录读进内存，懒加载没有生效")
+	}
+	cached := engine.nativeCached(sourceHongguo)
+	if len(cached.Items) != 1 || cached.Page != 3 || !cached.HasMore {
+		t.Fatal("首次访问没有返回磁盘目录", cached.Page, len(cached.Items))
+	}
+	if cached.Fresh {
+		t.Fatal("磁盘记录的更新时间已判定为过期，不该是新鲜数据")
+	}
+	engine.mu.Lock()
+	state := engine.catalogStates[sourceHongguo]
+	engine.mu.Unlock()
+	if state.UpdatedAt.IsZero() || !state.UpdatedAt.Equal(stamp) {
+		t.Fatal("磁盘状态的更新时间没有一起加载", state.UpdatedAt)
+	}
+}
+
 func TestNativeCatalogSizeLimitPreservesPreviousFile(t *testing.T) {
 	var requests atomic.Int32
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
@@ -330,6 +455,8 @@ func TestNativeCatalogSizeLimitPreservesPreviousFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(engine.directory, "catalogs.json")
+	// 合并窗：先冲一次拿到已保存的那一份，超限之后盘上内容必须原样不动。
+	flushCatalogDiskForTest(t, engine)
 	before, _ := os.ReadFile(path)
 	result := nativeCatalogResult{Items: []nativeDrama{{ID: "hongguo:2", Title: "未保存", Description: strings.Repeat("x", nativeCatalogMaxBytes)}}, Page: 2, HasMore: true}
 	err := engine.saveCatalogCache(sourceHongguo, &result)
@@ -384,6 +511,9 @@ func TestNativeCatalogMetadataSaveExcludesInFlightCursor(t *testing.T) {
 		t.Fatal("catalog never reached the in-flight checkpoint")
 	}
 	engine.saveDetailMetadata(nativeDrama{ID: "hongguo:1000", Source: sourceHongguo, Title: "补齐名称"})
+	// 合并窗：详情补齐也走延迟落盘，这里显式冲一次，
+	// 才能断言「补齐详情不会把在途游标一起写进去」。
+	flushCatalogDiskForTest(t, engine)
 	restarted := reopenCatalogEngine(t, engine.directory, transport)
 	if cursor := restarted.downloader.hongguoCatalogSnapshot().Feeds["short_play"]; cursor.Offset != 18 {
 		t.Error("an unrelated metadata write persisted an uncommitted feed cursor")

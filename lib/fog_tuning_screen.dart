@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'fog_tint_sampler.dart';
+import 'fog_legacy.dart';
 import 'fog_tuning.dart';
-import 'glass.dart';
 
 /// 雾面调参台：所有雾面参数滑块实时生效（所见即所得），调到满意后
 /// 「复制参数」把 JSON 发回开发者固化为发布默认。
@@ -49,7 +48,9 @@ class _FogTuningScreenState extends State<FogTuningScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('雾面调参')),
+      // 调参台自身顶栏不加雾面：页面里唯一的 TopFog 必须是预览区那一条，
+      // 否则调参时会分不清顶部那条是页面顶栏还是参数效果。
+      appBar: AppBar(title: const Text('旧雾面调参（遗留）')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
@@ -69,10 +70,10 @@ class _FogTuningScreenState extends State<FogTuningScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          _sectionTitle(context, '模糊与饱和'),
+          _sectionTitle(context, '模糊'),
           _TuningSlider(
             label: '模糊半径',
-            hint: '越大越糊；0=只剩白蒙',
+            hint: '越大越糊；官方雾面带真值 σ20（渐变模糊：顶边满值→底边渐隐）',
             value: _tuning.blurSigma,
             min: 0,
             max: FogTuningState.maxBlurSigma,
@@ -81,67 +82,11 @@ class _FogTuningScreenState extends State<FogTuningScreen> {
             onChanged: (v) => _apply(_tuning.copyWith(blurSigma: v)),
             onChangeEnd: (v) => _commit(_tuning.copyWith(blurSigma: v)),
           ),
-          _TuningSlider(
-            label: '饱和',
-            hint: '透出内容色的「湿度」；0=无色偏',
-            value: _tuning.saturation,
-            min: 0,
-            max: 1.6,
-            divisions: 32,
-            format: (v) => v.toStringAsFixed(2),
-            onChanged: (v) => _apply(_tuning.copyWith(saturation: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(saturation: v)),
-          ),
-          _sectionTitle(context, '白感（三层）'),
-          _TuningSlider(
-            label: '奶白层',
-            hint: '提亮；过高=白板感',
-            value: _tuning.whiteNormal,
-            min: 0,
-            max: 0.5,
-            divisions: 50,
-            format: (v) => v.toStringAsFixed(3),
-            onChanged: (v) => _apply(_tuning.copyWith(whiteNormal: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(whiteNormal: v)),
-          ),
-          _TuningSlider(
-            label: '白 softLight',
-            hint: '提密保色',
-            value: _tuning.whiteSoftLight,
-            min: 0,
-            max: 1,
-            divisions: 50,
-            format: (v) => v.toStringAsFixed(3),
-            onChanged: (v) => _apply(_tuning.copyWith(whiteSoftLight: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(whiteSoftLight: v)),
-          ),
-          _TuningSlider(
-            label: '灰 softLight',
-            hint: '玻璃厚度',
-            value: _tuning.graySoftLight,
-            min: 0,
-            max: 0.5,
-            divisions: 50,
-            format: (v) => v.toStringAsFixed(3),
-            onChanged: (v) => _apply(_tuning.copyWith(graySoftLight: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(graySoftLight: v)),
-          ),
-          _sectionTitle(context, '动态取色'),
-          _TuningSlider(
-            label: '取色浓度',
-            hint: '雾面染色跟随滚动内容的强度；0=纯白雾',
-            value: _tuning.tintMix,
-            min: 0,
-            max: FogTuningState.maxTintMix,
-            divisions: 20,
-            format: (v) => v.toStringAsFixed(2),
-            onChanged: (v) => _apply(_tuning.copyWith(tintMix: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(tintMix: v)),
-          ),
           _sectionTitle(context, '雾形'),
           _TuningSlider(
             label: '上浓下淡',
-            hint: '雾的气感；0=均匀玻璃板',
+            hint: '雾的气感；0=均匀玻璃板。顶部恒为官方基准浓度，'
+                '本值只控制底部衰减（顶部放大会把层 alpha 顶爆成黑蒙版）',
             value: _tuning.verticalGrad,
             min: 0,
             max: 1,
@@ -151,19 +96,8 @@ class _FogTuningScreenState extends State<FogTuningScreen> {
             onChangeEnd: (v) => _commit(_tuning.copyWith(verticalGrad: v)),
           ),
           _TuningSlider(
-            label: '顶部增幅',
-            hint: '雾形全开时顶部额外增浓倍数；0=只衰减底部',
-            value: _tuning.topBoost,
-            min: 0,
-            max: FogTuningState.maxTopBoost,
-            divisions: 30,
-            format: (v) => v.toStringAsFixed(1),
-            onChanged: (v) => _apply(_tuning.copyWith(topBoost: v)),
-            onChangeEnd: (v) => _commit(_tuning.copyWith(topBoost: v)),
-          ),
-          _TuningSlider(
             label: '雾面高度',
-            hint: '负=收窄（底缘上移，最少收到 0）；正=向下延伸；0=现状',
+            hint: '0 = 雾带底边贴住分组栏底边（不再向下多挂一条）；正=向下延伸；负=收窄',
             value: _tuning.fogHeight,
             min: FogTuningState.minFogHeight,
             max: FogTuningState.maxFogHeight,
@@ -235,32 +169,24 @@ typedef _Preset = (String, FogTuningState);
 
 const List<_Preset> _presets = <_Preset>[
   ('发布默认', FogTuningState.fallback),
-  // blur σ 量程 0–3（用户定调）：「更雾」σ 顶格后靠加重 tint 浓度区分。
-  // 预设只表达浓度/雾形配方，雾面高度显式归 0（不随发布默认 -14
-  // 收窄——预设语义不含高度）。
+  // MIUI 雾面带真值档：σ20 + 底色隐身 + 无矩阵 + 三层混色。
+  // 预设只表达浓度/雾形配方，雾面高度显式归 0（不随发布默认 +56
+  // 延伸——预设语义不含高度）。
   (
-    '更雾',
+    '更浓雾',
     FogTuningState(
-      blurSigma: 3.0,
-      saturation: 1.1,
-      whiteNormal: 0.22,
-      whiteSoftLight: 0.48,
-      graySoftLight: 0.2,
-      feather: 28,
-      verticalGrad: 0.7,
+      blurSigma: 20.0,
+      feather: 96,
+      verticalGrad: 1.0,
       fogHeight: 0,
     ),
   ),
   (
-    '薄纱',
+    '更透',
     FogTuningState(
-      blurSigma: 1.2,
-      saturation: 0.9,
-      whiteNormal: 0.1,
-      whiteSoftLight: 0.22,
-      graySoftLight: 0.09,
+      blurSigma: 12.0,
       feather: 32,
-      verticalGrad: 0.5,
+      verticalGrad: 0.7,
       fogHeight: 0,
     ),
   ),
@@ -277,16 +203,6 @@ class _PreviewCard extends StatefulWidget {
 }
 
 class _PreviewCardState extends State<_PreviewCard> {
-  /// 预览区实时采样色：FogTintSampler 节流采样海报内容，驱动预览
-  /// TopFog 染色——所见即所得（与首页同一采样通道）。
-  final ValueNotifier<Color?> _tint = ValueNotifier<Color?>(null);
-
-  @override
-  void dispose() {
-    _tint.dispose();
-    super.dispose();
-  }
-
   static const List<(Color, Color, String)> _posters = <(Color, Color, String)>[
     (Color(0xFFB3261E), Color(0xFF7A1610), '出手 · 共74集'),
     (Color(0xFF1565C0), Color(0xFF0D3B7A), '皎皎月色 · 共70集'),
@@ -305,43 +221,35 @@ class _PreviewCardState extends State<_PreviewCard> {
         child: Stack(
           children: [
             Positioned.fill(
-              // 采样只包内容层（TopFog 在 boundary 外，无反馈循环）；
-              // 行带取海报区（顶部雾带+空白背景避开）。
-              child: FogTintSampler(
-                tint: _tint,
-                sampleBandStart: 0.35,
-                sampleBandEnd: 0.8,
-                child: ColoredBox(
-                  color:
-                      Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: ListView(
-                    padding: EdgeInsets.only(top: fogBand),
-                    children: [
-                      for (final (a, b, title) in _posters)
-                        Container(
-                          height: 200,
-                          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [a, b],
-                            ),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            title,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                            ),
+              child: ColoredBox(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: ListView(
+                  padding: EdgeInsets.only(top: fogBand),
+                  children: [
+                    for (final (a, b, title) in _posters)
+                      Container(
+                        height: 200,
+                        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [a, b],
                           ),
                         ),
-                      const SizedBox(height: 24),
-                    ],
-                  ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 24),
+                  ],
                 ),
               ),
             ),
@@ -351,10 +259,7 @@ class _PreviewCardState extends State<_PreviewCard> {
               right: 0,
               child: SizedBox(
                 height: fogBand,
-                child: ValueListenableBuilder<Color?>(
-                  valueListenable: _tint,
-                  builder: (_, tint, _) => TopFog(tint: tint),
-                ),
+                child: const LegacyTopFog(),
               ),
             ),
           ],

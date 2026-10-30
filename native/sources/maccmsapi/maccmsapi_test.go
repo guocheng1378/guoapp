@@ -120,6 +120,35 @@ func TestCatalogSortedMatchesCatalogPage(t *testing.T) {
 	}
 }
 
+func TestVodActorsSplitsSeparators(t *testing.T) {
+	got := vodActors(" 陆之屿 ，白桃、阿蜜/小鹿")
+	if len(got) != 4 || got[0] != "陆之屿" || got[3] != "小鹿" {
+		t.Fatalf("主演应按分隔符拆分并去空白: %v", got)
+	}
+	if got := vodActors("  "); got != nil {
+		t.Fatalf("空白应返回 nil: %v", got)
+	}
+	if got := vodActors("甲,,乙"); len(got) != 2 {
+		t.Fatalf("空段应丢弃: %v", got)
+	}
+}
+
+// 「同主演推荐」依赖 vod_actor 进入 Drama.Actors（相关推荐候选链的搜索词）。
+func TestCatalogPageMapsActors(t *testing.T) {
+	const fixture = `{"code":1,"msg":"ok","page":1,"pagecount":1,"total":1,"list":[
+	  {"vod_id":21,"vod_name":"剧丁","type_id":46,"type_name":"短剧","vod_actor":"陆之屿 ，白桃、阿蜜"}
+	]}`
+	host := &fakeHost{body: fixture}
+	source := newTestSource()
+	items, _, err := source.CatalogPage(context.Background(), host, 1, "", "")
+	if err != nil {
+		t.Fatalf("CatalogPage: %v", err)
+	}
+	if got := items[0].Actors; len(got) != 3 || got[0] != "陆之屿" || got[2] != "阿蜜" {
+		t.Fatalf("vod_actor 应映射为 Drama.Actors: %v", got)
+	}
+}
+
 // 短剧/长剧判定依赖单集时长穿过 CatalogPage（>600 秒=长剧，全源统一规则）。
 func TestCatalogPageMapsDuration(t *testing.T) {
 	host := &fakeHost{body: catalogFixture}

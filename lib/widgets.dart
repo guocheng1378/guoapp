@@ -150,7 +150,7 @@ class DramaCover extends StatelessWidget {
               left: 9,
               bottom: 9,
               child: Text(
-                '共 ${drama.episodes} 集',
+                drama.episodeLabel,
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),

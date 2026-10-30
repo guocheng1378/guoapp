@@ -13,7 +13,6 @@ import 'activation/activation_flow.dart';
 import 'activation/license.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
-import 'fog_tuning_screen.dart';
 import 'app_theme.dart';
 import 'app_layout.dart';
 import 'background_downloads.dart';
@@ -185,7 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
         if (file == null || !mounted) return;
         final size = await file.length();
-        if (size == null || size > 8 * 1024 * 1024) {
+        if (size == null || size > 64 * 1024 * 1024) {
           throw const FormatException('备份文件过大或无法读取');
         }
         final content = utf8.decode(await file.readAsBytes());
@@ -317,21 +316,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       icon: AppIcon(AppIcons.blur),
       title: '玻璃效果',
       subtitle: GlassPreferences.enabled.value
-          ? '已开启：瓷面浮层质感'
-          : '已关闭：不透明浮层（低端设备更流畅）',
+          ? '已开启：瓷面浮层质感（顶栏渐变不受影响）'
+          : '已关闭：不透明浮层（低端设备更流畅，顶栏渐变仍保留）',
       onPressed: () {
         unawaited(GlassPreferences.setEnabled(!GlassPreferences.enabled.value));
         setState(() {});
       },
-    ),
-    (
-      id: 'fog-tuning',
-      icon: AppIcon(AppIcons.tune),
-      title: '雾面调参',
-      subtitle: '实时调节雾面模糊、浓度与雾形',
-      onPressed: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const FogTuningScreen()),
-      ),
     ),
     (
       id: 'profiles',
@@ -524,20 +514,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // 副标题反映当前开关状态（与电视端 _televisionEntries 同口径）：
                   // 静态文案曾让用户无法从设置页判断雾面为何消失。
                   subtitle: Text(
-                    glass ? '已开启：瓷面浮层质感' : '已关闭：不透明浮层（低端设备更流畅）',
+                    glass
+                        ? '已开启：瓷面浮层质感（顶栏渐变不受此开关影响）'
+                        : '已关闭：不透明浮层（低端设备更流畅，顶栏渐变仍保留）',
                   ),
                   onChanged: (value) =>
                       saveUserChange(context, () => GlassPreferences.setEnabled(value)),
-                ),
-              ),
-              ListTile(
-                key: const ValueKey('fog-tuning-setting'),
-                leading: AppIcon(AppIcons.tune),
-                title: const Text('雾面调参'),
-                subtitle: const Text('实时调节雾面模糊、浓度与雾形'),
-                trailing: AppIcon(AppIcons.chevronRight),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const FogTuningScreen()),
                 ),
               ),
               ListTile(
@@ -598,6 +580,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('dongpiandi-official-only'),
+                  value: widget.store.dongpiandiOfficialOnly,
+                  title: const Text('真果·鉴只播官方线路'),
+                  subtitle: Text(
+                    widget.store.dongpiandiOfficialOnly
+                        ? '已开启：第三方线路不参与，没有官方线路的集会提示不可播'
+                        : '已关闭：官方线路优先，不可用时自动切第三方线路',
+                  ),
+                  onChanged: _busy
+                      ? null
+                      : (value) => saveUserChange(context, () async {
+                          await widget.store.setDongpiandiOfficialOnly(value);
+                          await widget.repository.setDongpiandiOfficialOnly(
+                            value,
+                          );
+                          if (mounted) setState(() {});
+                        }),
                 ),
                 SwitchListTile(
                   value: widget.store.autoExport,

@@ -11,23 +11,28 @@ import 'package:window_manager/window_manager.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'battery_level.dart';
 import 'catalog_browser.dart' show dramaIsLongDrama;
 import 'core_bridge.dart';
 import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
+import 'detail_screen.dart';
 import 'download_picker.dart';
 import 'downloads_screen.dart';
 import 'follow_state.dart';
-import 'glass_menu.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'playback_loader.dart';
 import 'playback_preloader.dart';
 import 'playback_recovery.dart';
 import 'playback_preferences.dart';
+import 'related_catalog_screen.dart';
+import 'related_dramas.dart';
 import 'player_controls.dart';
 import 'player_interactions.dart';
 import 'player_menu.dart';
+import 'player_side_panel.dart';
+import 'player_skip_marks.dart';
 import 'screen_brightness.dart';
 import 'television_controls.dart';
 import 'widgets.dart';
@@ -35,6 +40,7 @@ import 'sources_screen.dart';
 import 'lan_controller.dart';
 import 'lan_screen.dart';
 import 'video_enhancement.dart';
+import 'video_enhancement_settings.dart';
 import 'video_output_size.dart';
 import 'app_icons.dart';
 
@@ -53,6 +59,19 @@ enum _PlayerFitMode {
   final String label;
   final BoxFit fit;
   final double? aspect;
+}
+
+/// 播放视图状态：替代旧版 `_showFullscreen` + `_forceLandscape` 两个布尔互相
+/// 纠缠的写法（那是「返回/全屏/旋转」三种语义混乱的根源）。
+enum PlaybackViewMode {
+  /// 视频 + 下方详情面板。
+  inline,
+
+  /// 竖屏沉浸（短剧默认形态，长剧也可手动进入）。
+  portraitFullscreen,
+
+  /// 横屏全屏。
+  landscapeFullscreen,
 }
 
 class PlayerScreen extends StatefulWidget {
@@ -115,6 +134,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _handoffOwned = true;
   double? _lanFirstPosition;
   String? _savedProgressKey;
+  // 本次播放是否已用 notify 通知过「继续观看」（周期保存静默，只在退出/切集时通知一次）。
+  bool _watchNotified = false;
+  // 位置流重活节流：上次执行时的播放位置（毫秒），-1 表示需要立刻执行一次。
+  int _lastAppliedPositionMs = -1;
+  // 打开后的首个位置事件只做节流基线：resume 初始位置（上次停留处）落在
+  // 片头/片尾区间内不应自动拽走，跳片只对后续的播放推进生效。
+  bool _positionPrimed = false;
+  static const int _positionApplyStepMs = 150;
   final _health = PlaybackHealth();
   Timer? _saveTimer;
   Timer? _healthTimer;
@@ -135,9 +162,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _fullscreen = false;
   bool _automaticFullscreenSuppressed = false;
   // 短剧竖屏播放：进入即竖屏全屏（_portraitFullscreenApplied 守卫只执行一次），
-  // _forceLandscape=用户手动旋转到横屏，再点转回竖屏。
+  // _forceLandscape=用户手动旋转到横屏，_forcePortrait=长剧手动进竖屏全屏。
   bool _forceLandscape = false;
+  bool _forcePortrait = false;
   bool _portraitFullscreenApplied = false;
+  // 「混入横屏视频自动退全屏」只判首集一次：切集时不再把形态踢回半屏。
+  bool _portraitFallbackChecked = false;
   bool _panelOpen = false;
   int _mobileTab = 0;
   bool _autoAdvance = true;
@@ -166,9 +196,25 @@ class _PlayerScreenState extends State<PlayerScreen>
   double _aspectRatio = 9 / 16;
   _PlayerFitMode _fitMode = _PlayerFitMode.contain;
   double _resumePosition = 0;
+
+  /// 片头/片尾标记（按剧保存在 store 里，播放中据此自动跳过）。
+  EpisodeSkipMarks _skipMarks = const EpisodeSkipMarks();
+
+  /// 当前这一集是否已跳过片头/片尾：保证一段播放里每段只生效一次。
+  bool _introSkipped = false;
+  bool _outroSkipped = false;
+
+  /// 标记的存储身份：在线剧按剧 id，本地媒体按 mediaId（两套命名空间）。
+  String get _skipMarksId => widget.mediaId ?? widget.detail.drama.id;
+
   bool _rotating = false;
+  /// 横屏锁屏：锁定期间把屏幕朝向钉在当前方向（旋转设备画面不跟随）。
+  bool _screenLocked = false;
+  /// 竖屏全屏的选集面板是否已展开（底部滑入、推挤视频那种）。
+  bool _episodeSheetOpen = false;
   bool _television = false;
   AppOrientationController? _orientationController;
+  late final BatteryLevel _battery;
   bool get _pictureInPictureVisible =>
       _pictureInPictureActive || _pictureInPictureRequested;
   bool get _canUsePictureInPicture =>
@@ -180,18 +226,22 @@ class _PlayerScreenState extends State<PlayerScreen>
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
-  /// 短剧竖屏播放形态：手机端且按单集时长/短剧信号判定为短剧。
+  /// 短剧竖屏播放形态：手机端且按**整剧**判定为短剧。
   /// 进入播放器直接竖屏全屏，视频保持原始比例；长剧走原行为。
-  /// 红果详情接口下发每集 vertical 官方标记时优先按标记判定，
-  /// 缺失（非红果源/旧缓存）回退单集时长启发式。
+  ///
+  /// 判定信号（**不看时长**——时长会漂移：缓存里有无、详情回填自愈，
+  /// 同一剧前后判定不一致会让形态在切集时跳变）：
+  /// 1) 红果官方竖屏标记按**整剧**聚合：任一集为竖屏即整剧按短剧处理。
+  ///    原先取「当前集」的标记，切集会翻转形态（底栏旋转键随之失效）。
+  /// 2) 回退全局信号链（显式定性 / 分类标签 / 站源属性，与首页「长剧·短剧」
+  ///    分类条同口径，见 catalog_browser.dramaIsLongDrama）。
   bool get _portraitDrama {
     if (!_mobile) return false;
-    final episodes = widget.detail.episodes;
-    final current = _index >= 0 && _index < episodes.length
-        ? episodes[_index]
-        : null;
-    final vertical = current?.vertical;
-    if (vertical != null) return vertical;
+    final verticals = widget.detail.episodes
+        .map((episode) => episode.vertical)
+        .whereType<bool>()
+        .toList();
+    if (verticals.isNotEmpty) return verticals.any((vertical) => vertical);
     return !dramaIsLongDrama(
       widget.detail.drama,
       SourceSite.byId(widget.detail.drama.source),
@@ -209,11 +259,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     volume: _interactions.volume,
     enhancement: _enhancement.preferences,
   );
-  String get _qualityLabel => _plan?.local == true
-      ? '本地原画'
-      : _requestedQuality == 0
-      ? '自动'
-      : '${_requestedQuality}P';
+  /// 工具行清晰度标签：显示「本集实际播放」的档位（用户定调：界面不再出现
+  /// 「自动」这个选项）。站点根本没有画质档位（qualities 全空）时返回空串，
+  /// 工具行就不渲染这颗按钮——否则挂个「高清」纯属误导。
+  String get _qualityLabel {
+    if (_plan?.local == true) return '本地原画';
+    // 实际播放档位优先：偏好里存的 1080P 换到只有 720P 的源时，后端会退到
+    // 720P 播放（nativePlaybackChoices 找不到该档就不过滤），此时按偏好显示
+    // 「1080P」就是在骗人。
+    final actual = _plan?.quality ?? 0;
+    if (actual > 0) return '${actual}P';
+    // plan 还没回来（解析中/换源）时才用持久化偏好兜底，避免按钮闪一下消失。
+    if (_requestedQuality > 0) return '${_requestedQuality}P';
+    final selectable = (_plan?.qualities ?? const <int>[]).where((q) => q > 0);
+    if (selectable.isEmpty) return '';
+    return '${selectable.reduce((a, b) => a > b ? a : b)}P';
+  }
   String get _session => _plan?.session ?? '';
   double get _currentPosition =>
       _openedIndex == _index && _player.state.position.inMilliseconds > 0
@@ -232,6 +293,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoAdvance = preferences.autoAdvance;
     _danmakuEnabled = preferences.danmaku;
     _preloadEnabled = preferences.preload;
+    _skipMarks = widget.store.skipMarksOf(_skipMarksId);
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
     _danmaku = DanmakuController(widget.repository)
@@ -297,6 +359,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _playerFocus.addListener(() {
       if (!_playerFocus.hasPrimaryFocus && !_closed) _interactions.cancel();
     });
+    // 状态区电池：10 秒轮询，读不到数据就整颗不渲染（不打扰播放）。
+    _battery = BatteryLevel()..start();
     _configurePictureInPicture();
     _subscriptions.add(
       _player.stream.error.listen((error) {
@@ -344,6 +408,27 @@ class _PlayerScreenState extends State<PlayerScreen>
         if (!_closed && _openedIndex == _index && position > Duration.zero) {
           _resumePosition = position.inMilliseconds / 1000;
         }
+        // 位置事件可能高达 10+/s，重活按位置增量节流（约 150ms 一次）；
+        // 位置回跳/大幅跳转立即执行，避免跳片与握手确认被吞。
+        final ms = position.inMilliseconds;
+        final delta = ms - _lastAppliedPositionMs;
+        if (!_positionPrimed) {
+          // 打开后的首个事件（resume 初始位置）只做基线：不自动跳片，
+          // 弹幕/预加载/握手照常收敛。
+          _positionPrimed = true;
+          _lastAppliedPositionMs = ms;
+          _syncDanmaku();
+          _syncPreload();
+          _acknowledgeHandoff();
+          return;
+        }
+        if (_lastAppliedPositionMs >= 0 &&
+            delta >= 0 &&
+            delta < _positionApplyStepMs) {
+          return;
+        }
+        _lastAppliedPositionMs = ms;
+        _applySkipMarks(position);
         _syncDanmaku();
         _syncPreload();
         _acknowledgeHandoff();
@@ -359,6 +444,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     ]) {
       _subscriptions.add(
         stream.listen((_) {
+          // 状态切换时补一次轻量同步：位置节流窗口内的弹幕/预加载/握手
+          // 在下一次状态事件里立刻收敛。跳片只由位置流驱动——缓冲/暂停
+          // 等状态事件不应把暂停在片头区间内的用户拽走。
           _syncDanmaku();
           _syncPreload();
           _acknowledgeHandoff();
@@ -372,14 +460,21 @@ class _PlayerScreenState extends State<PlayerScreen>
         var fallback = false;
         setState(() {
           _aspectRatio = size.width / size.height;
-          // 短剧竖屏全屏里混入横屏视频：contain 会上下大黑边，
-          // 自动退回常规形态（横屏设备仍可自动全屏）；用户手动旋转过则尊重。
-          if (_portraitFullscreenApplied &&
-              _fullscreen &&
-              !_forceLandscape &&
-              _aspectRatio >= 1) {
-            _fullscreen = false;
-            fallback = true;
+          // 短剧竖屏全屏里混入横屏视频：contain 会上下大黑边，**首集**自动
+          // 退回常规形态（横屏设备仍可自动全屏）；用户手动旋转过则尊重。
+          //
+          // 只判首集一次：原先每集都判，手势切集遇到横屏素材集就把整个
+          // 界面踢回半屏（形态突变）。切集后保持竖屏全屏，横屏素材 contain
+          // 居中显示、上下黑边。
+          if (!_portraitFallbackChecked) {
+            _portraitFallbackChecked = true;
+            if (_portraitFullscreenApplied &&
+                _fullscreen &&
+                !_forceLandscape &&
+                _aspectRatio >= 1) {
+              _fullscreen = false;
+              fallback = true;
+            }
           }
         });
         if (fallback) {
@@ -922,6 +1017,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycleState = state;
     _applyLifecycleVisibility();
+    // 系统会冻结后台定时器，回前台补读一次电量（否则状态区电量停在旧值）。
+    if (state == AppLifecycleState.resumed) _battery.resumed();
   }
 
   void _queueRecovery() {
@@ -1086,7 +1183,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final store = widget.store;
     final progressKey =
         '${widget.mediaId ?? widget.detail.drama.id}:$_openedIndex:$position:$duration';
-    if (_savedProgressKey == progressKey && _saveWarning == null) {
+    // flush 时必须至少通知一次（周期保存是静默的），哪怕进度键没变。
+    final needsNotify = flush && !_watchNotified && widget.mediaId == null;
+    if (_savedProgressKey == progressKey && _saveWarning == null && !needsNotify) {
       if (flush && widget.mediaId == null) LanController.current?.flush();
       return;
     }
@@ -1101,7 +1200,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       await Future<void>.value();
       if (store.profileEpoch != _profileEpoch) return;
       if (widget.mediaId == null) {
-        await store.saveWatch(entry);
+        await store.saveWatch(entry, notify: needsNotify);
+        if (needsNotify) _watchNotified = true;
         if (flush) LanController.current?.flush();
       } else {
         await store.saveMediaWatch(widget.mediaId!, entry);
@@ -1169,6 +1269,14 @@ class _PlayerScreenState extends State<PlayerScreen>
       _playIntent = playWhenReady;
     }
     _resumePosition = position;
+    // 换一集重来：片头/片尾各允许生效一次。
+    _introSkipped = false;
+    _outroSkipped = false;
+    // 重开后首个位置事件（open 的 resume 初始位置）只做节流基线：
+    // 上次停留处落在片头/片尾区间内不应被自动拽走，跳片只对后续
+    // 播放推进生效。重置必须发生在 open 之前——media.start 事件在
+    // open 内同步入队，早于 open 返回后的任何代码。
+    _positionPrimed = false;
     _showControlsOnPlaybackReady = showControlsOnReady;
     setState(() {
       _index = index;
@@ -1209,17 +1317,38 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       // 选线：保留当前播放会话，按索引切到指定线路（真果·鉴多线路表）。
       final active = _plan;
-      prepared = route != null && active != null
-          ? await _loader.selectRoute(active, route)
-          : warmed != null
-          ? await _loader.use(warmed)
-          : await _loader.load(
-              widget.detail.drama,
-              widget.detail.episodes[index],
-              quality: _requestedQuality,
-              localOnly: widget.localOnly,
-              online: _forceOnline,
-            );
+      if (route != null && active != null) {
+        prepared = await _loader.selectRoute(active, route);
+      } else if (recoveryAction == PlaybackRecoveryAction.alternative &&
+          active != null) {
+        // 换备用线路走会话内切换（Go nativeNextPlayback）：零网络、零解析，
+        // 还能保住原线路表与已选画质档。会话已失效（如长时间挂后台被回收）
+        // 才退回完整重解析，等价旧行为。
+        try {
+          prepared = await _loader.fallback(active);
+        } catch (_) {
+          prepared = null;
+        }
+        if (prepared == null && !_closed && ticket == _generation) {
+          prepared = await _loader.load(
+            widget.detail.drama,
+            widget.detail.episodes[index],
+            quality: _requestedQuality,
+            localOnly: widget.localOnly,
+            online: _forceOnline,
+          );
+        }
+      } else if (warmed != null) {
+        prepared = await _loader.use(warmed);
+      } else {
+        prepared = await _loader.load(
+          widget.detail.drama,
+          widget.detail.episodes[index],
+          quality: _requestedQuality,
+          localOnly: widget.localOnly,
+          online: _forceOnline,
+        );
+      }
       if (prepared == null) {
         return;
       }
@@ -1288,6 +1417,8 @@ class _PlayerScreenState extends State<PlayerScreen>
           return;
         }
         _openedIndex = index;
+        _watchNotified = false;
+        _lastAppliedPositionMs = -1;
         _enhancement.mediaReady();
         _attachLanPlayback();
         _health.reset();
@@ -1358,14 +1489,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _switchRoute() async {
     final plan = _plan;
-    if (plan == null || !plan.hasAlternative) return;
-    final position = _currentPosition;
-    await _play(
-      _index,
-      position: position,
-      recoveryAction: PlaybackRecoveryAction.alternative,
-      playWhenReady: true,
-    );
+    if (plan == null || plan.routeCount < 2) return;
+    // 循环切到下一条：原先用 hasAlternative 早退（它的语义是「当前不是最后
+    // 一条」），切到最后一条后电视端就再也换不了线；且传的是
+    // alternative（失败恢复语义）而非用户主动切线，改走 _selectRoute 的
+    // route 语义（按索引切，两阶段定格不断画面）。
+    final next = (plan.routeIndex + 1) % plan.routeCount;
+    await _selectRoute(next);
   }
 
   /// 按索引切换到指定线路（保留当前会话与进度，两阶段定格不断画面）。
@@ -1397,62 +1527,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     final official = plan.officialRoutes;
     final thirdParty = plan.thirdPartyRoutes;
-    // 选中即切线的值；点「第三方源」只是展开二级列表，用哨兵值兜住。
-    const thirdPartyEntry = -1;
-    var selected = official.isEmpty
-        // 没有官方线（除真果·鉴外的站源）：维持原样平铺全部线路。
-        ? await showGlassMenu<int>(
-            context: context,
-            entries: [
-              for (var index = 0; index < plan.routeCount; index++)
-                GlassMenuEntry<int>(
-                  index,
-                  labelOf(index),
-                  checked: index == plan.routeIndex,
-                ),
-            ],
-          )
-        : await showGlassMenu<int>(
-            context: context,
-            entries: [
-              GlassMenuEntry<int>(-2, '官方源 · ${official.length} 条', header: true),
-              for (final index in official)
-                GlassMenuEntry<int>(
-                  index,
-                  labelOf(index),
-                  checked: index == plan.routeIndex,
-                ),
-              if (thirdParty.isNotEmpty)
-                GlassMenuEntry<int>(
-                  thirdPartyEntry,
-                  '第三方源 · ${thirdParty.length} 条',
-                  checked: !plan.onOfficialRoute,
-                ),
-            ],
-          );
-    if (selected == null || !mounted) return;
-    if (selected == thirdPartyEntry) {
-      // 一级菜单收起后再开二级：两层玻璃浮层叠在同一位置会很脏。
-      await Future<void>.delayed(const Duration(milliseconds: 180));
-      if (!mounted) return;
-      selected = await showGlassMenu<int>(
-        context: context,
-        entries: [
-          GlassMenuEntry<int>(-2, '第三方源 · ${thirdParty.length} 条', header: true),
-          for (final index in thirdParty)
-            GlassMenuEntry<int>(
-              index,
-              labelOf(index),
-              checked: index == plan.routeIndex,
-            ),
-        ],
-      );
-      if (selected == null || !mounted) return;
-    }
-    // 关闭动画约 170ms + 调度延迟：320ms 后再动作，避免菜单未关就切线。
-    await Future<void>.delayed(const Duration(milliseconds: 320));
+    final picked = await showPlayerSidePanel<int>(
+      context: context,
+      title: official.isEmpty
+          ? '播放源 · ${plan.routeCount} 条'
+          : '播放源 · ${official.length} 条官方',
+      builder: (panelContext) => SideRouteList(
+        labels: [for (var index = 0; index < plan.routeCount; index++) labelOf(index)],
+        current: plan.routeIndex,
+        official: official,
+        thirdParty: thirdParty,
+        onSelected: (index) => Navigator.pop(panelContext, index),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    // 关面板动画约 180ms：等它收干净再切线，否则面板还压在新一帧上。
+    await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
-    await _selectRoute(selected);
+    await _selectRoute(picked);
   }
 
   String? get _routeLabel {
@@ -1479,6 +1571,21 @@ class _PlayerScreenState extends State<PlayerScreen>
               _aspectRatio >= 1 &&
               MediaQuery.orientationOf(context) == Orientation.landscape));
 
+  /// 当前视图状态：全屏时再按实际朝向分竖屏/横屏两种版式。
+  PlaybackViewMode get _viewMode {
+    if (!_showFullscreen) return PlaybackViewMode.inline;
+    final landscape =
+        _forceLandscape ||
+        (!_forcePortrait &&
+            MediaQuery.orientationOf(context) == Orientation.landscape);
+    return landscape
+        ? PlaybackViewMode.landscapeFullscreen
+        : PlaybackViewMode.portraitFullscreen;
+  }
+
+  bool get _landscapeChrome =>
+      _viewMode == PlaybackViewMode.landscapeFullscreen;
+
   /// 按当前全屏态与旋转态同步锁向（Windows 全屏窗口 / 手机锁竖横屏）。
   /// Windows 分支排除 _mobile：测试宿主可能 override android，
   /// 此时走 SystemChrome 路径而不是 windowManager 插件。
@@ -1491,6 +1598,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             fullscreen: fullscreen,
             aspectRatio: _aspectRatio,
             forceLandscape: _forceLandscape,
+            forcePortrait: _forcePortrait,
           ) ??
           SystemChrome.setPreferredOrientations(
             AppOrientationController.orientations(
@@ -1498,31 +1606,174 @@ class _PlayerScreenState extends State<PlayerScreen>
               fullscreen: fullscreen,
               aspectRatio: _aspectRatio,
               forceLandscape: _forceLandscape,
+              forcePortrait: _forcePortrait,
             ),
           ));
     }
   }
 
-  /// 短剧竖屏全屏的旋转按钮：竖屏 ⇄ 横屏手动切换。
-  Future<void> _togglePortraitRotate() async {
-    if (!_portraitDrama || _rotating) {
-      return;
-    }
+  /// 统一切换视图状态：竖屏全屏 / 横屏全屏 / 退回内嵌。
+  /// 失败时整体回滚，避免「方向没切过去但 UI 已经当全屏了」。
+  Future<void> _setViewMode(PlaybackViewMode mode) async {
+    if (_rotating || !_fullscreenSupported) return;
+    if (mode == _viewMode) return;
     _interactions.cancel();
     _rotating = true;
-    final previous = _forceLandscape;
-    setState(() => _forceLandscape = !previous);
+    final prevFullscreen = _fullscreen;
+    final prevLandscape = _forceLandscape;
+    final prevPortrait = _forcePortrait;
+    final prevSuppressed = _automaticFullscreenSuppressed;
+    final fullscreen = mode != PlaybackViewMode.inline;
+    setState(() {
+      _fullscreen = fullscreen;
+      _forceLandscape = mode == PlaybackViewMode.landscapeFullscreen;
+      _forcePortrait = mode == PlaybackViewMode.portraitFullscreen;
+      _automaticFullscreenSuppressed = !fullscreen;
+      // 换形态时收起底部选集面板（面板属于竖屏沉浸态）。
+      _episodeSheetOpen = false;
+    });
     try {
-      await _syncPlaybackOrientation(fullscreen: true);
+      await _syncPlaybackOrientation(fullscreen: fullscreen);
     } catch (_) {
       if (mounted && !_closed) {
-        setState(() => _forceLandscape = previous);
-        _notice('无法旋转，请重试');
+        setState(() {
+          _fullscreen = prevFullscreen;
+          _forceLandscape = prevLandscape;
+          _forcePortrait = prevPortrait;
+          _automaticFullscreenSuppressed = prevSuppressed;
+        });
+        _notice('无法切换全屏，请重试');
       }
     } finally {
       _rotating = false;
       if (mounted && !_closed) _scheduleSystemUi();
     }
+  }
+
+  /// 竖屏全屏时选集是否走「底部滑入、推挤视频」：手机竖屏沉浸态才用；
+  /// 横屏宽度够，继续用右侧浮层覆盖。
+  bool get _episodeSheetEligible =>
+      _mobile &&
+      !_television &&
+      _viewMode == PlaybackViewMode.portraitFullscreen;
+
+  void _openEpisodeSheet() {
+    if (_episodeSheetOpen) return;
+    setState(() => _episodeSheetOpen = true);
+  }
+
+  void _closeEpisodeSheet() {
+    if (!_episodeSheetOpen) return;
+    setState(() => _episodeSheetOpen = false);
+  }
+
+  /// 竖屏全屏的选集：底部滑入并把视频顶成顶部小窗（红果同款），
+  /// 不是浮层盖在画面上；收起后视频复原铺满。
+  Widget _portraitEpisodePushLayout(BuildContext context) {
+    return _PortraitEpisodePushLayout(
+      open: _episodeSheetOpen,
+      video: _videoPane(context, hideControls: _episodeSheetOpen),
+      panel: _episodeSheetPanel(context),
+    );
+  }
+
+  /// 选集面板内容：标题栏（可收起）+ 选集格子。
+  Widget _episodeSheetPanel(BuildContext context) {
+    // 选集一律浅色白卡（与详情页、右侧滑出面板一致）：暗底暗边的格子在
+    // 深色面板上几乎看不清，浅底深字最省眼。
+    final onSurface = AppTheme.light.colorScheme.onSurface;
+    return Theme(
+      data: AppTheme.light,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppTheme.light.scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: .28),
+              blurRadius: 18,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '选集',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: onSurface,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      key: const ValueKey('player-episode-sheet-close'),
+                      tooltip: '收起选集',
+                      onPressed: _closeEpisodeSheet,
+                      icon: AppIcon(AppIcons.expandLess, color: onSurface),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: PlayerEpisodeGrid(
+                  episodes: widget.detail.episodes,
+                  currentIndex: _index,
+                  keyPrefix: 'sheet-episode',
+                  dense: true,
+                  // 标题交给上面的标题栏，避免面板里出现两个「选集」。
+                  title: '',
+                  onSelected: (index) {
+                    _closeEpisodeSheet();
+                    if (index != _index) unawaited(_play(index));
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 横屏锁屏：锁定期间把屏幕朝向钉在当前方向，旋转设备画面不再跟随；
+  /// 解锁时恢复跟随。锁钮本身在 PlayerControls 内部，点它时回调这里。
+  Future<void> _setScreenLocked(bool locked) async {
+    if (_screenLocked == locked) return;
+    _screenLocked = locked;
+    final controller = _orientationController;
+    if (controller == null) return;
+    if (!locked) {
+      await controller.lockOrientations(null);
+      return;
+    }
+    await controller.lockOrientations(_lockedOrientationsForNow());
+  }
+
+  /// 锁屏期间允许的方向：只锁「轴」——横屏锁横、竖屏锁竖。
+  /// 不区分左右翻面（翻面无妨），但横↔竖的轴向切换会被拦住，
+  /// 这才是锁屏要拦的误转。
+  List<DeviceOrientation> _lockedOrientationsForNow() {
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    return landscape
+        ? const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        : const [
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown,
+          ];
   }
 
   Future<void> _rotate() async {
@@ -1661,57 +1912,220 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _openPanel(PlayerMenuSection section) async {
     if (_panelOpen || _closed) return;
+    // 竖屏全屏的选集不走右侧浮层：改成底部滑入、把视频顶成顶部小窗
+    // （红果同款），不再盖住画面。
+    if (section == PlayerMenuSection.episodes && _episodeSheetEligible) {
+      _openEpisodeSheet();
+      return;
+    }
     _cancelAdvanceCountdown();
     _interactions.cancel();
     setState(() => _panelOpen = true);
-    final menuTheme = _showFullscreen ? AppTheme.dark : Theme.of(context);
     try {
-      final index = await showDialog<int>(
-        context: context,
-        builder: (menuContext) => AnimatedBuilder(
-          animation: Listenable.merge([
-            _menuRevision,
-            widget.store,
-            _danmaku,
-            _preloader,
-          ]),
-          builder: (_, _) => Theme(
-            data: menuTheme,
-            child: PlayerMenu(
-              section: section,
-              episodes: widget.detail.episodes,
-              currentIndex: _index,
-              preferences: _preferences,
-              qualities: _plan?.qualities ?? [],
-              actualQuality: _plan?.quality ?? 0,
-              local: _plan?.local == true,
-              favorite: widget.store.isFavorite(widget.detail.drama.id),
-              mobile: _mobile,
-              onEpisode: (index) => Navigator.pop(menuContext, index),
-              onPreferences: _setPreferences,
-              showDanmaku: _plan?.danmakuId.isNotEmpty == true,
-              danmakuStatus: _danmaku.status,
-              onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
-              preloadStatus: _preloader.status,
-              enhancement: _enhancementForUi,
-              onCompareEnhancement: () {
-                unawaited(_enhancement.toggleCompare());
-                Navigator.pop(menuContext);
-              },
-              onFavorite: () =>
-                  widget.store.toggleFavorite(widget.detail.drama),
-            ),
-          ),
-        ),
-      );
-      if (mounted && !_closed && index != null && index != _index) {
-        await _play(index);
+      // 选集/倍速/清晰度走右侧滑出面板（清晰度面板内一并收增强画质设置）；
+      // 电视端所有面板仍走原来的居中弹窗（遥控焦点导航在该版式上可靠）。
+      final sidePanel =
+          !_television &&
+          (section == PlayerMenuSection.episodes ||
+              section == PlayerMenuSection.speed ||
+              section == PlayerMenuSection.quality);
+      if (sidePanel) {
+        await _openSidePanel(section);
+      } else {
+        await _openWidePanel(section);
       }
     } finally {
       if (mounted && !_closed) {
         setState(() => _panelOpen = false);
         _playerFocus.requestFocus();
       }
+    }
+  }
+
+  /// 手机/桌面：二级功能一律从右侧滑出，不再开居中玻璃弹窗。
+  Future<void> _openSidePanel(PlayerMenuSection section) async {
+    switch (section) {
+      case PlayerMenuSection.episodes:
+        final picked = await showPlayerSidePanel<int>(
+          context: context,
+          title: '选集 · 共 ${widget.detail.episodes.length} 集',
+          builder: (panelContext) => PlayerEpisodeGrid(
+            episodes: widget.detail.episodes,
+            currentIndex: _index,
+            keyPrefix: 'menu-episode',
+            // 面板只有 320dp 宽，标准 3 列格子又宽又高；这里换小格子密度档。
+            dense: true,
+            onSelected: (index) => Navigator.pop(panelContext, index),
+          ),
+        );
+        if (picked != null && mounted && !_closed && picked != _index) {
+          await _play(picked);
+        }
+      case PlayerMenuSection.speed:
+        final picked = await showPlayerSidePanel<double>(
+          context: context,
+          title: '播放倍速',
+          builder: (panelContext) => SideChoiceGrid(
+            keyPrefix: 'side-speed',
+            selected: _speed,
+            choices: [
+              for (final speed in playbackSpeeds)
+                SideChoice(speed, '${speed}x'),
+            ],
+            onSelect: (choice) =>
+                Navigator.pop(panelContext, choice.key as double),
+          ),
+        );
+        if (picked != null && mounted && !_closed && picked != _speed) {
+          await _setPreferences(_preferences.copyWith(speed: picked));
+        }
+      case PlayerMenuSection.quality:
+        final qualities = (_plan?.qualities ?? const <int>[])
+            .where((quality) => quality > 0)
+            .toList();
+        if (qualities.isEmpty) {
+          _notice('本集没有可切换的画质');
+          return;
+        }
+        final picked = await showPlayerSidePanel<int>(
+          context: context,
+          title: '清晰度',
+          builder: (panelContext) {
+            // _enhancementForUi 是 getter，无法在 spread 内被提升为非空类型，
+            // 先存成局部变量再判空。
+            final enhancementUi = _enhancementForUi;
+            return ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                SideChoiceList(
+                  keyPrefix: 'side-quality',
+                  selected: _requestedQuality > 0
+                      ? _requestedQuality
+                      : _plan?.quality,
+                  choices: [
+                    for (final quality in qualities)
+                      SideChoice(quality, '${quality}P'),
+                  ],
+                  onSelect: (choice) =>
+                      Navigator.pop(panelContext, choice.key as int),
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                ),
+                // 增强画质设置原来只在手机端「清晰度」玻璃弹窗里露面，改侧栏后
+                // 必须一并收进来，否则手机端会失去增强设置入口（TV 端仍走玻璃弹窗）。
+                if (enhancementUi != null) ...[
+                  Divider(
+                    height: 1,
+                    color: Colors.white.withValues(alpha: .08),
+                  ),
+                  VideoEnhancementSettings(
+                    controller: enhancementUi,
+                    onChanged: (enhancement) => _setPreferences(
+                      _preferences.copyWith(enhancement: enhancement),
+                    ),
+                    onCompare: () => unawaited(_enhancement.toggleCompare()),
+                  ),
+                ],
+              ],
+            );
+          },
+        );
+        if (picked != null &&
+            mounted &&
+            !_closed &&
+            picked != _requestedQuality) {
+          await _setPreferences(_preferences.copyWith(quality: picked));
+        }
+      case PlayerMenuSection.settings:
+        // 播放设置面板只在电视端出现（遥控器需要一屏全览），手机端设置项
+        // 分别在倍速/清晰度面板里。
+        break;
+    }
+  }
+
+  /// 电视端与宽屏兜底：保留原来的居中弹窗（遥控焦点导航在这个版式上可靠）。
+  Future<void> _openWidePanel(PlayerMenuSection section) async {
+    final menuTheme = _showFullscreen ? AppTheme.dark : Theme.of(context);
+    final index = await showDialog<int>(
+      context: context,
+      builder: (menuContext) => AnimatedBuilder(
+        animation: Listenable.merge([
+          _menuRevision,
+          widget.store,
+          _danmaku,
+          _preloader,
+        ]),
+        builder: (_, _) => Theme(
+          data: menuTheme,
+          child: PlayerMenu(
+            section: section,
+            episodes: widget.detail.episodes,
+            currentIndex: _index,
+            preferences: _preferences,
+            qualities: _plan?.qualities ?? [],
+            actualQuality: _plan?.quality ?? 0,
+            local: _plan?.local == true,
+            favorite: widget.store.isFavorite(widget.detail.drama.id),
+            mobile: _mobile,
+            onEpisode: (index) => Navigator.pop(menuContext, index),
+            onPreferences: _setPreferences,
+            showDanmaku: _plan?.danmakuId.isNotEmpty == true,
+            danmakuStatus: _danmaku.status,
+            onRetryDanmaku: _danmaku.canRetry ? _danmaku.retry : null,
+            preloadStatus: _preloader.status,
+            enhancement: _enhancementForUi,
+            onCompareEnhancement: () {
+              unawaited(_enhancement.toggleCompare());
+              Navigator.pop(menuContext);
+            },
+            onFavorite: () => widget.store.toggleFavorite(widget.detail.drama),
+          ),
+        ),
+      ),
+    );
+    if (mounted && !_closed && index != null && index != _index) {
+      await _play(index);
+    }
+  }
+
+  /// 播到片头/片尾标记点时自动跳过（判定规则在 [resolveSkipAction]）。
+  ///
+  /// 加载中、出错、面板打开、后台与画中画都不打扰，免得和用户的操作打架；
+  /// 每段一次播放只生效一次，用户拖回片头/片尾重看不会被拽走。
+  void _applySkipMarks(Duration position) {
+    if (_closed ||
+        _loading ||
+        _error != null ||
+        _panelOpen ||
+        _pictureInPictureVisible ||
+        !_foreground) {
+      return;
+    }
+    final marks = _skipMarks;
+    if (marks.isEmpty) return;
+    final action = resolveSkipAction(
+      position: position.inMilliseconds / 1000,
+      duration: _player.state.duration.inMilliseconds / 1000,
+      marks: marks,
+      introApplied: _introSkipped,
+      outroApplied: _outroSkipped,
+      hasNextEpisode: _index + 1 < widget.detail.episodes.length,
+    );
+    switch (action) {
+      case SkipMarkAction.none:
+        return;
+      case SkipMarkAction.skipIntro:
+        _introSkipped = true;
+        _interactions.hint('已跳过片头');
+        unawaited(
+          _seekTo(Duration(milliseconds: (marks.introEnd * 1000).round())),
+        );
+      case SkipMarkAction.skipOutro:
+        _outroSkipped = true;
+        _cancelAdvanceCountdown();
+        _interactions.hint('已跳过片尾');
+        unawaited(_saveProgress(flush: true));
+        unawaited(_play(_index + 1, showControlsOnReady: false));
     }
   }
 
@@ -1784,6 +2198,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             child: TelevisionSettingsDialog(
               speed: _speed,
               quality: _requestedQuality,
+              actualQuality: _plan?.quality ?? 0,
               qualities: _plan?.qualities ?? [],
               favorite: widget.store.isFavorite(widget.detail.drama.id),
               onFavorite: _toggleFavorite,
@@ -1823,14 +2238,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// 返回语义统一（用户定调）：左上返回键永远「返回上一页」，
+  /// 退出全屏由独立键负责，系统返回手势则先退回内嵌形态。
   void _back() {
     _cancelAdvanceCountdown();
-    // 短剧竖屏全屏是"正常播放态"，返回直接退出播放页，不先退全屏。
-    if (_showFullscreen && !_television && !_portraitDrama) {
-      _rotate();
-    } else {
-      Navigator.of(context).maybePop();
-    }
+    Navigator.of(context).maybePop();
   }
 
   @override
@@ -1855,6 +2267,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_pictureInPictureHandlerInstalled) {
       AppDevice.channel.setMethodCallHandler(null);
     }
+    _battery.dispose();
     _interactions.dispose();
     _playerFocus.dispose();
     _menuRevision.dispose();
@@ -1925,11 +2338,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     final fullscreen = _showFullscreen;
     final pictureInPicture = _pictureInPictureVisible;
     return PopScope(
-      canPop: _television || !fullscreen || _portraitDrama,
+      // 系统返回不再被改写成「旋转」：全屏时先退回内嵌，内嵌时才真的退出页面。
+      canPop:
+          _television ||
+          _viewMode == PlaybackViewMode.inline ||
+          _episodeSheetOpen,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && fullscreen && !_television && !_portraitDrama) {
-          _rotate();
+        if (didPop || _television) return;
+        // 选集面板开着时先收起它，再谈退出全屏。
+        if (_episodeSheetOpen) {
+          _closeEpisodeSheet();
+          return;
         }
+        unawaited(_setViewMode(PlaybackViewMode.inline));
       },
       child: CallbackShortcuts(
         bindings: {
@@ -1982,6 +2403,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                         _mobile &&
                         MediaQuery.orientationOf(context) == Orientation.portrait,
                     bottom: !fullscreen,
+                    // 手机横屏时挖孔会转到左侧（本机 1200×2608 竖屏、横屏后
+                    // 左边缘 144px 是 displayCutout），SafeArea 默认会为它让位，
+                    // 画面就被整体推右、左右黑边不对称。画面要铺满整屏，
+                    // 让位交给控制栏自己（PlayerControls._sideChromeInset）。
+                    left: !_mobile,
+                    right: !_mobile,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         // 宽屏判定含高度门槛（同 detail_screen/home_screen）：
@@ -1989,6 +2416,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                         final desktop = constraints.maxWidth >= 840 &&
                             constraints.maxHeight >= 600;
                         if (fullscreen) {
+                          // 竖屏全屏的选集走「底部滑入、推挤视频」布局，
+                          // 其余形态维持普通铺满（横屏选集仍用右侧浮层）。
+                          if (_episodeSheetEligible) {
+                            return _portraitEpisodePushLayout(context);
+                          }
                           return _videoPane(context);
                         }
                         if (desktop ||
@@ -2064,44 +2496,165 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// 画面比例 + 音轨：一个入口两段清单（玻璃菜单，与线路面板同款）。
+  /// 画面与片头尾：画面比例、音轨、片头/片尾标定合成一块右侧面板，
+  /// 入口收在上行（用户定调：比例要和跳过片头在一起，别再各占一颗按钮）。
   Future<void> _showDisplayOptions() async {
-    if (!mounted || _closed) return;
-    final tracks = _player.state.tracks.audio;
-    final current = _player.state.track.audio;
-    final picked = await showGlassMenu<Object>(
-      context: context,
-      entries: [
-        const GlassMenuEntry<Object>(-1, '画面比例', header: true),
-        for (final mode in _PlayerFitMode.values)
-          GlassMenuEntry<Object>(mode, mode.label, checked: mode == _fitMode),
-        if (tracks.isNotEmpty) ...[
-          GlassMenuEntry<Object>(
-            -2,
-            tracks.length > 1 ? '音轨 · ${tracks.length} 条' : '音轨',
-            header: true,
-          ),
-          for (var index = 0; index < tracks.length; index++)
-            GlassMenuEntry<Object>(
-              tracks[index],
-              _audioTrackLabel(tracks[index], index),
-              checked: tracks[index].id == current.id,
-            ),
-        ],
-      ],
-    );
-    if (picked == null || !mounted || _closed) return;
-    if (picked is _PlayerFitMode) {
-      setState(() => _fitMode = picked);
-      return;
-    }
-    if (picked is AudioTrack) {
-      try {
-        await _player.setAudioTrack(picked);
-      } catch (_) {
-        _notice('切换音轨失败，请重试');
+    if (_panelOpen || _closed) return;
+    _cancelAdvanceCountdown();
+    _interactions.cancel();
+    setState(() => _panelOpen = true);
+    try {
+      await showPlayerSidePanel<void>(
+        context: context,
+        title: '画面与片头尾',
+        builder: (_) => _displayOptionsPanel(),
+      );
+    } finally {
+      if (mounted && !_closed) {
+        setState(() => _panelOpen = false);
+        _playerFocus.requestFocus();
       }
     }
+  }
+
+  Widget _displayOptionsPanel() {
+    return StatefulBuilder(
+      builder: (context, setPanel) {
+        final tracks = _player.state.tracks.audio;
+        final current = _player.state.track.audio;
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+          children: [
+            _panelLabel('画面比例'),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final mode in _PlayerFitMode.values)
+                  _panelChip(
+                    key: ValueKey('display-fit-${mode.name}'),
+                    label: mode.label,
+                    selected: mode == _fitMode,
+                    onTap: () {
+                      setState(() => _fitMode = mode);
+                      setPanel(() {});
+                    },
+                  ),
+              ],
+            ),
+            if (tracks.length > 1) ...[
+              const SizedBox(height: 20),
+              _panelLabel('音轨'),
+              for (var index = 0; index < tracks.length; index++)
+                _panelRow(
+                  key: ValueKey('display-audio-$index'),
+                  label: _audioTrackLabel(tracks[index], index),
+                  selected: tracks[index].id == current.id,
+                  onTap: () async {
+                    try {
+                      await _player.setAudioTrack(tracks[index]);
+                    } catch (_) {
+                      _notice('切换音轨失败，请重试');
+                    }
+                    if (mounted && !_closed) setPanel(() {});
+                  },
+                ),
+            ],
+            const SizedBox(height: 18),
+            Divider(color: Colors.white.withValues(alpha: .08), height: 1),
+            const SizedBox(height: 14),
+            _panelLabel('片头尾'),
+            SkipMarksPanel(
+              player: _player,
+              marks: _skipMarks,
+              scrollable: false,
+              padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+              onSaved: (next) async {
+                _skipMarks = next;
+                if (mounted && !_closed) setState(() {});
+                await widget.store.setSkipMarks(_skipMarksId, next);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _panelLabel(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        letterSpacing: .3,
+        color: Colors.white.withValues(alpha: .55),
+      ),
+    ),
+  );
+
+  Widget _panelChip({
+    required Key key,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) => GestureDetector(
+    key: key,
+    behavior: HitTestBehavior.opaque,
+    onTap: onTap,
+    child: Container(
+      height: 40,
+      constraints: const BoxConstraints(minWidth: 64),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: selected ? Colors.white : Colors.white.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        maxLines: 1,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: selected ? Colors.black : Colors.white,
+        ),
+      ),
+    ),
+  );
+
+  Widget _panelRow({
+    required Key key,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      key: key,
+      onTap: onTap,
+      child: SizedBox(
+        height: 46,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w600 : null,
+                  color: selected ? primary : Colors.white.withValues(alpha: .8),
+                ),
+              ),
+            ),
+            if (selected) AppIcon(AppIcons.check, size: 18, color: primary),
+          ],
+        ),
+      ),
+    );
   }
 
   String _audioTrackLabel(AudioTrack track, int index) {
@@ -2112,16 +2665,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     return '音轨 ${index + 1}';
   }
 
-  Widget _videoPane(BuildContext context) {
-    final videoTheme = _television
-        ? televisionTheme(AppTheme.dark)
-        : AppTheme.dark;
+  /// 控制层（顶栏 + 进度行 + 按钮行）。
+  ///
+  /// 单独抽出来是为了让「竖屏全屏选集推挤」布局复用同一套控制栏：推挤时
+  /// 把它淡出即可，不必把几十个参数再抄一份、也免得两处接线走偏。
+  Widget _controlsOverlay({required bool hideOverlay}) {
+    if (hideOverlay) return const SizedBox.shrink();
     final title =
         '${widget.detail.drama.title} · 第 ${widget.detail.episodes[_index].number} 集${_plan?.local == true ? ' · 本地' : ''}${widget.detail.episodes[_index].vip ? ' · VIP 试看' : ''}${(_plan?.routeIndex ?? 0) > 0 ? ' · 线路 ${_plan!.routeIndex + 1}' : ''}';
-    final hideOverlayForPictureInPicture = _pictureInPictureVisible;
-    final Widget controls = hideOverlayForPictureInPicture
-        ? const SizedBox.shrink()
-        : _television
+    return _television
         ? TelevisionControls(
             player: _player,
             title: title,
@@ -2138,46 +2690,78 @@ class _PlayerScreenState extends State<PlayerScreen>
             onSettings: () => _televisionSettings(context),
             onBack: _back,
           )
-        : PlayerControls(
-            player: _player,
-            interactions: _interactions,
-            enabled: !_loading && _error == null,
-            enhancement: _enhancementForUi,
-            panelOpen: _panelOpen,
-            fullscreen: _showFullscreen,
-            showOnPlaybackReady: _showControlsOnPlaybackReady,
-            title: title,
-            onTogglePlayback: _togglePlayback,
-            swipeEnabled: _mobile,
-            onFullscreen: _fullscreenSupported ? _rotate : null,
-            portraitRotate: _portraitDrama,
-            forceLandscape: _forceLandscape,
-            onPortraitRotate: _togglePortraitRotate,
-            onBack: _back,
-            onFocusSurface: _playerFocus.requestFocus,
-            onSeek: _seekTo,
-            speed: _speed,
-            qualityLabel: _qualityLabel,
-            showDanmaku: _plan?.danmakuId.isNotEmpty == true,
-            danmakuEnabled: _danmakuEnabled,
-            danmaku: _danmaku,
-            onEpisodes: () => _openPanel(PlayerMenuSection.episodes),
-            onSpeed: () => _openPanel(PlayerMenuSection.speed),
-            onQuality: () => _openPanel(PlayerMenuSection.quality),
-            routeLabel: _routeLabel,
-            onRoute: _plan?.hasAlternative == true
-                ? (_television ? _switchRoute : _showRouteMenu)
-                : null,
-            onDisplayOptions: _showDisplayOptions,
-            onDanmaku: _plan?.danmakuId.isNotEmpty == true
-                ? _toggleDanmaku
-                : null,
-            onRetryDanmaku: _retryDanmakuFromControls,
-            onPush: widget.mediaId == null ? _pushToDevice : null,
-            onPictureInPicture: _canUsePictureInPicture
-                ? _enterPictureInPicture
-                : null,
+        : AnimatedBuilder(
+            // 电量 10 秒变一次：只重建控制层，不拖着整个播放页重建。
+            animation: _battery,
+            builder: (context, _) => PlayerControls(
+              player: _player,
+              interactions: _interactions,
+              enabled: !_loading && _error == null,
+              enhancement: _enhancementForUi,
+              panelOpen: _panelOpen,
+              fullscreen: _showFullscreen,
+              showOnPlaybackReady: _showControlsOnPlaybackReady,
+              title: title,
+              onTogglePlayback: _togglePlayback,
+              swipeEnabled: _mobile,
+              landscapeChrome: _landscapeChrome,
+              compact: !_showFullscreen,
+              batteryLevel: _battery.reading?.level,
+              onFullscreen: _fullscreenSupported ? _rotate : null,
+              forceLandscape: _landscapeChrome,
+              onLockChanged: _setScreenLocked,
+              onPortraitFullscreen: _mobile
+                  ? () => _setViewMode(PlaybackViewMode.portraitFullscreen)
+                  : null,
+              onLandscapeFullscreen: _mobile
+                  ? () => _setViewMode(PlaybackViewMode.landscapeFullscreen)
+                  : null,
+              onExitFullscreen: () => _setViewMode(PlaybackViewMode.inline),
+              onBack: _back,
+              onFocusSurface: _playerFocus.requestFocus,
+              onSeek: _seekTo,
+              onNext: _index + 1 < widget.detail.episodes.length
+                  ? () => _play(_index + 1)
+                  : null,
+              hasNext: _index + 1 < widget.detail.episodes.length,
+              speed: _speed,
+              qualityLabel: _qualityLabel,
+              showQuality: true,
+              showDanmaku: _plan?.danmakuId.isNotEmpty == true,
+              danmakuEnabled: _danmakuEnabled,
+              danmaku: _danmaku,
+              onEpisodes: () => _openPanel(PlayerMenuSection.episodes),
+              onSpeed: () => _openPanel(PlayerMenuSection.speed),
+              onQuality: () => _openPanel(PlayerMenuSection.quality),
+              routeLabel: _routeLabel,
+              // 入口可用性按「线路数 ≥2」判定，而非 hasAlternative（后者语义是
+              // 「当前不是最后一条」，处在最后一条时为 false → 线路按钮整个
+              // 消失，用户再也切不回来；真果·鉴一集常带 20~30 条线，必现）。
+              onRoute: (_plan?.routeCount ?? 0) >= 2
+                  ? (_television ? _switchRoute : _showRouteMenu)
+                  : null,
+              onDisplayOptions: _showDisplayOptions,
+              skipMarksSet: !_skipMarks.isEmpty,
+              onDanmaku: _plan?.danmakuId.isNotEmpty == true
+                  ? _toggleDanmaku
+                  : null,
+              onRetryDanmaku: _retryDanmakuFromControls,
+              onPush: widget.mediaId == null ? _pushToDevice : null,
+              onPictureInPicture: _canUsePictureInPicture
+                  ? _enterPictureInPicture
+                  : null,
+            ),
           );
+  }
+
+  Widget _videoPane(BuildContext context, {bool hideControls = false}) {
+    final videoTheme = _television
+        ? televisionTheme(AppTheme.dark)
+        : AppTheme.dark;
+    final hideOverlayForPictureInPicture = _pictureInPictureVisible;
+    final Widget controls = _controlsOverlay(
+      hideOverlay: hideOverlayForPictureInPicture || hideControls,
+    );
     final layeredControls = Stack(
       fit: StackFit.expand,
       children: [
@@ -2434,94 +3018,125 @@ class _PlayerScreenState extends State<PlayerScreen>
       case SwipeAction.volume:
         final valuePct = (hud.value * 100).round().clamp(0, 100);
         final icon = hud.type == SwipeAction.brightness
-            ? AppIcon(AppIcons.lightMode, color: Colors.white, size: 22)
+            ? AppIcons.lightMode
             : valuePct == 0
-            ? AppIcon(AppIcons.volumeOff, color: Colors.white, size: 22)
-            : AppIcon(AppIcons.volumeUp, color: Colors.white, size: 22);
-        return Center(
-          child: Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: .55),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(
-                  width: 80,
-                  height: 80,
-                  child: CircularProgressIndicator(
-                    value: hud.value.clamp(0.0, 1.0),
-                    strokeWidth: 4,
-                    backgroundColor: Colors.white.withValues(alpha: .2),
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                ),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    icon,
-                    Text('$valuePct%',
-                        style: const TextStyle(color: Colors.white, fontSize: 13)),
-                  ],
-                ),
-              ],
-            ),
-          ),
+            ? AppIcons.volumeOff
+            : AppIcons.volumeUp;
+        return _topGestureHud(
+          leading: icon,
+          text: '$valuePct%',
+          ratio: valuePct / 100,
         );
       case SwipeAction.seek:
         final pos = hud.position ?? Duration.zero;
         final total = _player.state.duration;
-        return Positioned(
-          left: 32,
-          right: 32,
-          bottom: 96,
-          child: SafeArea(
-            top: false,
-            child: Row(
-              children: [
-                Text(formatPosition(pos.inMilliseconds / 1000),
-                    style: const TextStyle(color: Colors.white, fontSize: 14)),
-                const Spacer(),
-                Text(
-                  total > Duration.zero
-                      ? '/ ${formatPosition(total.inMilliseconds / 1000)}'
-                      : '',
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-              ],
-            ),
-          ),
+        final forward = pos >= _player.state.position;
+        final icon = forward ? AppIcons.fastForward : AppIcons.fastRewind;
+        return _topGestureHud(
+          leading: icon,
+          text: total > Duration.zero
+              ? '${formatPosition(pos.inMilliseconds / 1000)} / '
+                    '${formatPosition(total.inMilliseconds / 1000)}'
+              : formatPosition(pos.inMilliseconds / 1000),
+          ratio: hud.value.clamp(0.0, 1.0),
         );
       case SwipeAction.episode:
         final forward = hud.value > 0;
-        return Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: .55),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                forward
-                    ? AppIcon(AppIcons.skipNext, color: Colors.white, size: 22)
-                    : AppIcon(AppIcons.skipPrevious, color: Colors.white, size: 22),
-                const SizedBox(width: 8),
-                Text(
-                  hud.label ?? (forward ? '下一集' : '上一集'),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-              ],
-            ),
-          ),
+        final icon = forward ? AppIcons.skipNext : AppIcons.skipPrevious;
+        return _topGestureHud(
+          leading: icon,
+          text: hud.label ?? (forward ? '下一集' : '上一集'),
+          ratio: 1,
+          showBar: false,
         );
       case SwipeAction.none:
         return const SizedBox.shrink();
     }
+  }
+
+  /// 手势提示：只有顶部那一条「图标 + 细填充条 + 数字」。
+  /// 旧版左中还杵着一颗主色大圆图标，用户明确不要（挡画面又抢注意力）。
+  Widget _topGestureHud({
+    required String leading,
+    required String text,
+    required double ratio,
+    bool showBar = true,
+  }) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 18),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: .42),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AppIcon(leading, size: 18, color: Colors.white),
+                      if (showBar) ...[
+                        const SizedBox(width: 10),
+                        // 条宽 200 是理想值，窄屏让位给文字（否则整行溢出）。
+                        Flexible(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 200),
+                            child: SizedBox(
+                              height: 4,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(2),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ColoredBox(
+                                      color: Colors.white.withValues(alpha: .3),
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: FractionallySizedBox(
+                                        widthFactor: ratio.clamp(0.0, 1.0),
+                                        child: ColoredBox(color: primary),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _overlayBackButton() {
@@ -2610,17 +3225,22 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  void _openRelated(String label) => openRelatedCatalog(
+    context,
+    repository: widget.repository,
+    store: widget.store,
+    drama: widget.detail.drama,
+    label: label,
+  );
+
   Widget _mobileSynopsis() {
     final drama = widget.detail.drama;
     final colors = Theme.of(context).colorScheme;
-    final meta = [
-      SourceSite.byId(drama.source)?.name ?? '未知源',
-      if (drama.episodes > 0) '共 ${drama.episodes} 集',
-      if (drama.releaseStatus.isNotEmpty && drama.releaseStatus != 'unknown')
-        drama.releaseLabel,
-      if (drama.category.isNotEmpty) drama.category,
-    ];
-    final body = drama.description.trim().isEmpty ? '暂无简介' : drama.description;
+    final sourceName = SourceSite.byId(drama.source)?.name ?? '未知源';
+    final metaStyle = TextStyle(color: colors.onSurfaceVariant);
+    final body = drama.description.trim().isEmpty
+        ? '暂无简介'
+        : drama.description;
     return ColoredBox(
       color: colors.surface,
       child: ListView(
@@ -2645,13 +3265,41 @@ class _PlayerScreenState extends State<PlayerScreen>
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    if (meta.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        meta.join(' · '),
-                        style: TextStyle(color: colors.onSurfaceVariant),
-                      ),
-                    ],
+                    const SizedBox(height: 6),
+                    // 站源名与分类可点：跳该站源相关结果页（同详情页简介区）。
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        MetaLink(
+                          label: sourceName,
+                          tooltip: '查看$sourceName的全部作品',
+                          onTap: () => openSourceCatalog(
+                            context,
+                            repository: widget.repository,
+                            store: widget.store,
+                            drama: drama,
+                            sourceName: sourceName,
+                          ),
+                        ),
+                        if (drama.episodes > 0) ...[
+                          Text(' · ', style: metaStyle),
+                          Text(drama.episodeLabel, style: metaStyle),
+                        ],
+                        if (drama.releaseStatus.isNotEmpty &&
+                            drama.releaseStatus != 'unknown') ...[
+                          Text(' · ', style: metaStyle),
+                          Text(drama.releaseLabel, style: metaStyle),
+                        ],
+                        if (drama.category.isNotEmpty) ...[
+                          Text(' · ', style: metaStyle),
+                          MetaLink(
+                            label: drama.category,
+                            tooltip: '查看同类${drama.category}',
+                            onTap: () => _openRelated(drama.category),
+                          ),
+                        ],
+                      ],
+                    ),
                     if (drama.onlineDate.isNotEmpty ||
                         drama.heat.isNotEmpty ||
                         drama.views.isNotEmpty) ...[
@@ -2679,8 +3327,15 @@ class _PlayerScreenState extends State<PlayerScreen>
               spacing: 6,
               runSpacing: 6,
               children: [
+                // Chip 本体不可点（构造没有 onPressed），可点的这一档用
+                // ActionChip：同样是紧凑胶囊，自带 Material 水波纹与 tooltip。
                 for (final tag in drama.tags.take(12))
-                  Chip(label: Text(tag), visualDensity: VisualDensity.compact),
+                  ActionChip(
+                    label: Text(tag),
+                    visualDensity: VisualDensity.compact,
+                    tooltip: '查看「$tag」相关内容',
+                    onPressed: () => _openRelated(tag),
+                  ),
               ],
             ),
           ],
@@ -2690,7 +3345,26 @@ class _PlayerScreenState extends State<PlayerScreen>
             const SizedBox(height: 12),
             Text(widget.detail.warning, style: TextStyle(color: colors.error)),
           ],
+          RelatedDramaRail(
+            repository: widget.repository,
+            store: widget.store,
+            drama: drama,
+            onOpen: _openRelatedDrama,
+          ),
         ],
+      ),
+    );
+  }
+
+  /// 点推荐卡：推那部剧自己的简介页。
+  Future<void> _openRelatedDrama(Drama next) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailScreen(
+          drama: next,
+          repository: widget.repository,
+          store: widget.store,
+        ),
       ),
     );
   }
@@ -2789,4 +3463,117 @@ class _PlayerScreenState extends State<PlayerScreen>
       onSelected: (index) => _play(index),
     ),
   );
+}
+
+/// 竖屏全屏的「底部推挤选集」布局：视频收缩到顶部小窗，选集从底部滑入。
+///
+/// 收起时先播完滑出动画再把面板从树上摘掉：这样退出过程不突兀，
+/// 面板也不会在收起后继续占着命中测试。
+class _PortraitEpisodePushLayout extends StatefulWidget {
+  const _PortraitEpisodePushLayout({
+    required this.open,
+    required this.video,
+    required this.panel,
+  });
+
+  /// 面板是否展开。
+  final bool open;
+
+  /// 视频层（全屏铺满 → 顶部小窗）。
+  final Widget video;
+
+  /// 选集面板内容。
+  final Widget panel;
+
+  @override
+  State<_PortraitEpisodePushLayout> createState() =>
+      _PortraitEpisodePushLayoutState();
+}
+
+class _PortraitEpisodePushLayoutState extends State<_PortraitEpisodePushLayout>
+    with SingleTickerProviderStateMixin {
+  static const Duration _duration = Duration(milliseconds: 280);
+
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: _duration,
+  );
+
+  late final CurvedAnimation _curved = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+  );
+
+  /// 面板是否还挂在树上：收起动画播完才摘掉。
+  bool _panelMounted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _panelMounted = widget.open;
+    _controller.value = widget.open ? 1 : 0;
+  }
+
+  @override
+  void didUpdateWidget(covariant _PortraitEpisodePushLayout oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.open == oldWidget.open) return;
+    if (widget.open) {
+      setState(() => _panelMounted = true);
+      _controller.forward();
+    } else {
+      _controller.reverse().whenComplete(() {
+        if (mounted) setState(() => _panelMounted = false);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _curved.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final sheetHeight = size.height * .66;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 视频：全屏 ↔ 顶部小窗，与面板同步推挤。
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            final t = _curved.value;
+            return Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: size.height - sheetHeight * t,
+              child: KeyedSubtree(
+                key: const ValueKey('player-push-video'),
+                child: widget.video,
+              ),
+            );
+          },
+        ),
+        if (_panelMounted)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: sheetHeight,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(_curved),
+              child: widget.panel,
+            ),
+          ),
+      ],
+    );
+  }
 }

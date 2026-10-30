@@ -25,10 +25,22 @@ func sourceFixtureResponse(request *http.Request, status int, body string) *http
 	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Request: request}
 }
 
+// withDeviceRegistration：红果签名请求前会先向设备注册接口（log.snssdk.com）
+// 登记设备号，这是产品固有行为；fixture 传输层统一应答注册请求，各测试只处理
+// 自己的业务请求，既不会误报 unexpected request，调用计数也保持干净。
+func withDeviceRegistration(transport sourceFixtureTransport) sourceFixtureTransport {
+	return func(request *http.Request) (*http.Response, error) {
+		if strings.Contains(request.URL.Host, "snssdk.com") {
+			return sourceFixtureResponse(request, http.StatusOK, hongguoTestRegisteredDevice), nil
+		}
+		return transport(request)
+	}
+}
+
 func sourceFixtureDownloader(t *testing.T, transport sourceFixtureTransport) *Downloader {
 	t.Helper()
 	return &Downloader{cfg: Config{dataDir: t.TempDir(), Retries: 1, PageSize: 30, MaxPagesPerSort: 1},
-		client: &http.Client{Transport: transport}, limiter: newRequestLimiter(3, 0), providerHosts: map[string]string{}}
+		client: &http.Client{Transport: withDeviceRegistration(transport)}, limiter: newRequestLimiter(3, 0), providerHosts: map[string]string{}}
 }
 
 func sourceFixtureEngine(t *testing.T, transport sourceFixtureTransport) *nativeEngine {
@@ -38,9 +50,12 @@ func sourceFixtureEngine(t *testing.T, transport sourceFixtureTransport) *native
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.downloads.close)
-	engine.downloader.client.Transport = transport
+	engine.downloader.client.Transport = withDeviceRegistration(transport)
 	engine.downloader.limiter = newRequestLimiter(3, 0)
 	engine.downloader.cfg.Retries = 1
+	// 磁盘缓存改成懒加载后，测试要显式触发一次加载，
+	// 才能像以前一样直接读 engine.catalogs / engine.sourceRecords。
+	engine.ensureLoaded()
 	return engine
 }
 

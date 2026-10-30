@@ -76,6 +76,7 @@ func validNativeCategory(source, category string) bool {
 }
 
 func (engine *nativeEngine) nativeCategories(ctx context.Context, source string, force bool) ([]nativeCategory, error) {
+	engine.ensureLoaded()
 	source = canonicalProviderSource(source)
 	all := []nativeCategory{{Name: "全部"}}
 	switch source {

@@ -7,8 +7,10 @@ package core
 // Gorgon 头不动，补上 X-Argus / X-Ladon：X-Argus 补 device_id（字段 5）、
 // license 1611921764（字段 6）、body hash 按 X-SS-STUB 口径
 // SM3(md5(body))、机型 environment（字段 23）与字段 25；X-Ladon 明文
-// 带 license。对方实测详情与 video_model 12/12 通过，未注册的随机
-// 设备号同样可用（无需设备号注册/换号机制）。
+// 带 license。签名通过只解决「签名无效」一类空包；2026-10-26 实测网关
+// 还按 device_id 分桶（上游 9509bb6：约一半分桶对签名请求一律回空包），
+// 未注册随机号极易落进坏桶——由 provider_hongguo_device.go 的设备注册
+// 与换号机制兜底。
 //
 // 复用 provider_hongguo_comment_sign.go 的 hongguoSM3 与 hongguoCommentPad。
 

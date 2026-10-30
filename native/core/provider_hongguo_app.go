@@ -30,17 +30,20 @@ type hongguoCatalogCursor struct {
 }
 
 type hongguoCatalogState struct {
-	Version   int                             `json:"version"`
-	DeviceID  string                          `json:"deviceId"`
-	InstallID string                          `json:"installId"`
-	Feeds     map[string]hongguoCatalogCursor `json:"feeds"`
+	Version    int                             `json:"version"`
+	DeviceID   string                          `json:"deviceId"`
+	InstallID  string                          `json:"installId"`
+	Registered bool                            `json:"registered,omitempty"`
+	Feeds      map[string]hongguoCatalogCursor `json:"feeds"`
 }
 
 type hongguoAppClient struct {
-	mu             sync.Mutex
-	catalogMu      sync.Mutex
-	baseURL        string
-	state          hongguoCatalogState
+	mu                  sync.Mutex
+	deviceMu            sync.Mutex
+	catalogMu           sync.Mutex
+	baseURL             string
+	registerPausedUntil time.Time
+	state               hongguoCatalogState
 	details        map[string]hongguoDetailEntry
 	pending        map[string]*hongguoDetailCall
 	searches       map[string]hongguoSearchEntry
@@ -127,20 +130,38 @@ func hongguoCatalogHasMore(state *hongguoCatalogState) bool {
 	return false
 }
 
-func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, path string, extra url.Values, payload any) (map[string]any, error) {
-	client := downloader.hongguoClient()
-	client.mu.Lock()
-	base, deviceID, installID := client.baseURL, client.state.DeviceID, client.state.InstallID
-	client.mu.Unlock()
-	query := url.Values{
+func hongguoAppQuery(deviceID, installID string) url.Values {
+	return url.Values{
 		"aid": {"8662"}, "app_name": {"novelread"}, "version_code": {"73532"}, "version_name": {"7.3.5.32"},
 		"manifest_version_code": {"73532"}, "update_version_code": {"73532"}, "channel": {"update_64"},
 		"device_platform": {"android"}, "os": {"android"}, "ssmix": {"a"}, "device_type": {"25053RT47C"},
 		"device_brand": {"Redmi"}, "language": {"zh"}, "os_api": {"36"}, "os_version": {"16"},
 		"resolution": {"1280*2772"}, "dpi": {"520"}, "ac": {"wifi"}, "device_id": {deviceID}, "iid": {installID},
 	}
+}
+
+func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, path string, extra url.Values, payload any) (map[string]any, error) {
+	client := downloader.hongguoClient()
+	client.mu.Lock()
+	base, deviceID, installID := client.baseURL, client.state.DeviceID, client.state.InstallID
+	client.mu.Unlock()
+	query := hongguoAppQuery(deviceID, installID)
 	for key, values := range extra {
 		query[key] = append([]string(nil), values...)
+	}
+	comment, _ := ctx.Value(hongguoCommentKey{}).(bool)
+	// 红果网关按 device_id 分桶：约一半分桶对签名请求一律回 HTTP 200 空包，
+	// 未注册的随机设备号极易落进坏桶（实测该状态下 App 接口全灭、兜底路径
+	// 拿到的加密媒体没有 CENC 密钥，播放器无法解密）。签名请求前先向设备注册
+	// 接口登记设备号，把号码挪进正常设备池；空包时再换号重试兜底。
+	signed := !comment
+	if signed {
+		_ = downloader.ensureHongguoDevice(ctx, "")
+		client.mu.Lock()
+		deviceID, installID = client.state.DeviceID, client.state.InstallID
+		client.mu.Unlock()
+		query.Set("device_id", deviceID)
+		query.Set("iid", installID)
 	}
 	var body []byte
 	var err error
@@ -151,17 +172,27 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 		}
 	}
 	attempts := downloader.cfg.Retries
-	if attempts < 1 {
-		attempts = 1
+	// 红果网关会随机抽样返回 HTTP 200 空包，且空包是成簇出现的（实测连续 20 次
+	// 请求里失败集中在同一两秒内）。空包不是语义错误而是可重试抖动，所以下限抬到
+	// 5 次并用递增间隔把总窗口拉到 ~2s，才能跨过抽样的成簇区间；播放入口对此尤其
+	// 敏感——受保护接口对新剧只返 play_info（本端不解析），App 取流是唯一可用路径。
+	if attempts < 5 {
+		attempts = 5
 	}
-	if attempts > 3 {
-		attempts = 3
+	if attempts > 6 {
+		attempts = 6
 	}
+	retryDelays := [...]time.Duration{0, 150 * time.Millisecond, 350 * time.Millisecond, 650 * time.Millisecond, time.Second, 1500 * time.Millisecond}
+	rotations := 0
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
+			delay := retryDelays[len(retryDelays)-1]
+			if attempt < len(retryDelays) {
+				delay = retryDelays[attempt]
+			}
 			select {
-			case <-time.After(time.Duration(attempt) * time.Second):
+			case <-time.After(delay):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -174,7 +205,6 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 		request.Header.Set("Accept", "application/json")
 		request.Header.Set("X-XS-From-Web", "0")
 		request.Header.Set("Sdk-Version", "2")
-		comment, _ := ctx.Value(hongguoCommentKey{}).(bool)
 		var commentNonce hongguoCommentNonce
 		if comment {
 			commentNonce, err = newHongguoCommentNonce()
@@ -223,20 +253,40 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			}
 			continue
 		}
-		if len(content) == 0 || len(content) > providerMaxBodyBytes {
-			return nil, errors.New("红果 App 接口未返回有效数据")
+		if len(content) == 0 {
+			// 上游随机空包：留到最后一次仍为空才报错，中间继续重试。
+			// 换号重试不消耗 attempt（attempt-- 抵消 for 的 ++），由
+			// rotations 上限 3 兜住，避免注册接口一直放号时死循环。
+			lastErr = errors.New("红果 App 接口未返回有效数据")
+			if signed && rotations < hongguoDeviceRotations && downloader.ensureHongguoDevice(ctx, deviceID) == nil {
+				rotations++
+				client.mu.Lock()
+				deviceID, installID = client.state.DeviceID, client.state.InstallID
+				client.mu.Unlock()
+				query.Set("device_id", deviceID)
+				query.Set("iid", installID)
+				attempt--
+			}
+			continue
+		}
+		if len(content) > providerMaxBodyBytes {
+			return nil, errors.New("红果 App 接口返回数据过大")
 		}
 		var result map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(content))
 		decoder.UseNumber()
 		if err := decoder.Decode(&result); err != nil || result == nil {
-			return nil, errors.New("红果 App 接口返回格式异常")
+			lastErr = errors.New("红果 App 接口返回格式异常")
+			continue
 		}
 		code := firstNonEmpty(mapString(result, "code", "Code", "status_code"), mapString(nestedMap(result, "BaseResp"), "StatusCode"))
 		if code != "" && code != "0" {
 			return nil, fmt.Errorf("红果 App 接口暂不可用（%s）", truncate(code, 20))
 		}
 		return result, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("红果 App 接口未返回有效数据")
 	}
 	return nil, lastErr
 }

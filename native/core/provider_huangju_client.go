@@ -23,6 +23,31 @@ const (
 
 var errHuangjuGuestExpired = errors.New("剧果访客授权已失效，请重试")
 
+// 剧果有两套域名：站点域（Referer/Origin/详情页）与 API 域（全部数据接口）。
+// 换域名时两者通常同时变，所以热更也分两条：providerHosts["huangju"] 覆盖站点域，
+// sourceConfig.huangjuAPIBaseURL 覆盖 API 域——单值覆盖救不了「API 域已死」这种情况。
+var (
+	huangjuConfigMu      sync.RWMutex
+	huangjuAPIBaseURLHot string
+)
+
+// huangjuAPIBase 返回当前生效的剧果 API 根地址（远程热更优先，否则内置）。
+func huangjuAPIBase() string {
+	huangjuConfigMu.RLock()
+	defer huangjuConfigMu.RUnlock()
+	if huangjuAPIBaseURLHot != "" {
+		return huangjuAPIBaseURLHot
+	}
+	return huangjuAPIBaseURL
+}
+
+// setHuangjuAPIBase 热更剧果 API 根地址（调用方负责校验；传空回退内置）。
+func setHuangjuAPIBase(base string) {
+	huangjuConfigMu.Lock()
+	defer huangjuConfigMu.Unlock()
+	huangjuAPIBaseURLHot = base
+}
+
 type huangjuGuestCall struct {
 	done  chan struct{}
 	token string
@@ -31,8 +56,6 @@ type huangjuGuestCall struct {
 
 type huangjuAPIClient struct {
 	downloader *Downloader
-	base       string
-	site       string
 	mu         sync.Mutex
 	deviceID   string
 	token      string
@@ -46,13 +69,20 @@ type huangjuAPIResponse struct {
 
 func (d *Downloader) huangjuClient() *huangjuAPIClient {
 	d.huangjuOnce.Do(func() {
-		d.huangju = &huangjuAPIClient{
-			downloader: d,
-			base:       strings.TrimRight(firstNonEmpty(d.cfg.HuangjuAPIURL, huangjuAPIBaseURL), "/"),
-			site:       d.providerBaseURL(sourceHuangju),
-		}
+		d.huangju = &huangjuAPIClient{downloader: d}
 	})
 	return d.huangju
+}
+
+// apiBase 每次调用都重算：client 由 sync.Once 缓存，若把热更值固定在构造时，
+// 远程下发新域后必须重建引擎才生效。
+func (client *huangjuAPIClient) apiBase() string {
+	return strings.TrimRight(firstNonEmpty(client.downloader.cfg.HuangjuAPIURL, huangjuAPIBase()), "/")
+}
+
+// siteBase 同理随 providerHosts 覆盖实时变化（Referer/Origin 必须与 API 域同族）。
+func (client *huangjuAPIClient) siteBase() string {
+	return client.downloader.providerBaseURL(sourceHuangju)
 }
 
 func (client *huangjuAPIClient) guestToken(ctx context.Context) (string, error) {
@@ -139,8 +169,9 @@ func (client *huangjuAPIClient) get(ctx context.Context, route string, query url
 }
 
 func (client *huangjuAPIClient) request(ctx context.Context, method, route string, query url.Values, body []byte, token string, retryAuth bool, limit int64) (huangjuAPIResponse, error) {
-	base, err := url.Parse(client.base)
-	if err != nil || !isProviderHTTPMediaURL(client.base) || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+	apiBase := client.apiBase()
+	base, err := url.Parse(apiBase)
+	if err != nil || !isProviderHTTPMediaURL(apiBase) || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return huangjuAPIResponse{}, errors.New("剧果接口地址无效")
 	}
 	timeout := 15 * time.Second
@@ -149,7 +180,7 @@ func (client *huangjuAPIClient) request(ctx context.Context, method, route strin
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	address := client.base + route
+	address := apiBase + route
 	if len(query) > 0 {
 		address += "?" + query.Encode()
 	}
@@ -160,8 +191,9 @@ func (client *huangjuAPIClient) request(ctx context.Context, method, route strin
 	request.Header.Set("User-Agent", huangjuUserAgent)
 	request.Header.Set("Accept", "application/json, text/plain, */*")
 	request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	request.Header.Set("Referer", client.site+"/")
-	request.Header.Set("Origin", client.site)
+	siteBase := client.siteBase()
+	request.Header.Set("Referer", siteBase+"/")
+	request.Header.Set("Origin", siteBase)
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}

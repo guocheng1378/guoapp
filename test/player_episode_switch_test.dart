@@ -56,7 +56,9 @@ void main() {
         )
         .evaluate()) {
       final color = (element.widget as ColoredBox).color;
-      if (color.red == 0 && color.green == 0 && color.blue == 0 && color.a < 1) {
+      // r/g/b 是 0..1 的 double（旧 red/green/blue 的 0..255 整型已废弃）。
+      // 0 通道映射后精确等于 0.0，所以判纯黑仍然可以用 == 0。
+      if (color.r == 0 && color.g == 0 && color.b == 0 && color.a < 1) {
         return color.a;
       }
     }

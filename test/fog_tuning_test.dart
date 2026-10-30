@@ -1,6 +1,8 @@
+import 'dart:convert';
+
+import 'package:duanju_app/fog_legacy.dart';
 import 'package:duanju_app/fog_tuning.dart';
 import 'package:duanju_app/fog_tuning_screen.dart';
-import 'package:duanju_app/glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,40 +15,51 @@ void main() {
   });
 
   group('FogTuningState 序列化与插值', () {
-    test('发布默认值（v2157：用户调参台回发 10 参数固化）', () {
+    test('发布默认值（v2236：官方直译档，遗留层参数已删除）', () {
       const s = FogTuningState.fallback;
-      expect(s.blurSigma, 3.0);
-      expect(FogTuningState.maxBlurSigma, 3.0);
-      expect(s.saturation, 1.6);
-      expect(s.whiteNormal, closeTo(0.34, 1e-9));
-      expect(s.whiteSoftLight, closeTo(1.0, 1e-9));
-      expect(s.graySoftLight, closeTo(0.16, 1e-9));
-      expect(s.feather, 120);
+      // 模糊 σ = 20（官方 home_page._fogHeader: ImageFilter.blur(sigmaX: 20)）。
+      // σ30 是圆形按钮 FogButton 的值，不是雾面带的。
+      expect(s.blurSigma, 20.0);
+      expect(FogTuningState.maxBlurSigma, 20.0);
+      // 底缘羽化 48（v2240：浓度盖到分组栏底、贴底收尾干脆）。
+      expect(s.feather, 48);
+      expect(FogTuningState.maxFeather, 160);
+      // 上浓下淡：顶部恒为官方基准浓度，只让底部衰减（顶部放大会把层 alpha
+      // 顶爆成黑蒙版）。
       expect(s.verticalGrad, 1.0);
-      // 顶部增幅顶格 3.0：雾形顶格时顶部 4×。
-      expect(s.topBoost, 3.0);
-      expect(FogTuningState.maxTopBoost, 3.0);
-      expect(FogTuningState.maxFeather, 120);
-      // 动态取色 0.10：轻取色；0=现状纯白雾。
-      expect(s.tintMix, closeTo(0.10, 1e-9));
-      expect(FogTuningState.maxTintMix, 1.0);
-      // 雾面高度默认 −14（负档收窄雾带）；量程 −110–240px 双向。
-      expect(s.fogHeight, -14);
+      // 雾面高度默认 0（v2240：雾带底边正好贴住分组栏底边，不再向下多挂
+      // 一条）；量程 −110–240px 双向。
+      expect(s.fogHeight, 0);
       expect(FogTuningState.minFogHeight, -110);
       expect(FogTuningState.maxFogHeight, 240);
+    });
+
+    test('遗留层参数已从模型里删除（照搬官方，不要旧的）', () {
+      final json = FogTuningState.fallback.toJson();
+      for (final legacy in const <String>[
+        'whiteNormal',
+        'whiteSoftLight',
+        'graySoftLight',
+        'fogBase',
+        'saturation',
+        'tintMix',
+        'topBoost',
+      ]) {
+        expect(
+          json.containsKey(legacy),
+          isFalse,
+          reason: '$legacy 是历轮自加的遗留层，官方雾面带没有',
+        );
+      }
+      // 模型只剩 4 个维度。
+      expect(json.keys.length, 4);
     });
 
     test('toJsonString / fromJsonString 往返值相等', () {
       const s = FogTuningState(
         blurSigma: 2.4,
-        saturation: 1.1,
-        whiteNormal: 0.16,
-        whiteSoftLight: 0.32,
-        graySoftLight: 0.14,
         feather: 28,
         verticalGrad: 0.7,
-        topBoost: 2.2,
-        tintMix: 0.8,
         fogHeight: 96,
       );
       expect(FogTuningState.fromJsonString(s.toJsonString()).equals(s), isTrue);
@@ -58,25 +71,24 @@ void main() {
       );
     });
 
-    test('防御解析：坏值 clamp、缺字段回落默认', () {
+    test('防御解析：坏值 clamp、缺字段回落默认、旧遗留键被忽略', () {
       final s = FogTuningState.fromJson(const <String, Object?>{
         'blurSigma': 999,
         'verticalGrad': -5,
+        'feather': 999,
+        'fogHeight': 999,
+        // 旧档遗留键：模型里已无这些字段 → 必须被忽略（不是崩、不是残留）。
         'whiteNormal': 10,
         'saturation': 1,
         'whiteSoftLight': 0.2,
         'graySoftLight': 0.1,
-        'feather': 999,
-        'topBoost': 99,
+        'fogBase': 0.65,
         'tintMix': 5,
-        'fogHeight': 999,
+        'topBoost': 99,
       });
       expect(s.blurSigma, FogTuningState.maxBlurSigma);
       expect(s.verticalGrad, 0);
-      expect(s.whiteNormal, 0.6);
       expect(s.feather, FogTuningState.maxFeather);
-      expect(s.topBoost, FogTuningState.maxTopBoost);
-      expect(s.tintMix, FogTuningState.maxTintMix);
       expect(s.fogHeight, FogTuningState.maxFogHeight);
 
       // 负向越界 clamp 到 minFogHeight（旧存量 0–240 值天然兼容）。
@@ -89,26 +101,11 @@ void main() {
       expect(empty.equals(FogTuningState.fallback), isTrue);
     });
 
-    test('colorMatrix：saturation=0 恒等，1=demo 真值，0.5 中点', () {
-      const zero = FogTuningState(saturation: 0);
-      final identity = zero.colorMatrix();
-      expect(identity, const <double>[1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]);
-
-      const full = FogTuningState(saturation: 1);
-      final demo = full.colorMatrix();
-      expect(demo[0], closeTo(1.35415, 1e-6));
-      expect(demo[6], closeTo(1.12825, 1e-6));
-      expect(demo[12], closeTo(1.4176, 1e-6));
-
-      const half = FogTuningState(saturation: 0.5);
-      expect(half.colorMatrix()[0], closeTo((1 + 1.35415) / 2, 1e-6));
-    });
-
     test('bandHeight：负档收窄雾带、clamp≥0 防负高度', () {
       const base = 110.0;
       expect(const FogTuningState(fogHeight: 0).bandHeight(base), 110);
-      // 发布默认 fogHeight=-14：110px 基准雾带收窄到 96px。
-      expect(FogTuningState.fallback.bandHeight(base), 96);
+      // 发布默认 fogHeight=0：110px 基准雾带底边正好贴分组栏底边。
+      expect(FogTuningState.fallback.bandHeight(base), 110);
       expect(const FogTuningState(fogHeight: 90).bandHeight(base), 200);
       expect(const FogTuningState(fogHeight: -30).bandHeight(base), 80);
       expect(const FogTuningState(fogHeight: -110).bandHeight(base), 0);
@@ -129,12 +126,48 @@ void main() {
     });
 
     test('load 从持久化恢复（_loaded 守卫内首个 load 生效）', () async {
-      const tuned = FogTuningState(blurSigma: 2.2, verticalGrad: 0.5);
+      // 取一组**不触发迁移**的值（= 发布默认档，只改 verticalGrad），验证
+      // load 是原样恢复而不是走收敛。
+      const tuned = FogTuningState(verticalGrad: 0.5);
       SharedPreferences.setMockInitialValues(<String, Object>{
         'fog_tuning.v1': tuned.toJsonString(),
       });
       await FogTuningStore.load(await SharedPreferences.getInstance());
       expect(FogTuningStore.state.value.equals(tuned), isTrue);
+    });
+
+    test('load 把旧档收敛到官方直译档（σ20 + 遗留层全清 + 雾高正档）', () async {
+      // 旧档 = 2233 收敛值（含灰平涂底 / 饱和矩阵 / 白灰层 / 取色浓度，
+      // 这些键在模型里已不存在 → 读出来天然是官方直译档）。
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'fog_tuning.v1': jsonEncode(<String, Object>{
+          'blurSigma': 30.0,
+          'saturation': 1.6,
+          'fogBase': 0.65,
+          'whiteNormal': 0.3,
+          'whiteSoftLight': 1.0,
+          'graySoftLight': 0.08,
+          'tintMix': 0.5,
+          'topBoost': 1.6,
+          'fogHeight': -14,
+          'feather': 160,
+        }),
+      });
+      FogTuningStore.resetLoadedFlag();
+      await FogTuningStore.load(await SharedPreferences.getInstance());
+      final v = FogTuningStore.state.value;
+      // σ 漂移 → 官方真值 20。
+      expect(v.blurSigma, 20.0);
+      // 羽化 = 旧发布默认 160 → 收回到新默认 48（浓度盖到分组栏底）。
+      expect(v.feather, 48);
+      // 雾高 -14 是用户侧负档（收窄），不是旧发布默认 56 → 保留不收敛。
+      expect(v.fogHeight, -14);
+      // 遗留键不再出现在落盘结果里。
+      final keys = v.toJson().keys.toSet();
+      expect(keys.contains('fogBase'), isFalse);
+      expect(keys.contains('saturation'), isFalse);
+      expect(keys.contains('whiteNormal'), isFalse);
+      expect(keys.contains('topBoost'), isFalse);
     });
   });
 
@@ -151,11 +184,11 @@ void main() {
     }
 
     testWidgets('预览区叠真实 TopFog，拖动滑块实时写入参数通道', (tester) async {
-      // 默认 σ3 已顶格，置低值再拖才能断言「向右变糊」。
+      // 默认 σ20 已顶格，置低值再拖才能断言「向右变糊」。
       FogTuningStore.state.value = const FogTuningState(blurSigma: 0.5);
       await mountScreen(tester);
 
-      expect(find.byType(TopFog), findsOneWidget);
+      expect(find.byType(LegacyTopFog), findsOneWidget);
       expect(find.text('出手 · 共74集'), findsOneWidget);
       expect(find.text('模糊半径'), findsOneWidget);
       // 页面 ListView 懒加载：视口外区块（雾形等）不在树里，属预期。
@@ -169,6 +202,25 @@ void main() {
         greaterThan(0.5),
         reason: '拖动中 _apply 必须实时更新共享通道（真实首页雾面同步响应）',
       );
+    });
+
+    testWidgets('调参台不再有遗留层滑块（旧的已删除）', (tester) async {
+      await mountScreen(tester);
+      for (final legacy in const <String>[
+        '饱和',
+        '灰平涂浓度',
+        '奶白层',
+        '白 softLight',
+        '灰 softLight',
+        '取色浓度',
+        '顶部增幅',
+      ]) {
+        expect(
+          find.text(legacy),
+          findsNothing,
+          reason: '$legacy 是遗留层滑块，v2236 已删除',
+        );
+      }
     });
 
     testWidgets('恢复默认回到发布真值', (tester) async {
@@ -236,28 +288,22 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('粗调步进器：模糊半径 +1 档 = 量程十等分 0.3', (tester) async {
-      // σ 默认顶格 3，置 0.5 再 +1 档（步长 (3-0)/10）。
+    testWidgets('粗调步进器：模糊半径 +1 档 = 量程十等分 2.0', (tester) async {
+      // σ 量程 0–20（官方真值），置 0.5 再 +1 档（步长 (20-0)/10 = 2.0）。
       FogTuningStore.state.value = const FogTuningState(blurSigma: 0.5);
       await mountScreen(tester);
 
       await tapStep(tester, '模糊半径', plus: true);
 
-      expect(FogTuningStore.state.value.blurSigma, closeTo(0.8, 1e-9));
+      expect(FogTuningStore.state.value.blurSigma, closeTo(2.5, 1e-9));
     });
 
     testWidgets('雾面高度粗调：+1 档 0→24，−1 档 0→−24（负档收窄）', (tester) async {
-      // 发布默认已非全 0（v2157 固化），显式置全 min 档验证步进语义。
+      // 发布默认已非全 0（发布默认档），显式置全 min 档验证步进语义。
       FogTuningStore.state.value = const FogTuningState(
         blurSigma: 0,
-        saturation: 0,
-        whiteNormal: 0,
-        whiteSoftLight: 0,
-        graySoftLight: 0,
         feather: 0,
         verticalGrad: 0,
-        topBoost: 0,
-        tintMix: 0,
         fogHeight: 0,
       );
       await mountScreen(tester);

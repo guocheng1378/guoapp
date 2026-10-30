@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'motion_tokens.dart';
+import 'route_transition.dart';
 
 export 'motion_tokens.dart';
 
@@ -221,14 +222,83 @@ class FadeScalePageTransitionsBuilder extends PageTransitionsBuilder {
       curve: MotionCurves.standard,
       reverseCurve: MotionCurves.exit,
     );
-    return FadeTransition(
-      opacity: curved,
-      child: ScaleTransition(
-        scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
-        child: child,
+    return _RouteTransitionScope(
+      animation: animation,
+      child: FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
+          child: child,
+        ),
       ),
     );
   }
+}
+
+/// 转场作用域：把「回退动画进行中」广播给全局信号。
+///
+/// 只在 **reverse**（回退/返回）期间置位——push 进场不降级，否则页面刚
+/// 出现的一瞬玻璃会从实底跳成磨砂（肉眼可见的闪变）。
+class _RouteTransitionScope extends StatefulWidget {
+  const _RouteTransitionScope({
+    required this.animation,
+    required this.child,
+  });
+
+  final Animation<double> animation;
+  final Widget child;
+
+  @override
+  State<_RouteTransitionScope> createState() => _RouteTransitionScopeState();
+}
+
+class _RouteTransitionScopeState extends State<_RouteTransitionScope> {
+  /// 本次是否已持有降级名额（保证 begin/end 严格配对）。
+  bool _holding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.animation.addStatusListener(_onStatus);
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RouteTransitionScope oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.animation != widget.animation) {
+      oldWidget.animation.removeStatusListener(_onStatus);
+      widget.animation.addStatusListener(_onStatus);
+      _sync();
+    }
+  }
+
+  void _onStatus(AnimationStatus status) => _sync();
+
+  void _sync() {
+    final reversing =
+        widget.animation.status == AnimationStatus.reverse;
+    if (reversing && !_holding) {
+      _holding = true;
+      RouteTransitionSignal.beginReverse();
+    } else if (!reversing && _holding) {
+      _holding = false;
+      RouteTransitionSignal.endReverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.animation.removeStatusListener(_onStatus);
+    if (_holding) {
+      _holding = false;
+      RouteTransitionSignal.endReverse();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// 内容淡切：子树替换时以 [MotionDurations.base] 交叉淡入淡出。

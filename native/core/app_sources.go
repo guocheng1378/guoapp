@@ -124,6 +124,7 @@ func (engine *nativeEngine) saveSourceRecordsLocked() error {
 
 func (engine *nativeEngine) sourceStatus(source string) nativeSourceStatus {
 	source = canonicalProviderSource(source)
+	engine.ensureLoaded()
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	return engine.sourceStatusLocked(source)
@@ -166,6 +167,7 @@ func (engine *nativeEngine) changeSourceRecord(source string, change func(*nativ
 
 func (engine *nativeEngine) startSourceTask(source, operation string, drama nativeDrama) (nativeSourceStatus, error) {
 	source = canonicalProviderSource(source)
+	engine.ensureLoaded()
 	if !nativeSourceAvailable(source) {
 		return nativeSourceStatus{}, errNativeBuildSource
 	}

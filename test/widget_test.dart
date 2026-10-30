@@ -90,6 +90,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(local.isFavorite(FixtureRepository.free.id), isTrue);
     for (final episode in [1, 2]) {
+      // 周期保存默认静默（notify=false）；这里模拟「离开播放页」的刷新时机。
       await local.saveWatch(
         WatchEntry(
           drama: FixtureRepository.free,
@@ -98,6 +99,7 @@ void main() {
           duration: 90,
           updatedAt: DateTime.now(),
         ),
+        notify: true,
       );
       await tester.pumpAndSettle();
       expect(find.text('继续播放 · 第 $episode 集'), findsOneWidget);

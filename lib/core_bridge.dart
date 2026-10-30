@@ -16,6 +16,7 @@ import 'local_store.dart';
 import 'app_build.dart';
 import 'source_status.dart';
 import 'ranking_models.dart';
+import 'home_feed_models.dart';
 import 'live_models.dart';
 import 'cover_decoder.dart';
 import 'catalog_updates.dart';
@@ -60,6 +61,212 @@ String _nativeRequest(String body) {
   }
 }
 
+/// 常驻 worker 的入口：一次请求进、一次结果出。
+///
+/// 只做「调用原生 + 原样回传」，不缓存任何业务状态；isolate 由
+/// [_NativeCallPool] 复用，进程级存活。
+void _nativeWorkerMain(SendPort reply) {
+  final requests = ReceivePort();
+  reply.send(requests.sendPort);
+  requests.listen((dynamic message) {
+    if (message is! String) return;
+    try {
+      reply.send(<Object?>[true, _nativeRequest(message)]);
+    } on Object catch (error) {
+      reply.send(<Object?>[false, error.toString()]);
+    }
+  });
+}
+
+class _NativeCallError implements Exception {
+  _NativeCallError(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+class _NativeJob {
+  _NativeJob(this.body, this.timeout);
+  final String body;
+  final Duration timeout;
+  final Completer<String> _completer = Completer<String>();
+  Timer? timer;
+
+  Future<String> get future => _completer.future;
+
+  bool get finished => _completer.isCompleted;
+
+  void finish(List<Object?> message) {
+    timer?.cancel();
+    if (_completer.isCompleted) return;
+    final bool ok = message.isNotEmpty && message.first == true;
+    final String payload = message.length > 1 ? '${message[1]}' : '';
+    if (ok) {
+      _completer.complete(payload);
+    } else {
+      _completer.completeError(_NativeCallError(payload));
+    }
+  }
+
+  void fail(Object error) {
+    timer?.cancel();
+    if (!_completer.isCompleted) _completer.completeError(error);
+  }
+}
+
+class _NativeWorker {
+  _NativeWorker(this._onIdle) : replies = ReceivePort() {
+    replies.listen(_handle);
+  }
+
+  final void Function() _onIdle;
+  final ReceivePort replies;
+  final Completer<SendPort> _ready = Completer<SendPort>();
+  Isolate? _isolate;
+  SendPort? _port;
+  _NativeJob? job;
+
+  SendPort get port => _port!;
+
+  static Future<_NativeWorker> start(void Function() onIdle) async {
+    final worker = _NativeWorker(onIdle);
+    try {
+      worker._isolate = await Isolate.spawn<SendPort>(
+        _nativeWorkerMain,
+        worker.replies.sendPort,
+        debugName: 'duanju-core',
+      );
+      worker._port = await worker._ready.future.timeout(
+        const Duration(seconds: 10),
+      );
+      return worker;
+    } on Object {
+      worker.dispose();
+      rethrow;
+    }
+  }
+
+  void _handle(dynamic message) {
+    if (message is SendPort) {
+      if (!_ready.isCompleted) _ready.complete(message);
+      return;
+    }
+    final _NativeJob? current = job;
+    job = null;
+    if (current == null) return;
+    current.finish(message as List<Object?>);
+    _onIdle();
+  }
+
+  void dispose() {
+    replies.close();
+    final Isolate? isolate = _isolate;
+    _isolate = null;
+    isolate?.kill(priority: Isolate.immediate);
+  }
+}
+
+/// 常驻原生调用池（替代每请求一次 `Isolate.run`）。
+///
+/// 原生核心是 CGO 共享库，`DuanjuRequest` 内部本就按请求并发（Go 侧每个请求
+/// 独立 goroutine）。此前每次调用都新建 isolate：封面、分页、详情这类高频短
+/// 请求要付一次 isolate 创建 + 消息深拷贝 + 销毁的代价。这里改成按需扩容的
+/// 常驻池——每个 worker 同一时刻只跑一个请求，满载才排队，既保留原有并发度
+/// （长目录请求不会把封面堵死），又去掉每请求的 isolate 开销。
+///
+/// 原生调用无法被打断，因此超时的 worker 直接退役（kill 后由新 worker 顶上），
+/// 迟到结果丢弃。超时语义与 `Future.timeout` 时代一致，且随后的 `cancelRead`
+/// 会落在新 worker 上真正生效。
+class _NativeCallPool {
+  static const int limit = 6;
+
+  final List<_NativeWorker> _workers = <_NativeWorker>[];
+  final List<_NativeJob> _pending = <_NativeJob>[];
+  int _spawning = 0;
+  bool _spawnBlocked = false;
+  Object? _spawnError;
+
+  Future<String> send(String body, Duration timeout) {
+    final Object? blocked = _spawnError;
+    if (_spawnBlocked && _workers.isEmpty && blocked != null) {
+      return Future<String>.error(blocked);
+    }
+    final job = _NativeJob(body, timeout);
+    _pending.add(job);
+    _pump();
+    return job.future;
+  }
+
+  void _pump() {
+    while (_pending.isNotEmpty) {
+      final _NativeWorker? worker = _idle();
+      if (worker != null) {
+        _dispatch(worker, _pending.removeAt(0));
+        continue;
+      }
+      if (_spawnBlocked) {
+        if (_workers.isNotEmpty) return; // 还有 worker 在场，等它空闲。
+        final Object error = _spawnError ?? StateError('原生调用线程启动失败');
+        final List<_NativeJob> jobs = List<_NativeJob>.of(_pending);
+        _pending.clear();
+        for (final _NativeJob job in jobs) {
+          job.fail(error);
+        }
+        return;
+      }
+      if (_workers.length + _spawning >= limit) return;
+      _spawn();
+      return;
+    }
+  }
+
+  _NativeWorker? _idle() {
+    for (final _NativeWorker worker in _workers) {
+      if (worker.job == null) return worker;
+    }
+    return null;
+  }
+
+  void _spawn() {
+    _spawning++;
+    _NativeWorker.start(_pump).then<void>((_NativeWorker worker) {
+      _spawning--;
+      _workers.add(worker);
+      _pump();
+    }, onError: (Object error) {
+      _spawning--;
+      _spawnBlocked = true;
+      _spawnError = error;
+      _pump();
+    });
+  }
+
+  void _dispatch(_NativeWorker worker, _NativeJob job) {
+    worker.job = job;
+    job.timer = Timer(job.timeout, () {
+      if (job.finished) return;
+      _retire(worker);
+      job.fail(TimeoutException('本地核心响应超时', job.timeout));
+      _pump();
+    });
+    try {
+      worker.port.send(job.body);
+    } on Object catch (error) {
+      _retire(worker);
+      job.fail(error);
+      _pump();
+    }
+  }
+
+  void _retire(_NativeWorker worker) {
+    _workers.remove(worker);
+    worker.job = null;
+    worker.dispose();
+  }
+}
+
+final _NativeCallPool _nativeCallPool = _NativeCallPool();
+
 /// 远程站源配置热更（config.source）：把 app_config.json 的 sourceConfig 段
 /// 转发核心应用（黄果AI 镜像表 / 真果·鉴根地址）。核心侧权威校验（scheme、
 /// 去重、上限），非法段整段拒绝并保持当前生效值；本调用静默尽力而为，桥
@@ -71,15 +278,39 @@ Future<void> applyNativeSourceConfig(Map<String, dynamic> sourceConfig) async {
       'action': 'config.source',
       'sourceConfig': sourceConfig,
     });
-    final encoded =
-        await Isolate.run(() => _nativeRequest(body)).timeout(
-              const Duration(seconds: 10),
-            );
+    final encoded = await _nativeCallPool.send(
+      body,
+      const Duration(seconds: 10),
+    );
     final response = jsonDecode(encoded);
     // applied=false（核心校验拒绝）同样静默：保持内置兜底值即可。
     if (response is Map && response['ok'] != true) return;
   } on Object {
     // 尽力而为。
+  }
+}
+
+/// 强制冲刷原生侧的剧库落盘合并窗。
+///
+/// 剧库落盘改成合并窗后，连续翻页只落盘一次；切后台/退出/切源前必须冲一次，
+/// 否则窗口里待写的快照会随进程一起消失（重启后看不到最后一次变更）。
+/// 与用户态无关、不经 _call 的访问锁与 profileEpoch 检查。
+///
+/// 返回核心是否确认落盘成功：桥不可用 / 超时 / 核心报错（磁盘满等）都算
+/// 失败。核心侧对临时故障已有 5 秒退避重试，这里不二次重试，调用方按需
+/// 决定后续动作（切后台/退出路径通常只能静默）。
+Future<bool> flushNativeCatalogWrites() async {
+  try {
+    final body = jsonEncode(<String, dynamic>{'action': 'flush'});
+    final encoded = await _nativeCallPool.send(
+      body,
+      const Duration(seconds: 10),
+    );
+    final response = jsonDecode(encoded);
+    return response is Map && response['ok'] == true;
+  } on Object {
+    // 尽力而为：冲刷失败不打断切后台/退出流程。
+    return false;
   }
 }
 
@@ -173,6 +404,31 @@ abstract class AppRepository {
   Future<void> cancelCatalog() async {}
   Future<void> cancelSuggestions() async {}
   Future<void> cancelRecommendations() async {}
+  Future<void> cancelHomeFeed() async {}
+
+  /// 远端主页板块：整份板块清单来自站点，App 不内置。不支持的源直接抛错，
+  /// UI 侧据此降级（退回原有本地浏览）。
+  Future<HomeFeed> homeFeed(
+    String source, {
+    bool force = false,
+  }) async =>
+      throw AppFailure('当前环境不支持主页板块');
+
+  /// 板块完整榜单（点分类进入）：翻页参数由站点 browse 描述驱动。
+  Future<CatalogPage> homeSection(
+    String source,
+    String sectionId, {
+    int page = 1,
+    bool force = false,
+  }) async =>
+      throw AppFailure('当前环境不支持主页板块');
+
+  /// 追剧周表（「本周追剧」）：站点 /v1/watch-calendar，按天分组。
+  Future<WatchCalendar> watchCalendar(
+    String source, {
+    bool force = false,
+  }) async =>
+      throw AppFailure('当前环境不支持追剧周表');
   Future<Drama?> supplementMetadata(Drama drama) async => null;
   Future<CatalogPage> recommendations(
     String genre, {
@@ -195,6 +451,10 @@ abstract class AppRepository {
     bool force = false,
   }) async => const [CatalogCategory.all];
   bool get supportsSourceManagement => false;
+
+  /// 真果·鉴「仅官方线路」策略下发（见 LocalStore.dongpiandiOfficialOnly）。
+  Future<void> setDongpiandiOfficialOnly(bool value) async {}
+
   Future<SourceStatus> sourceStatus(String source) async =>
       SourceStatus.fromJson({'source': source});
   Future<SourceStatus> startSourceJob(
@@ -503,6 +763,60 @@ class NativeRepository extends AppRepository {
   Future<void> cancelSuggestions() => _cancelReads('suggest');
   @override
   Future<void> cancelRecommendations() => _cancelReads('recommendations-');
+  @override
+  Future<void> cancelHomeFeed() async {
+    await _cancelReads('homeFeed-');
+    await _cancelReads('homeCalendar-');
+  }
+
+  @override
+  Future<HomeFeed> homeFeed(String source, {bool force = false}) async {
+    final json = await _read('homeFeed-$source', {
+      'action': 'homeFeed',
+      'source': source,
+      'force': force,
+    });
+    final feed = HomeFeed.fromJson(json);
+    if (feed.sections.isNotEmpty) {
+      prefetchDetails(feed.sections.first.items.take(12));
+    }
+    return feed;
+  }
+
+  @override
+  Future<CatalogPage> homeSection(
+    String source,
+    String sectionId, {
+    int page = 1,
+    bool force = false,
+  }) async {
+    final result = CatalogPage.fromJson(
+      await _read('homeSection-$sectionId-$page', {
+        'action': 'homeSection',
+        'source': source,
+        'category': sectionId,
+        'page': page,
+        'force': force,
+      }),
+    );
+    if (page == 1 && result.items.isNotEmpty) {
+      prefetchDetails(result.items.take(12));
+    }
+    return result;
+  }
+
+  @override
+  Future<WatchCalendar> watchCalendar(
+    String source, {
+    bool force = false,
+  }) async =>
+      WatchCalendar.fromJson(
+        await _read('homeCalendar-$source', {
+          'action': 'homeCalendar',
+          'source': source,
+          'force': force,
+        }),
+      );
 
   @override
   Future<CatalogPage> recommendations(
@@ -543,6 +857,11 @@ class NativeRepository extends AppRepository {
 
   @override
   bool get supportsSourceManagement => true;
+
+  @override
+  Future<void> setDongpiandiOfficialOnly(bool value) async {
+    await _call({'action': 'dongpiandi.officialOnly', 'officialOnly': value});
+  }
 
   @override
   Future<List<RankingBoard>> rankingBoards() async {
@@ -798,7 +1117,8 @@ class NativeRepository extends AppRepository {
         input['force'] = true;
       }
       final body = jsonEncode(input);
-      final encoded = await Isolate.run(() => _nativeRequest(body)).timeout(
+      final encoded = await _nativeCallPool.send(
+        body,
         Duration(
           seconds: action == 'moveDownloads'
               ? 620

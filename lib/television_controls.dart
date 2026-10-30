@@ -491,6 +491,8 @@ class TelevisionEpisodeDialog extends StatelessWidget {
           itemBuilder: (_, index, node, onFocus) => RemoteEpisodeButton(
             key: ValueKey('tv-select-episode-${episodes[index].number}'),
             number: episodes[index].number,
+            label: episodes[index].remoteLabel,
+            semanticsLabel: episodes[index].title,
             vip: episodes[index].vip,
             current: index == currentIndex,
             focusNode: node,
@@ -544,9 +546,13 @@ class TelevisionSettingsDialog extends StatelessWidget {
     this.preloadStatus = '',
     this.enhancement,
     this.onCompareEnhancement,
+    this.actualQuality = 0,
   });
   final double speed;
   final int quality;
+
+  /// 本集实际播放的档位；[quality] 为 0（用户没选过档）时高亮用它。
+  final int actualQuality;
   final List<int> qualities;
   final bool favorite;
   final VoidCallback onFavorite;
@@ -592,28 +598,31 @@ class TelevisionSettingsDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 20),
-            const Text('清晰度', style: TextStyle(fontSize: 18)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final value in [
-                  0,
-                  ...qualities.where((value) => value > 0).toSet(),
-                ])
-                  RemoteButton(
-                    key: ValueKey('tv-quality-$value'),
-                    label: value == 0 ? '自动（优先高清）' : '${value}P',
-                    selected: value == quality,
-                    onPressed: () => Navigator.pop(
-                      context,
-                      TelevisionPlaybackSetting(quality: value),
+            // 与手机端同口径：站点没有画质档位时整段不显示，不摆空标题。
+            if (qualities.any((value) => value > 0)) ...[
+              const Text('清晰度', style: TextStyle(fontSize: 18)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  // 不再提供「自动」档，只列具体分辨率。
+                  for (final value
+                      in qualities.where((value) => value > 0).toSet())
+                    RemoteButton(
+                      key: ValueKey('tv-quality-$value'),
+                      label: '${value}P',
+                      selected:
+                          value == (quality > 0 ? quality : actualQuality),
+                      onPressed: () => Navigator.pop(
+                        context,
+                        TelevisionPlaybackSetting(quality: value),
+                      ),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 20),
+                ],
+              ),
+              const SizedBox(height: 20),
+            ],
             if (enhancement != null)
               VideoEnhancementSettings(
                 controller: enhancement!,

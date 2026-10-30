@@ -80,6 +80,37 @@ func TestNativeNormalizeEpisodesTrustLevels(t *testing.T) {
 	}
 }
 
+// 「同主演推荐」依赖主演字段一路穿到 Dart 的 Drama.actors（json key 对齐断言）。
+func TestNativeNormalizeActorsPassthrough(t *testing.T) {
+	drama := nativeNormalize(Drama{ID: "dongpiandi:1", Title: "主演测试", Actors: []string{"陆之屿", "白桃"}})
+	if len(drama.Actors) != 2 || drama.Actors[0] != "陆之屿" {
+		t.Fatalf("actors 未透传: %+v", drama.Actors)
+	}
+	data, err := json.Marshal(drama)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"actors":["陆之屿","白桃"]`) {
+		t.Fatalf("json key mismatch for actors: %s", data)
+	}
+	empty := nativeNormalize(Drama{ID: "hongguo:1", Title: "无主演"})
+	if len(empty.Actors) != 0 {
+		t.Fatalf("无主演应为空: %+v", empty.Actors)
+	}
+}
+
+// 简介页合并详情（mergeNativeDrama）时主演以详情为准，详情没给不能清掉列表已有的。
+func TestMergeNativeDramaActors(t *testing.T) {
+	base := nativeNormalize(Drama{ID: "dongpiandi:1", Title: "合并测试"})
+	fresh := nativeNormalize(Drama{ID: "dongpiandi:1", Title: "合并测试", Actors: []string{"陆之屿"}})
+	if merged := mergeNativeDrama(base, fresh); len(merged.Actors) != 1 || merged.Actors[0] != "陆之屿" {
+		t.Fatalf("详情主演应保留: %+v", merged.Actors)
+	}
+	if merged := mergeNativeDrama(fresh, base); len(merged.Actors) != 1 {
+		t.Fatalf("详情缺主演时不应清掉已有的: %+v", merged.Actors)
+	}
+}
+
 func TestNativeBoundaryRejectsInvalidInput(t *testing.T) {
 	for _, input := range []string{"{", strings.Repeat("x", 1<<20+1)} {
 		var result map[string]any

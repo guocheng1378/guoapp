@@ -22,7 +22,9 @@ class FixtureRepository extends AppRepository {
     title: '测试短剧',
     episodes: 2,
     category: '合成数据',
-    // 20 分钟 > 600 秒：显式定性长剧，保播放器存量用例走旧分支。
+    // 显式定性长剧：长短剧判定已不看时长（时长会漂移），改由 contentKind
+    // 定性，保播放器存量用例继续走长剧分支（短剧会进竖屏全屏形态）。
+    contentKind: 'long',
     duration: 1200,
   );
   static const vip = Drama(
@@ -31,10 +33,18 @@ class FixtureRepository extends AppRepository {
     title: '会员测试剧',
     episodes: 4,
     vip: true,
+    contentKind: 'long',
     duration: 1200,
   );
+  // 「仅官方线路」下发流水（设置页开关与启动引导都应落到这里）。
+  final officialOnlyValues = <bool>[];
   @override
   Future<void> initialize() async {}
+  @override
+  Future<void> setDongpiandiOfficialOnly(bool value) async {
+    officialOnlyValues.add(value);
+  }
+
   @override
   Future<RankingPage> rankings(
     String board, {

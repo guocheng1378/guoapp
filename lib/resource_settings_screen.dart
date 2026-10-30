@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'app_scaffold.dart';
 import 'download_preferences.dart';
 import 'glass.dart';
 import 'local_store.dart';
@@ -184,16 +185,14 @@ class _ResourceSettingsScreenState extends State<ResourceSettingsScreen> {
       );
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('网络与资源'),
-      actions: [
-        TextButton(
-          onPressed: _busy || _settings == null || !_allowed ? null : _save,
-          child: const Text('保存'),
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => AppScaffold(
+    title: '网络与资源',
+    actions: [
+      TextButton(
+        onPressed: _busy || _settings == null || !_allowed ? null : _save,
+        child: const Text('保存'),
+      ),
+    ],
     body: !_allowed
         ? const StatusPanel(title: '需要管理员权限', message: '请返回后切换管理员。')
         : _settings == null

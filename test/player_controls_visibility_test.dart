@@ -53,7 +53,7 @@ void main() {
   /// 控制栏是否可交互：控件层用 IgnorePointer(ignoring: !visible) 包着，
   /// 只要祖先链上有任意一个 IgnorePointer 在忽略，就认为不可见。
   bool controlsVisible(WidgetTester tester) {
-    final tool = find.byKey(const ValueKey('player-fullscreen-toggle'));
+    final tool = find.byKey(const ValueKey('player-portrait-fullscreen'));
     if (tool.evaluate().isEmpty) return false;
     final blockers = find.ancestor(
       of: tool,
@@ -121,38 +121,27 @@ void main() {
     await unmount(tester, player);
   });
 
-  testWidgets('中间 HUD 只留播放/暂停按钮，且比上下控制栏先收起', (tester) async {
+  testWidgets('中央不再挂常驻播放键：控制栏收起后画面上没有播放按钮', (tester) async {
     final player = await mount(tester);
     await tester.pump(const Duration(seconds: 3));
     expect(controlsVisible(tester), isFalse);
+    expect(
+      find.byTooltip('暂停播放'),
+      findsNothing,
+      reason: '控制栏收起后中央不能还留一颗独立生命周期的播放键',
+    );
 
     await tapScreen(tester, gestureArea(tester).center);
-    final pauseButton = find.byTooltip('暂停播放');
-    expect(pauseButton, findsOneWidget);
     expect(
-      find.byTooltip('上一集'),
-      findsNothing,
-      reason: '切集走竖滑手势和选集面板，中间不再摆上一集按钮',
+      find.byKey(const ValueKey('player-play-pause')),
+      findsOneWidget,
+      reason: '播放/暂停只在下行工具行里出现一次',
     );
-    expect(find.byTooltip('下一集'), findsNothing);
+    expect(find.byTooltip('暂停播放'), findsOneWidget);
 
-    // tapScreen 自带 400ms 双击仲裁等待；中间 HUD 1.5s 收起 + 200ms 淡出下线，
-    // 拆两段泵避开 1.7s 的边界
-    await tester.pump(const Duration(milliseconds: 1200));
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(
-      pauseButton,
-      findsNothing,
-      reason: '中间按钮 1.5 秒先收，不能拖到控制栏之后',
-    );
-    expect(
-      controlsVisible(tester),
-      isTrue,
-      reason: '上下控制栏 2.5 秒才收，比中间晚',
-    );
-
-    await tester.pump(const Duration(milliseconds: 1000));
-    expect(controlsVisible(tester), isFalse, reason: '累计 2.9 秒后上下也收起');
+    await tester.pump(const Duration(seconds: 3));
+    expect(controlsVisible(tester), isFalse, reason: '2.5 秒后整条控制栏收起');
+    expect(find.byTooltip('暂停播放'), findsNothing);
     await unmount(tester, player);
   });
 

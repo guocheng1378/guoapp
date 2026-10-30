@@ -905,6 +905,8 @@ class RemoteEpisodeButton extends StatelessWidget {
     this.vip = false,
     this.current = false,
     this.compact = false,
+    this.label,
+    this.semanticsLabel,
     this.focusNode,
     this.onFocus,
   });
@@ -912,44 +914,80 @@ class RemoteEpisodeButton extends StatelessWidget {
   final bool vip;
   final bool current;
   final bool compact;
+  /// 站点下发的分集标题（Episode.remoteLabel，紧凑写法）：非空时替代
+  /// 数字显示。真果·鉴的分集常是批次打包（一个按钮 = 1-20 集合集），
+  /// 只画序号会跟实际内容对不上，有文字就优先画文字。
+  final String? label;
+  /// 读屏用的完整标题（站点原文，如「第1-20集」）：格子放不下全称时
+  /// 显示走 [label] 的紧凑写法，播报仍要念完整语义。缺省与 [label] 相同。
+  final String? semanticsLabel;
   final VoidCallback onPressed;
   final FocusNode? focusNode;
   final VoidCallback? onFocus;
 
   @override
-  Widget build(BuildContext context) => RemoteTarget(
-    focusNode: focusNode,
-    onFocus: onFocus,
-    selected: current,
-    radius: compact ? 8 : 14,
-    padding: compact ? const EdgeInsets.all(2) : const EdgeInsets.all(4),
-    borderWidth: compact ? 1.2 : 2,
-    outlined: true,
-    onPressed: onPressed,
-    label: '第 $number 集${vip ? '，VIP 试看' : ''}',
-    child: Center(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              '$number',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: compact ? 14 : 20,
-                fontWeight: current ? FontWeight.w700 : FontWeight.w500,
-              ),
+  Widget build(BuildContext context) {
+    final caption = label?.trim() ?? '';
+    final titled = caption.isNotEmpty;
+    final spoken = semanticsLabel?.trim() ?? '';
+    return RemoteTarget(
+      focusNode: focusNode,
+      onFocus: onFocus,
+      selected: current,
+      // 形态：方形圆角矩形（用户 2026-10-29「那些大胶囊换成方的」——剧集格子
+      // 是方块，不做药丸）。
+      radius: compact ? 8 : 14,
+      padding: compact
+          ? const EdgeInsets.symmetric(horizontal: 4, vertical: 2)
+          : const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      borderWidth: compact ? 1.2 : 2,
+      outlined: true,
+      onPressed: onPressed,
+      label: '${titled && spoken.isNotEmpty ? spoken : (titled ? caption : '第 $number 集')}'
+          '${vip ? '，VIP 试看' : ''}',
+      child: Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              // 文字比数字长得多：降一档字号，超宽时整体等比缩小而不是打
+              // 省略号——「彩蛋10」被切成「彩…」就等于没显示文字。
+              child: titled
+                  ? FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        caption,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          fontSize: compact ? 11 : 13,
+                          fontWeight: current
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    )
+                  : Text(
+                      '$number',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: compact ? 14 : 20,
+                        fontWeight: current
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
             ),
-          ),
-          if (vip) ...[
-            SizedBox(width: compact ? 2 : 4),
-            AppIcon(AppIcons.premium, size: compact ? 15 : 18, color: Theme.of(context).colorScheme.tertiary),
+            if (vip) ...[
+              SizedBox(width: compact ? 2 : 4),
+              AppIcon(AppIcons.premium, size: compact ? 15 : 18, color: Theme.of(context).colorScheme.tertiary),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// 电视模式下的选项列表对话框，全部选项都可用遥控器移动和确认。

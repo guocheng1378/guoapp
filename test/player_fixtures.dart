@@ -104,6 +104,12 @@ class ScriptedPlayer extends PlatformPlayer {
     playingController.add(false);
   }
 
+  /// 测试用：把播放位置推到 [position] 并广播事件（包装 protected 的流）。
+  void pushPosition(Duration position) {
+    state = state.copyWith(position: position);
+    positionController.add(position);
+  }
+
   void videoSize(int width, int height) {
     videoParamsController.add(
       VideoParams(w: width, h: height, dw: width, dh: height),
@@ -156,10 +162,20 @@ class RouteRepository extends FixtureRepository {
   List<String> routeLabels = const ['无水印资源', '索尼资源'];
   List<bool> routeOfficial = const [];
 
+  /// 初始线路索引（默认 0 = 第一条）：用例可设成 routeCount-1 模拟
+  /// 「当前已在最后一条线路」——线路入口必须仍在（旧实现按 hasAlternative
+  /// 判定，最后一条时入口整个消失，用户再也切不回来）。
+  int initialRouteIndex = 0;
+
+  /// 站点画质档位可由用例覆写：默认带两档；置成 `quality = 0` 且
+  /// `qualities = const []` 模拟「站点根本没有画质档位」的源。
+  int quality = 1080;
+  List<int> qualities = const [1080, 720];
+
   PlaybackPlan plan(bool alternate, {int route = -1}) {
     final session = 'route-${primaryCalls + fallbackCalls + selectCalls}';
     active.add(session);
-    final index = route >= 0 ? route : (alternate ? 1 : 0);
+    final index = route >= 0 ? route : (alternate ? 1 : initialRouteIndex);
     return PlaybackPlan(
       url: 'https://media.test/${broken ? 'broken' : 'working'}-$session.mp4',
       session: session,
@@ -167,8 +183,8 @@ class RouteRepository extends FixtureRepository {
       routeCount: routeLabels.length,
       routeLabels: routeLabels,
       routeOfficial: routeOfficial,
-      quality: 1080,
-      qualities: const [1080, 720],
+      quality: quality,
+      qualities: qualities,
     );
   }
 

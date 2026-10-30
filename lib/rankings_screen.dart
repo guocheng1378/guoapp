@@ -6,7 +6,6 @@ import 'catalog_filters.dart';
 import 'core_bridge.dart';
 import 'detail_screen.dart';
 import 'featured_catalog.dart';
-import 'fog_tint_sampler.dart';
 import 'fog_tuning.dart';
 import 'folme.dart';
 import 'glass.dart';
@@ -70,10 +69,6 @@ class _RankingsScreenState extends State<RankingsScreen> {
   /// 接近度信号（主页同款真值）：滚动距离/50 clamp 0..1，驱动顶栏雾玻璃
   /// 岛白描边亮起；滚回顶部熄灭。同值不通知，滚动稳态零开销。
   final ValueNotifier<double> _prox = ValueNotifier<double>(0);
-
-  /// 雾面动态取色采样色（null=纯白雾）：FogTintSampler 节流采样内容区
-  /// 像素平均色，驱动顶部雾带染色（调参台 tintMix 控制浓度，与主页同源）。
-  final ValueNotifier<Color?> _fogTint = ValueNotifier<Color?>(null);
 
   /// 调参台「雾面高度」延伸量：雾面挂点高度随之增减（0=现状）。仅此
   /// 参数需要整页 rebuild（挂点高度变化），其余维度由 TopFog 内部监听
@@ -144,7 +139,6 @@ class _RankingsScreenState extends State<RankingsScreen> {
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _prox.dispose();
-    _fogTint.dispose();
     super.dispose();
   }
 
@@ -170,8 +164,8 @@ class _RankingsScreenState extends State<RankingsScreen> {
     return false;
   }
 
-  /// 主页同款雾化 body（手机/桌面）：沉浸延伸 + 动态取色 + 接近度监
-  /// 听；TV 走原样 SafeArea（遥控焦点链不动）。
+  /// 主页同款雾化 body（手机/桌面）：沉浸延伸 + 接近度监听；TV 走原样
+  /// SafeArea（遥控焦点链不动）。
   ///
   /// 雾带挂在吸顶筛选头内（_pinnedFiltersBar，与主页 tab0 同构）：整
   /// 条盖住状态栏→顶栏→筛选行，内容滚动穿到其后方时被糊化提亮、色跟
@@ -183,23 +177,17 @@ class _RankingsScreenState extends State<RankingsScreen> {
     required Widget child,
   }) {
     if (!floatingFog) return SafeArea(top: false, child: child);
-    return FogTintSampler(
-      tint: _fogTint,
-      // 采样行带避开顶部雾带自身（防反馈循环），与首页接线同参。
-      sampleBandStart: 0.30,
-      sampleBandEnd: 0.62,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: _onBodyScroll,
-        child: Stack(
-          children: [
-            // 主页铁律（home_screen._catalogFloating）：滚动视口必须从
-            // 屏幕顶端 y=0 铺满，内容上滑才能穿进雾带后方被糊化；初始
-            // 下移交给吸顶头自身 extent。视口压在 topInset 处会被上边
-            // 缘裁剪成「雾面背后只有背景色」的假透（糊一块死背景堵在
-            // 顶上）。雾带在吸顶头内（pinned 首位 sliver），不再外挂。
-            Positioned.fill(child: SafeArea(top: false, child: child)),
-          ],
-        ),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onBodyScroll,
+      child: Stack(
+        children: [
+          // 主页铁律（home_screen._catalogFloating）：滚动视口必须从
+          // 屏幕顶端 y=0 铺满，内容上滑才能穿进雾带后方被糊化；初始
+          // 下移交给吸顶头自身 extent。视口压在 topInset 处会被上边
+          // 缘裁剪成「雾面背后只有背景色」的假透（糊一块死背景堵在
+          // 顶上）。雾带在吸顶头内（pinned 首位 sliver），不再外挂。
+          Positioned.fill(child: SafeArea(top: false, child: child)),
+        ],
       ),
     );
   }
@@ -222,10 +210,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
             left: 0,
             right: 0,
             height: _fogBandHeight(topInset + rowsExtent),
-            child: ValueListenableBuilder<Color?>(
-              valueListenable: _fogTint,
-              builder: (_, tint, _) => TopFog(tint: tint),
-            ),
+            child: const TopFog(),
           ),
           Padding(
             padding: EdgeInsets.only(top: topInset),

@@ -383,12 +383,14 @@ class PlayerInteractions extends ChangeNotifier {
       _showHud(SwipeAction.seek, progress, position: targetDur);
     } else if (_swipeAction == SwipeAction.episode) {
       // 中间竖滑：上滑下一集、下滑上一集；达到阈值立即切一次，
-      // 本次手势内锁定，避免连滑连续跳集
+      // 本次手势内锁定，避免连滑连续跳集。阈值 20% 屏高——12% 太容易
+      // 在「想滚动一下」时误切集；跨阈值补一次中等震动告诉用户已触发。
       if (_episodeFired || onEpisode == null) return;
       final dy = _origin!.dy - event.localPosition.dy;
-      if (dy.abs() < _viewHeight * 0.12) return;
+      if (dy.abs() < _viewHeight * 0.20) return;
       _episodeFired = true;
       final forward = dy > 0;
+      unawaited(HapticFeedback.mediumImpact());
       final label = onEpisode!(forward ? 1 : -1);
       _showHud(SwipeAction.episode, forward ? 1 : -1, label: label);
     }

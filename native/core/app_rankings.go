@@ -12,6 +12,10 @@ import (
 )
 
 func (d *Downloader) loadRankingCache() {
+	d.rankingOnce.Do(d.loadRankingCacheLocked)
+}
+
+func (d *Downloader) loadRankingCacheLocked() {
 	cache := &d.rankings
 	cache.pages, cache.pending = map[string]rankingPage{}, map[string]*rankingCall{}
 	file, err := os.Open(filepath.Join(d.cfg.dataDir, "rankings.json"))
@@ -92,6 +96,7 @@ func (d *Downloader) flushRankingCacheLocked() {
 }
 
 func (engine *nativeEngine) nativeRanking(ctx context.Context, input nativeInput) (any, error) {
+	engine.ensureLoaded()
 	board, found := findRankingBoard(input.Board)
 	if !found || !nativeSourceAvailable(board.Source) {
 		return nil, errNativeBuildSource

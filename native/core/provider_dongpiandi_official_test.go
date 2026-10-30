@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func resetDongpiandiLineCache(t *testing.T) {
@@ -85,7 +86,7 @@ func TestDongpiandiProbeCandidatesKeepOfficial(t *testing.T) {
 		{URL: "http://a.test/4.m3u8", URLKind: "m3u8", Resolved: true, PreferenceWeight: 920},
 		{URL: "http://a.test/official.m3u8", URLKind: "m3u8", Resolved: true, Official: true, PreferenceWeight: 100},
 	}
-	candidates := dongpiandiProbeCandidates(lines)
+	candidates := dongpiandiProbeCandidates(context.Background(), lines)
 	var found bool
 	for _, line := range candidates {
 		if line.Official {
@@ -181,7 +182,7 @@ func TestDongpiandiRouteLinesUsesCachedLines(t *testing.T) {
 	dongpiandiCacheLines("av_cached", []dongpiandiLine{
 		{URL: "http://cached.test/official.mp4", Label: "官方线甲", Resolved: true, Official: true},
 		{URL: "http://cached.test/third.m3u8", Label: "新浪资源", Resolved: true},
-	})
+	}, true)
 	// 站点根指向拒绝连接地址：缓存命中时不应发起任何网络请求。
 	withDongpiandiBaseURL(t, "http://127.0.0.1:1")
 	downloader := &Downloader{}
@@ -252,5 +253,259 @@ func TestDongpiandiDetailRedeemsOfficialsAndCaches(t *testing.T) {
 	// 缓存内容是可 JSON 往返的（不含不可序列化字段），供播放期直接转 Variants。
 	if _, err := json.Marshal(cached); err != nil {
 		t.Fatalf("cache must be marshable: %v", err)
+	}
+}
+
+// 兑换被限流（429/空响应）导致官方线残缺时：三方直连照常进缓存（长效，
+// 这些集不必每次播放都重新 resolve），官方部分不刷新——既不把上一次兑好的
+// 官方线擦掉，也不会把残缺官方钉进缓存。
+func TestDongpiandiDetailCachesThirdLineWhenRedeemIncomplete(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	var srv *httptest.Server
+	var redeemCalls atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/catalog/"):
+			fmt.Fprintf(w, `{"id":"av_d2","title":"限流剧","content_kind":"short_drama","available_episode_count":1,"total_episode_count":1,"episodes":[{"id":"av_e2","title":"第1集","token":"tk-ep2"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/v1/playback/resolve/"):
+			fmt.Fprintf(w, `{"object":"playback.resolve","line_options":[
+				{"id":"l1","label":"新浪资源","url":"%s/third/index.m3u8","url_kind":"m3u8","resolved":true,"preference_weight":900},
+				{"id":"l2","label":"1080P-官方S","url":"resolve://tk-limited","url_kind":"resolve_ticket","resolved":false}]}`, srv.URL)
+		case r.URL.Path == "/v1/users/anonymous":
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/v1/playback/resolve-line":
+			// 模拟站点限流：兑换永远返回空响应。
+			redeemCalls.Add(1)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	srv = httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	withDongpiandiBaseURL(t, srv.URL)
+
+	downloader := &Downloader{}
+	_, chapters, err := downloader.fetchDongpiandiDetail(context.Background(), "av_d2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 详情页是批量预兑换（几十集一起跑），不允许退避重试把页面拖成分钟级
+	// 转圈：单张票据只尝试一次，撞限流直接熔断。
+	if redeemCalls.Load() != 1 {
+		t.Fatalf("详情页兑换失败不应重试，实际尝试 %d 次", redeemCalls.Load())
+	}
+	if len(chapters) != 1 || chapters[0].VideoURL != srv.URL+"/third/index.m3u8" {
+		t.Fatalf("兑换失败时应回退三方直链: %+v", chapters)
+	}
+	cached := dongpiandiCachedLines("av_e2")
+	if len(cached) != 1 || cached[0].Official || !strings.Contains(cached[0].URL, "/third/index.m3u8") {
+		t.Fatalf("官方残缺时应只缓存三方直连: %+v", cached)
+	}
+}
+
+// 官方直链是 139 云盘预签名地址（实测 X-Amz-Expires=900），缓存必须短于
+// 15 分钟；三方直连长效。两套 TTL 独立过期。
+func TestDongpiandiLineCacheSplitsTTL(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	epID := "av_ttl"
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{URL: "http://cached.test/official.mp4", Label: "1080P-官方D", Official: true, Resolved: true},
+		{URL: "http://cached.test/third.m3u8", Label: "新浪资源", Resolved: true},
+	}, true)
+	if got := dongpiandiCachedLines(epID); len(got) != 2 {
+		t.Fatalf("刚写入应两条都在: %+v", got)
+	}
+	// 官方线过期、三方仍新鲜 → 只剩三方。
+	dongpiandiLinesMu.Lock()
+	entry := dongpiandiLinesCache[epID]
+	entry.officialAt = time.Now().Add(-dongpiandiOfficialLineTTL - time.Minute)
+	dongpiandiLinesCache[epID] = entry
+	dongpiandiLinesMu.Unlock()
+	if lines := dongpiandiCachedLines(epID); len(lines) != 1 || lines[0].Official {
+		t.Fatalf("官方直链过期后只应保留三方: %+v", lines)
+	}
+	// 三方也过期 → 整条缓存失效。
+	dongpiandiLinesMu.Lock()
+	entry = dongpiandiLinesCache[epID]
+	entry.thirdAt = time.Now().Add(-dongpiandiThirdLineTTL - time.Minute)
+	dongpiandiLinesCache[epID] = entry
+	dongpiandiLinesMu.Unlock()
+	if got := dongpiandiCachedLines(epID); len(got) != 0 {
+		t.Fatalf("两部分都过期应返回空: %+v", got)
+	}
+}
+
+// 一次限流丢线（officialComplete=false）不得把上一次兑好的官方线擦掉。
+func TestDongpiandiLineCacheKeepsOfficialOnIncomplete(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	epID := "av_keep"
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{URL: "http://cached.test/official.mp4", Label: "1080P-官方D", Official: true, Resolved: true},
+		{URL: "http://cached.test/third.m3u8", Label: "新浪资源", Resolved: true},
+	}, true)
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{URL: "http://cached.test/third2.m3u8", Label: "索尼资源", Resolved: true},
+	}, false)
+	lines := dongpiandiCachedLines(epID)
+	if len(lines) != 2 || !lines[0].Official || !strings.Contains(lines[1].URL, "third2") {
+		t.Fatalf("残缺刷新应保留官方线并替换三方: %+v", lines)
+	}
+}
+
+// 官方直链过期 + 网络不可用：线路表回退到缓存里的三方（不能整表返空，
+// 也别把已失效的官方地址递给播放器）。
+func TestDongpiandiRouteLinesFallsBackToThirdWhenOfficialStale(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	epID := "av_stale"
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{URL: "http://cached.test/official.mp4", Label: "1080P-官方D", Official: true, Resolved: true},
+		{URL: "http://cached.test/third.m3u8", Label: "新浪资源", Resolved: true},
+	}, true)
+	dongpiandiLinesMu.Lock()
+	entry := dongpiandiLinesCache[epID]
+	entry.officialAt = time.Now().Add(-dongpiandiOfficialLineTTL - time.Minute)
+	dongpiandiLinesCache[epID] = entry
+	dongpiandiLinesMu.Unlock()
+	withDongpiandiBaseURL(t, "http://127.0.0.1:1") // 网络必失败
+	lines := (&Downloader{}).dongpiandiRouteLines(context.Background(), Task{Chapter: Chapter{
+		ID:      providerDramaID(sourceDongpiandi, epID),
+		PageURL: "http://127.0.0.1:1/player/av_stale",
+	}})
+	if len(lines) != 1 || lines[0].Official {
+		t.Fatalf("官方过期且网络失败时应回退三方缓存: %+v", lines)
+	}
+}
+
+// 官方直链过期 + 站点可达：重解析把官方线重兑回来并刷新缓存。
+func TestDongpiandiRouteLinesRefreshesStaleOfficial(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	var srv *httptest.Server
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/catalog/"):
+			fmt.Fprint(w, `{"id":"av_r","title":"刷新剧","episodes":[{"id":"av_r1","title":"第1集","token":"tk-r"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/v1/playback/resolve/"):
+			fmt.Fprintf(w, `{"object":"playback.resolve","line_options":[
+				{"id":"l1","label":"新浪资源","url":"%s/third/index.m3u8","url_kind":"m3u8","resolved":true,"preference_weight":900},
+				{"id":"l2","label":"1080P-官方S","url":"resolve://tk-r","url_kind":"resolve_ticket","resolved":false}]}`, srv.URL)
+		case r.URL.Path == "/v1/users/anonymous":
+			fmt.Fprint(w, `{}`)
+		case r.URL.Path == "/v1/playback/resolve-line":
+			fmt.Fprintf(w, `{"line":{"url":"%s/official/clip.mp4","url_kind":"mp4"}}`, srv.URL)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	srv = httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	withDongpiandiBaseURL(t, srv.URL)
+
+	epID := "av_r1"
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{URL: "http://cached.test/official-old.mp4", Label: "1080P-旧", Official: true, Resolved: true},
+		{URL: "http://cached.test/third-old.m3u8", Label: "旧三方", Resolved: true},
+	}, true)
+	dongpiandiLinesMu.Lock()
+	entry := dongpiandiLinesCache[epID]
+	entry.officialAt = time.Now().Add(-dongpiandiOfficialLineTTL - time.Minute)
+	dongpiandiLinesCache[epID] = entry
+	dongpiandiLinesMu.Unlock()
+
+	lines := (&Downloader{}).dongpiandiRouteLines(context.Background(), Task{Chapter: Chapter{
+		ID:      providerDramaID(sourceDongpiandi, epID),
+		PageURL: srv.URL + "/player/av_r",
+	}})
+	if len(lines) != 2 || !lines[0].Official || !strings.Contains(lines[0].URL, "/official/clip.mp4") {
+		t.Fatalf("官方过期应重解析并刷新官方线: %+v", lines)
+	}
+	if _, stale := dongpiandiCachedLinesState(epID); stale {
+		t.Fatalf("重解析成功后缓存里的官方线应是新鲜的")
+	}
+}
+
+// 清晰度只能从线路标签里读（站点没有独立数值字段）："1080P-官方D" → 1080。
+func TestDongpiandiLineQualityFromLabel(t *testing.T) {
+	cases := map[string]int{
+		"1080P-官方D": 1080,
+		"720P":      720,
+		"1080p官方":   1080,
+		"新浪资源":      0,
+		"4K":        0,
+		"":          0,
+	}
+	for label, want := range cases {
+		if got := dongpiandiLineQuality(label); got != want {
+			t.Fatalf("%q: got %d want %d", label, got, want)
+		}
+	}
+	media := dongpiandiLineMedia(dongpiandiLine{URL: "http://x/a.mp4", Label: "720P-官方S", Official: true})
+	if media.Quality != 720 || !media.Official {
+		t.Fatalf("线路媒体应带清晰度与官方标记: %+v", media)
+	}
+}
+
+// 「仅官方线路」：收敛与择优都只留官方线，关掉后恢复三方。
+func TestDongpiandiOfficialOnlyFiltersThirdLines(t *testing.T) {
+	t.Cleanup(func() { setDongpiandiOfficialOnly(false) })
+	lines := []dongpiandiLine{
+		{URL: "http://x/third.m3u8", Label: "新浪资源", Resolved: true, PreferenceWeight: 900},
+		{URL: "http://x/official.mp4", Label: "1080P-官方D", Resolved: true, Official: true},
+	}
+	setDongpiandiOfficialOnly(true)
+	if got := dongpiandiKeepOfficialOnly(lines); len(got) != 1 || !got[0].Official {
+		t.Fatalf("仅官方应只剩官方线: %+v", got)
+	}
+	if kept := dongpiandiCurateLines(context.Background(), lines, 10*time.Millisecond); len(kept) != 1 || !kept[0].Official {
+		t.Fatalf("curate 应只留官方: %+v", kept)
+	}
+	if cand := dongpiandiProbeCandidates(context.Background(), lines); len(cand) != 1 || !cand[0].Official {
+		t.Fatalf("择优候选应只含官方: %+v", cand)
+	}
+	setDongpiandiOfficialOnly(false)
+	if got := dongpiandiKeepOfficialOnly(lines); len(got) != 2 {
+		t.Fatalf("关闭后应恢复三方: %+v", got)
+	}
+}
+
+// 流代理重签：有缓存票据时只重兑一次，不走 catalog/详情，并把新直链写回缓存。
+func TestDongpiandiRenewMediaRedeemsCachedTicket(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	var srv *httptest.Server
+	var redeemCalls atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/users/anonymous":
+			fmt.Fprint(w, `{}`)
+		case r.URL.Path == "/v1/playback/resolve-line":
+			redeemCalls.Add(1)
+			fmt.Fprintf(w, `{"line":{"id":"l2","label":"1080P-官方D","url":"%s/official/new.mp4","url_kind":"mp4"}}`, srv.URL)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	srv = httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	withDongpiandiBaseURL(t, srv.URL)
+
+	dongpiandiCacheTickets("av_rn", []dongpiandiLine{{ID: "l2", Label: "1080P-官方D", URL: "resolve://tk-new"}})
+	media, err := (&Downloader{}).dongpiandiRenewMedia(context.Background(), Task{Chapter: Chapter{
+		ID: providerDramaID(sourceDongpiandi, "av_rn"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media.URL != srv.URL+"/official/new.mp4" || media.Quality != 1080 || !media.Official {
+		t.Fatalf("重兑应返回新直链、清晰度与官方标记: %+v", media)
+	}
+	if redeemCalls.Load() != 1 {
+		t.Fatalf("只应兑换一次，实际 %d", redeemCalls.Load())
+	}
+	cached := dongpiandiCachedLines("av_rn")
+	if len(cached) != 1 || cached[0].URL != srv.URL+"/official/new.mp4" || !cached[0].Official {
+		t.Fatalf("重兑结果应刷新官方缓存: %+v", cached)
 	}
 }

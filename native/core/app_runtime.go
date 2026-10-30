@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,31 +42,33 @@ type Config struct {
 }
 
 type Downloader struct {
-	rankings              rankingCache
-	live                  liveCache
-	cfg                   Config
-	client                *http.Client
-	huangdouDetails       map[string]huangdouDetailEntry
-	huangdouDetailPending map[string]*huangdouDetailCall
-	providerMu            sync.Mutex
-	providerHosts         map[string]string
-	limiter               *requestLimiter
-	proxyRouter           *proxyRouter
-	hongguoOnce           sync.Once
-	hongguo               *hongguoAppClient
-	huangjuOnce           sync.Once
-	huangju               *huangjuAPIClient
-	yeguoOnce             sync.Once
-	yeguo                 *yeguoAPIClient
-	soraniOnce            sync.Once
-	sorani                *soraniAPIClient
-	diagnostics           *diagnosticLog
-	apiMu                 sync.Mutex
-	apiBase               string
-	apiFailures           map[string]time.Time
-	legacyOnce            sync.Once
-	legacy                *legacyAPIClient
-	dongpiandiDanmakuOnce sync.Once
+	rankings               rankingCache
+	live                   liveCache
+	cfg                    Config
+	client                 *http.Client
+	huangdouDetails        map[string]huangdouDetailEntry
+	huangdouDetailPending  map[string]*huangdouDetailCall
+	providerMu             sync.Mutex
+	providerHosts          map[string]string
+	limiter                *requestLimiter
+	proxyRouter            *proxyRouter
+	hongguoOnce            sync.Once
+	rankingOnce            sync.Once
+	liveOnce               sync.Once
+	hongguo                *hongguoAppClient
+	huangjuOnce            sync.Once
+	huangju                *huangjuAPIClient
+	yeguoOnce              sync.Once
+	yeguo                  *yeguoAPIClient
+	soraniOnce             sync.Once
+	sorani                 *soraniAPIClient
+	diagnostics            *diagnosticLog
+	apiMu                  sync.Mutex
+	apiBase                string
+	apiFailures            map[string]time.Time
+	legacyOnce             sync.Once
+	legacy                 *legacyAPIClient
+	dongpiandiDanmakuOnce  sync.Once
 	dongpiandiDanmakuStore *dongpiandiDanmakuCache
 }
 
@@ -90,6 +93,7 @@ type nativeDrama struct {
 	Duration       float64  `json:"duration,omitempty"`
 	Score          string   `json:"score,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
+	Actors         []string `json:"actors,omitempty"`
 	ReleaseStatus  string   `json:"releaseStatus,omitempty"`
 }
 
@@ -124,6 +128,7 @@ type nativeInput struct {
 	Session          string                  `json:"session"`
 	Sequence         int64                   `json:"sequence"`
 	Force            bool                    `json:"force"`
+	OfficialOnly     bool                    `json:"officialOnly"`
 }
 
 type nativeCatalogResult struct {
@@ -176,6 +181,28 @@ type nativeEngine struct {
 	recommendations  map[string]nativeRecommendationState
 	catalogSaveError error
 	sourceSaveError  error
+	// catalogWriteMu 保护合并窗里的待写快照（catalogPending）与定时器。
+	// 落盘合并窗：剧库每次变更都要整份重写，代价与库大小成正比，
+	// 连续翻页时反复 fsync 会把首屏拖成卡顿。这里把写盘合并到
+	// nativeCatalogFlushWindow 的窗口里，窗口内的连续变更只落盘一次。
+	catalogWriteMu sync.Mutex
+	catalogPending []byte
+	// catalogPendingSource 是待写快照所属的站源：切源时用它判断要不要先落盘。
+	catalogPendingSource string
+	catalogTimer         *time.Timer
+	// catalogPendingFailed 标记 catalogPending 是一份已写盘失败、被放回窗口等
+	// 本引擎重试的快照：重开路径（stopCatalogWrites/flushPendingCatalogWrite）
+	// 不得把它冲回盘里「复活」——重启引擎必须从上次真正落盘的快照恢复，
+	// 并让「上次保存未完成」的状态冒出来；补写只走重试定时器/显式 retrySave。
+	catalogPendingFailed bool
+	// retired 标记这个引擎已被同目录的新引擎接管：它不再进合并窗，
+	// 变更直接同步落盘，避免旧引擎的内存快照晚到一步把新数据盖回去。
+	retired atomic.Bool
+	// loadOnce 磁盘缓存懒加载：构造引擎不再同步读 catalogs.json（上限 32 MiB），
+	// 改由第一次真正用到剧库/榜单/直播/站源记录时按需加载。
+	loadOnce sync.Once
+	// settingsOnce 只负责那份小文件（网络与下载设置）。
+	settingsOnce     sync.Once
 	covers           *nativeCoverCache
 	stream           *nativeStreamServer
 	playbacks        map[string]nativePlaybackChoice
@@ -202,6 +229,103 @@ type nativeResolveCacheEntry struct {
 var nativeState struct {
 	sync.Mutex
 	engine *nativeEngine
+}
+
+// nativeEngineRegistry 记录每个数据目录当前活跃的引擎。
+//
+// 用途有两个：
+//  1. 同一目录重建引擎（切用户、重载、测试重启）前，把上一个引擎合并窗里
+//     待写的剧库落盘，否则新引擎会读到旧快照；
+//  2. 读盘前（loadCatalogCache）把该目录待写的快照冲刷掉，保证「读己之写」。
+var nativeEngineRegistry struct {
+	sync.Mutex
+	byDirectory map[string][]*nativeEngine
+}
+
+// registerNativeEngine 登记新引擎，并把该目录上其它引擎待写的剧库落盘。
+// 落盘失败也不阻塞新引擎；已写失败被放回窗口的快照不在此复活（见
+// stopCatalogWrites）：重启引擎从上次真正落盘的快照恢复并保留失败提示。
+func registerNativeEngine(directory string, engine *nativeEngine) {
+	nativeEngineRegistry.Lock()
+	if nativeEngineRegistry.byDirectory == nil {
+		nativeEngineRegistry.byDirectory = map[string][]*nativeEngine{}
+	}
+	engines := nativeEngineRegistry.byDirectory[directory]
+	engines = append(engines, engine)
+	nativeEngineRegistry.byDirectory[directory] = engines
+	nativeEngineRegistry.Unlock()
+	for _, previous := range engines[:len(engines)-1] {
+		if previous != engine {
+			// 旧引擎退休：待写快照先落盘，之后它的变更直接同步写，
+			// 不再进合并窗（否则旧快照可能晚到一步把新引擎的数据盖回去）。
+			previous.retired.Store(true)
+			previous.stopCatalogWrites()
+		}
+	}
+}
+
+// flushPendingCatalogWrite 把该数据目录上待写的剧库快照落盘（读盘前调用）。
+// exclude 是正在读盘的引擎自身：它的数据还在内存里，不必回写。
+func flushPendingCatalogWrite(directory string, exclude *nativeEngine) {
+	nativeEngineRegistry.Lock()
+	engines := append([]*nativeEngine(nil), nativeEngineRegistry.byDirectory[directory]...)
+	nativeEngineRegistry.Unlock()
+	for _, pending := range engines {
+		if pending == nil || pending == exclude {
+			continue
+		}
+		// 不能拿着本引擎的锁去等别的引擎的锁：两个引擎同时首次加载会互等
+		// （各自持锁再要对方的锁）。抢不到锁就跳过——那一侧还没落盘，
+		// 读到的可能是稍旧的数据，但不会死锁。
+		if !pending.mu.TryLock() {
+			continue
+		}
+		if pending.catalogPendingQuarantined() {
+			// 已写失败被放回窗口的快照不在这里复活（同 stopCatalogWrites）：
+			// 正在读盘的引擎要从上次真正落盘的快照恢复。
+			pending.mu.Unlock()
+			continue
+		}
+		_ = pending.flushCatalogDiskLocked()
+		pending.mu.Unlock()
+	}
+}
+
+// ensureLoaded 磁盘缓存懒加载。
+//
+// 构造引擎时同步读 catalogs.json（上限 32 MiB）会把首帧前的启动链路拖长：
+// 解析整份 JSON 的代价与库大小成正比，而这份数据在首页真正请求目录之前
+// 用不上。改成按需加载——第一次真正访问剧库/榜单/直播/站源记录时再读。
+// 语义不变：首次 cached() 依旧直接返回磁盘目录（Fresh 判定照旧）。
+func (engine *nativeEngine) ensureLoaded() {
+	engine.ensureSettingsLoaded()
+	engine.loadOnce.Do(func() {
+		if engine.downloader == nil {
+			// 手工拼装的引擎（测试用）没有 downloader，只加载引擎自己的缓存。
+			engine.mu.Lock()
+			engine.loadCatalogCache()
+			engine.loadSourceRecords()
+			engine.mu.Unlock()
+			return
+		}
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		engine.downloader.loadRankingCache()
+		engine.downloader.loadLiveCache()
+		engine.loadCatalogCache()
+		engine.loadSourceRecords()
+	})
+}
+
+// ensureSettingsLoaded 只加载「网络与下载设置」这一份小文件。
+// 构造引擎时（newNativeDownloads 会读一次设置）只走这条轻量路径，
+// 剧库/榜单/直播/站源记录这些重缓存留到第一次真正用到时再读。
+func (engine *nativeEngine) ensureSettingsLoaded() {
+	engine.settingsOnce.Do(func() {
+		engine.settingsMu.Lock()
+		engine.loadResourceSettings()
+		engine.settingsMu.Unlock()
+	})
 }
 
 func nativeText(value any) string {
@@ -252,7 +376,7 @@ func nativeNormalize(drama Drama) nativeDrama {
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
 		Area: drama.Area, Year: drama.Year, Score: drama.Score,
 		Duration: flexDurationSeconds(drama.Duration),
-		Tags:     append([]string(nil), drama.Tags...), ReleaseStatus: drama.ReleaseStatus}
+		Tags:     append([]string(nil), drama.Tags...), Actors: append([]string(nil), drama.Actors...), ReleaseStatus: drama.ReleaseStatus}
 }
 
 // flexDurationSeconds 把 provider 层的时长松散值统一为秒（单集时长）：
@@ -316,6 +440,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, err
 	}
+	// 上次运行学到的优选域名先播种进包级表，随后 providerHostsSeed 交给新引擎；
+	// 远程 sourceConfig.providerHosts 到达时仍会整表替换（远程优先）。
+	seedProviderHostsFromDisk(directory)
 	cfg := defaultConfig()
 	cfg.dataDir = directory
 	router := &proxyRouter{}
@@ -335,13 +462,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 			return nil
 		}}
 	engine := &nativeEngine{downloader: d, directory: directory, catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
-	engine.loadResourceSettings()
-	d.loadRankingCache()
-	d.loadLiveCache()
-	engine.loadCatalogCache()
-	engine.loadSourceRecords()
 	engine.covers = newNativeCoverCache(directory, d)
 	engine.downloads = newNativeDownloads(engine)
+	registerNativeEngine(directory, engine)
 	return engine, nil
 }
 
@@ -419,6 +542,11 @@ func nativeDispatch(input nativeInput) (any, error) {
 	if engine == nil {
 		return nil, errors.New("应用核心尚未就绪，请重新打开应用")
 	}
+	// 磁盘缓存懒加载：第一次真正用到时再读盘（首帧不必等 32 MiB 的 JSON）。
+	// flush 只冲刷合并窗里已有的待写快照，不必为此把整份目录读进内存。
+	if input.Action != "flush" {
+		engine.ensureLoaded()
+	}
 	duration := 60 * time.Second
 	if input.Action == "moveDownloads" {
 		duration = 10 * time.Minute
@@ -446,6 +574,9 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.resourceSettings(), nil
 	case "config.source":
 		return applySourceConfig(input.SourceConfig)
+	case "dongpiandi.officialOnly":
+		setDongpiandiOfficialOnly(input.OfficialOnly)
+		return true, nil
 	case "saveResourceSettings":
 		return engine.saveResourceSettings(input.Settings)
 	case "controlDownloadBatch":
@@ -458,6 +589,12 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.nativeDanmaku(ctx, input)
 	case "cancelRead":
 		engine.cancelRead(input)
+		return true, nil
+	case "flush":
+		// 落盘合并窗的强制冲刷：切后台/退出前调用，别让待写快照随进程消失。
+		if err := engine.flushCatalogDisk(); err != nil {
+			return nil, err
+		}
 		return true, nil
 	case "recommendations":
 		return engine.nativeRecommendations(ctx, input)
@@ -521,6 +658,12 @@ func nativeDispatch(input nativeInput) (any, error) {
 	case "categories":
 		items, err := engine.nativeCategories(ctx, input.Source, input.Force)
 		return map[string]any{"items": items}, err
+	case "homeFeed":
+		return engine.nativeHomeFeed(ctx, input)
+	case "homeSection":
+		return engine.nativeHomeSection(ctx, input)
+	case "homeCalendar":
+		return engine.nativeHomeCalendar(ctx, input)
 	case "sourceStatus":
 		return engine.sourceStatus(input.Source), nil
 	case "sourceJob":
@@ -593,6 +736,16 @@ func applySourceConfig(config map[string]any) (any, error) {
 		setDongpiandiBaseURL(strings.TrimSuffix(strings.TrimSpace(text), "/"))
 		applied++
 	}
+	// 剧果的 API 域与站点域分离（api.huangju.net vs huangju.net），站点域走
+	// providerHosts["huangju"]，API 域必须单独下发，否则换域后接口全死。
+	if raw, ok := config["huangjuAPIBaseURL"]; ok {
+		text, ok := raw.(string)
+		if !ok || !validSourceBaseURL(text) {
+			return map[string]any{"applied": false, "reason": "huangjuAPIBaseURL 非法"}, nil
+		}
+		setHuangjuAPIBase(strings.TrimSuffix(strings.TrimSpace(text), "/"))
+		applied++
+	}
 	if raw, ok := config["providerHosts"]; ok {
 		table, ok := raw.(map[string]any)
 		if !ok {
@@ -639,8 +792,9 @@ func sanitizeSourceMirrorList(list []any) ([]string, bool) {
 }
 
 // sanitizeProviderHosts 校验远程下发的通用源站域名覆盖表（providerHosts 键）：
-// 键必须是核心已知的规范站源——douban 等榜单专用源未注册 provider，无法消费，
-// 黄果剧/野果被媒体候选链排除，覆盖只会是死配置，均拒收；值必须是合法根地址，
+// 键必须是核心已知的规范站源——douban 等榜单专用源未注册 provider，无法消费；
+// 剧果的站点域已由 providerBaseURL 消费（其 API 域另走 sourceConfig.huangjuAPIBaseURL）；
+// 野果有自发现且被媒体候选链排除，覆盖只会是死配置，仍拒收；值必须是合法根地址，
 // 自动去空白与尾斜杠。任一条目非法即整体失败（调用方整段丢弃）；
 // 空表合法，语义为清空覆盖回落内置域名。
 func sanitizeProviderHosts(table map[string]any) (map[string]string, bool) {
@@ -655,7 +809,7 @@ func sanitizeProviderHosts(table map[string]any) (map[string]string, bool) {
 			return nil, false
 		}
 		source := canonicalProviderSource(key)
-		if source == "" || !provider.KnownSource(source) || source == sourceHuangju || source == sourceYeguo {
+		if source == "" || !provider.KnownSource(source) || source == sourceYeguo {
 			return nil, false
 		}
 		out[source] = text
@@ -676,6 +830,7 @@ func validSourceBaseURL(text string) bool {
 }
 
 func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput) (nativeCatalogResult, error) {
+	engine.ensureLoaded()
 	source := canonicalProviderSource(input.Source)
 	if !isHuangguoProviderSource(source) {
 		return nativeCatalogResult{}, errors.New("请选择有效站源")
@@ -940,7 +1095,15 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 	// CDN 直链多带短时效签名，播放中途过期时由本机流代理回调这里重新
 	// 解析并热替换地址，播放器无感知（见 nativeForward / nativeRenewAsset）。
 	choice.refresher = func(ctx context.Context) (providerMedia, error) {
-		return engine.downloader.resolveProviderMedia(ctx, Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index})
+		renewTask := Task{DramaID: input.Drama.ID, DramaTitle: input.Drama.Title, Chapter: input.Chapter, Index: input.Index}
+		if source, _, valid := splitProviderDramaID(renewTask.Chapter.ID); valid && source == sourceDongpiandi {
+			// 真果·鉴：官方直链是 15 分钟预签名，原地重兑票据即可（约
+			// 200ms），比重新解析整条链（1~3s）快一个数量级；失败再回退。
+			if media, err := engine.downloader.dongpiandiRenewMedia(ctx, renewTask); err == nil {
+				return media, nil
+			}
+		}
+		return engine.downloader.resolveProviderMedia(ctx, renewTask)
 	}
 	if danmakuSource, series, video, valid := danmakuPlaybackIDs(task); valid {
 		choice.danmakuSource, choice.danmakuSeries, choice.danmakuVideo = danmakuSource, series, video

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_scaffold.dart';
 import 'local_store.dart';
 
 /// 直播源管理页（2026-10-22）：增删自填 m3u/m3u8/txt 订阅 URL（设备级），
@@ -94,26 +95,27 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
   @override
   Widget build(BuildContext context) {
     final urls = _urls;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('直播源管理'),
-        actions: [
-          IconButton(
-            key: const Key('live-source-add'),
-            tooltip: '添加直播源',
-            icon: const Icon(Icons.add),
-            onPressed: _saving ? null : _add,
-          ),
-        ],
-      ),
+    return AppScaffold(
+      title: '直播源管理',
+      actions: [
+        IconButton(
+          key: const Key('live-source-add'),
+          tooltip: '添加直播源',
+          icon: const Icon(Icons.add),
+          onPressed: _saving ? null : _add,
+        ),
+      ],
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Text(
-              '自填 m3u / m3u8 / txt 直播订阅链接，与内置直播列表合并显示；'
-              '链接失效时自动跳过并提示。',
-              style: Theme.of(context).textTheme.bodySmall,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: SoftGlassCard(
+              padding: const EdgeInsets.all(14),
+              child: Text(
+                '自填 m3u / m3u8 / txt 直播订阅链接，与内置直播列表合并显示；'
+                '链接失效时自动跳过并提示。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ),
           ),
           Expanded(
@@ -142,27 +144,34 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
                       ],
                     ),
                   )
-                : ListView.builder(
-                    key: const Key('live-source-list'),
-                    itemCount: urls.length,
-                    itemBuilder: (context, index) {
-                      final url = urls[index];
-                      return ListTile(
-                        key: Key('live-source-item-$index'),
-                        leading: const Icon(Icons.link),
-                        title: Text(
-                          url,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          key: Key('live-source-remove-$index'),
-                          tooltip: '删除',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: _saving ? null : () => _remove(url),
-                        ),
-                      );
-                    },
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: SoftGlassCard(
+                      padding: EdgeInsets.zero,
+                      child: ListView.builder(
+                        key: const Key('live-source-list'),
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: urls.length,
+                        itemBuilder: (context, index) {
+                          final url = urls[index];
+                          return ListTile(
+                            key: Key('live-source-item-$index'),
+                            leading: const Icon(Icons.link),
+                            title: Text(
+                              url,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: IconButton(
+                              key: Key('live-source-remove-$index'),
+                              tooltip: '删除',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: _saving ? null : () => _remove(url),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                   ),
           ),
         ],

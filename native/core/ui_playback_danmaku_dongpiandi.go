@@ -50,9 +50,9 @@ type dongpiandiCommentResp struct {
 }
 
 type dongpiandiDanmakuCache struct {
-	mu       sync.Mutex
-	entries  map[string]dongpiandiDanmakuEntry
-	pending  map[string]*dongpiandiDanmakuCall
+	mu      sync.Mutex
+	entries map[string]dongpiandiDanmakuEntry
+	pending map[string]*dongpiandiDanmakuCall
 }
 
 type dongpiandiDanmakuEntry struct {

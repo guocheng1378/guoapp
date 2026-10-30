@@ -61,6 +61,14 @@ class AppIcons {
   static const String brightness = 'brightness';
   static const String keyboard = 'keyboard';
 
+  // 播放器专用实心变体（不随公共线性语言变化，仅播放器控制层使用）
+  static const String playerPlay = 'player-play';
+  static const String playerPause = 'player-pause';
+  static const String playerLock = 'player-lock';
+  static const String playerLockOpen = 'player-lock-open';
+  static const String playerCast = 'player-cast';
+  static const String playerCastConnected = 'player-cast-connected';
+
   // 影视与设备
   static const String movie = 'movie';
   static const String movieFilter = 'movie-filter';
@@ -149,6 +157,9 @@ class AppIcons {
     play,
     playCircleFilled,
     pause,
+    playerPlay,
+    playerPause,
+    playerLock,
     search,
     history,
     bookmark,

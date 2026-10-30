@@ -50,6 +50,7 @@ void main() {
       await store.saveWatch(watch(first));
       await store.saveWatch(watch(second));
       await store.setFollowStatus(first, FollowStatus.watched);
+      final opened = <String>[];
       final continued = <String>[];
       await tester.pumpWidget(
         MaterialApp(
@@ -58,12 +59,15 @@ void main() {
               repository: repository,
               store: store,
               history: true,
-              onOpen: (_) {},
+              onOpen: (drama) => opened.add(drama.id),
               onContinue: (drama) => continued.add(drama.id),
             ),
           ),
         ),
       );
+      await tester.pumpAndSettle();
+      // 搜索框默认折叠成标题行图标：点开再输入。
+      await tester.tap(find.byKey(const ValueKey('follow-search-toggle')));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('history-search')),
@@ -72,8 +76,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(ValueKey('saved-${first.id}')), findsOneWidget);
       expect(find.byKey(ValueKey('saved-${second.id}')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('continue-watching')));
-      expect(continued, [first.id]);
+      // 最近观看页不再挂「继续观看」卡：列表第一行本身就是它。
+      expect(find.byKey(const ValueKey('continue-watching')), findsNothing);
+      await tester.tap(find.byKey(ValueKey('saved-${first.id}')));
+      expect(opened, [first.id]);
+      expect(continued, isEmpty);
       await tester.tap(find.byKey(ValueKey('drama-actions-${first.id}')));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('删除这条观看记录'));
@@ -87,6 +94,36 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  testWidgets('follow page keeps its own continue-watching pill', (
+    tester,
+  ) async {
+    viewport(tester, const Size(390, 844));
+    final store = await create();
+    await store.toggleFavorite(first);
+    await store.saveWatch(watch(first));
+    final continued = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SavedLibrary(
+            repository: LibraryFeatureRepository(),
+            store: store,
+            history: false,
+            onOpen: (_) {},
+            onContinue: (drama) => continued.add(drama.id),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final pill = find.byKey(const ValueKey('continue-watching'));
+    expect(pill, findsOneWidget);
+    expect(find.textContaining('继续追剧'), findsOneWidget);
+    await tester.tap(pill);
+    expect(continued, [first.id]);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('find-source menu item forwards the drama title', (tester) async {
     viewport(tester, const Size(390, 844));
@@ -221,7 +258,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('相关推荐'), findsOneWidget);
+    // 2206 起详情页有两处「相关推荐」：系列 chips 段 + 底部横滑卡条，
+    // 这里只断言存在，系列条目仍按下方 key 精确断言。
+    expect(find.text('相关推荐'), findsWidgets);
     expect(find.byKey(ValueKey('series-${seasonOne.id}')), findsOneWidget);
     expect(find.byKey(ValueKey('series-${seasonTwo.id}')), findsOneWidget);
     final seasonTwoChip = find.byKey(ValueKey('series-${seasonTwo.id}'));
@@ -272,7 +311,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('相关推荐'), findsOneWidget);
+    // 2206 起详情页有两处「相关推荐」：系列 chips 段 + 底部横滑卡条，
+    // 这里只断言存在，系列条目仍按下方 key 精确断言。
+    expect(find.text('相关推荐'), findsWidgets);
     expect(find.byKey(ValueKey('series-${seasonTwo.id}')), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());

@@ -20,10 +20,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const fixtureBase = String.fromEnvironment('FIXTURE_BASE_URL');
 
-class DeviceFixtureRepository extends AppRepository {
+class       final color = (element.widget as ColoredBox).color;
+      // r/g/b 是 0..1 的 double（旧 red/green/blue 的 0..255 整型已废弃）。
+      // 0 通道映射后精确等于 0.0，所以判纯黑仍然可以用 == 0。
+      if (color.r == 0 && color.g == 0 && color.b == 0 && color.a < 1) {
+        return color.a;
+      }
+ extends AppRepository {
   final native = NativeRepository();
   final resolved = <int>[];
   final released = <String>[];
+  final selected = <int>[];
   static const drama = Drama(
     id: 'hongguo:700001',
     source: 'hongguo',
@@ -89,6 +96,13 @@ class DeviceFixtureRepository extends AppRepository {
   @override
   Future<PlaybackPlan> fallback(PlaybackPlan current) =>
       native.fallback(current);
+
+  /// 线路切换：设备集成测试不做桩，直接走真实核心（与 fallback 同口径）。
+  @override
+  Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route) async {
+    selected.add(route);
+    return native.selectPlayback(current, route);
+  }
 
   @override
   Future<void> cancelPlayback() => native.cancelPlayback();

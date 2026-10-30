@@ -26,7 +26,9 @@ var (
 func setProviderHosts(hosts map[string]string) {
 	providerHostsHotMu.Lock()
 	providerHostsHot = cloneProviderHosts(hosts)
+	snapshot := cloneProviderHosts(providerHostsHot)
 	providerHostsHotMu.Unlock()
+	persistProviderHosts(snapshot)
 	nativeState.Lock()
 	engine := nativeState.engine
 	nativeState.Unlock()
@@ -82,8 +84,27 @@ type providerMedia struct {
 	Official bool
 }
 
+// providerMediaReferer 兜底 Referer：取本次实际命中的 host（媒体地址所在域）。
+//
+// 站源配置里的 base 只是「默认入口」：优选域名与两跳回退都会让真实请求落到
+// 另一个 host 上，沿用 base 当 Referer 会被防盗链判成跨站引用。这里只在
+// 兜底路径（章节没有自带 Referer）使用媒体地址自身的来源；自带 Referer 的
+// 站源（maccms 族：和合/星果/番茄/猫果/雅果等）行为完全不变。
+func providerMediaReferer(mediaURL, fallback string) string {
+	parsed, err := url.Parse(strings.TrimSpace(mediaURL))
+	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
+		return parsed.Scheme + "://" + parsed.Host + "/"
+	}
+	return fallback
+}
+
 func (d *Downloader) providerBaseURL(source string) string {
 	source = canonicalProviderSource(source)
+	// 远程 providerHosts 与运行时学到的域名对所有源生效。此前只有 default 分支读覆盖，
+	// 导致 hongguo/huangdou/huangju/yeguo/huangguoai 的覆盖配置被静默忽略（死配置）。
+	if override := d.providerHostOverride(source); override != "" {
+		return strings.TrimRight(override, "/")
+	}
 	var configured, fallback string
 	switch source {
 	case sourceHuangguoAI:
@@ -97,12 +118,10 @@ func (d *Downloader) providerBaseURL(source string) string {
 	case sourceYeguo:
 		configured, fallback = d.cfg.YeguoURL, yeguoBaseURL
 	default:
+		// duanju 族只能在 default 分支识别：这些源同时也注册在 provider 规格表里，
+		// 提前判定会把 hongguo/huangdou 等内置源一并当成 duanju 族并绕过 cfg 注入。
 		if spec, found := duanjuSourceSpecFor(source); found {
 			return d.duanjuBaseURL(spec.ID)
-		}
-		// duanju 族之外的源（cloudfront 兜底域等）也支持热更覆盖。
-		if override := d.providerHostOverride(source); override != "" {
-			return strings.TrimRight(override, "/")
 		}
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -117,15 +136,45 @@ func providerSourceForURL(raw string) string {
 	return provider.ForHost(parsed.Hostname())
 }
 
+// providerSourceFromOverrides 用热更/学到的覆盖表反查 URL 属于哪个源。
+// URL 已是覆盖后的新域时 provider.ForHost 认不出来，而覆盖表本身就是
+// 「源 → 新域」的映射，据此仍能定位源，避免丢掉该源的镜像候选链。
+func (d *Downloader) providerSourceFromOverrides(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return ""
+	}
+	d.providerMu.Lock()
+	defer d.providerMu.Unlock()
+	for source, override := range d.providerHosts {
+		overridden, err := url.Parse(override)
+		if err != nil || overridden.Host == "" {
+			continue
+		}
+		if strings.ToLower(overridden.Hostname()) == host {
+			return canonicalProviderSource(source)
+		}
+	}
+	return ""
+}
+
 func (d *Downloader) providerURLCandidates(raw string) []string {
 	source := providerSourceForURL(raw)
+	if source == "" {
+		source = d.providerSourceFromOverrides(raw)
+	}
 	if source == "" || source == sourceHuangju || source == sourceYeguo || isDuanjuProviderSource(source) {
 		return []string{raw}
 	}
-	parsed, _ := url.Parse(raw)
-	d.providerMu.Lock()
-	preferred := d.providerHosts[source]
-	d.providerMu.Unlock()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return []string{raw}
+	}
+	preferred := d.providerHostOverride(source)
 	var candidates []string
 	seen := map[string]bool{}
 	add := func(candidate string) {
@@ -135,17 +184,16 @@ func (d *Downloader) providerURLCandidates(raw string) []string {
 		}
 	}
 	add(rehostProviderURL(parsed, preferred))
-	configured := d.providerBaseURL(source)
-	if providerSourceForURL(configured) == "" {
-		add(rehostProviderURL(parsed, configured))
-		return candidates
-	}
-	for _, candidate := range providerURLCandidates(raw) {
-		add(candidate)
+	// 镜像链只与「源」有关，与 base 当前指向哪个域无关：base 被热更覆盖成新域后
+	// 仍按 source 展开内置镜像，避免「一覆盖就丢候选」。
+	if source == sourceHuangguoAI {
+		for _, candidate := range providerURLCandidates(raw) {
+			add(candidate)
+		}
 	}
 	// 主域排在镜像之后：huangguoai.com 当前半死（间歇超时），
 	// 一次超时会拖慢整个 resolve 链路，只在镜像全部失败时兜底。
-	add(rehostProviderURL(parsed, configured))
+	add(rehostProviderURL(parsed, d.providerBaseURL(source)))
 	return candidates
 }
 
@@ -198,7 +246,7 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 			}
 		}
 	}
-	media := providerMedia{URL: chapter.VideoURL, Referer: firstNonEmpty(chapter.Referer, d.providerBaseURL(chapter.Source)+"/")}
+	media := providerMedia{URL: chapter.VideoURL, Referer: firstNonEmpty(chapter.Referer, providerMediaReferer(chapter.VideoURL, d.providerBaseURL(chapter.Source)+"/"))}
 	if chapter.Source == sourceHuangdou {
 		_, sourceID, valid := splitProviderDramaID(task.DramaID)
 		if valid {

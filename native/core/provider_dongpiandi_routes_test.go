@@ -225,6 +225,65 @@ func TestResolveDongpiandiMediaDeadRefreshesAllRoutes(t *testing.T) {
 	}
 }
 
+func TestResolveDongpiandiMediaColdStartUsesCache(t *testing.T) {
+	// 缓存优先起播回归：同一集第二次冷起播（无地址）直接吃线路缓存，
+	// 零 API 往返；地址非空（失效重解析）时仍强制全链刷新。
+	srv := newDongpiandiRouteServer(
+		`{"id":"d1","title":"测试剧","episodes":[{"id":"e-cache-1","key":"e-0001","token":"t1"}]}`,
+		dongpiandiLineOptionsJSON([]map[string]any{
+			{"id": "l1", "label": "主线", "url": "PLACEHOLDER/v1.mp4", "url_kind": "mp4", "resolved": true, "preference_weight": 900, "selected": true},
+		}),
+	)
+	defer srv.close()
+	srv.resolve = strings.ReplaceAll(srv.resolve, "PLACEHOLDER", srv.server.URL)
+	withDongpiandiBaseURL(t, srv.server.URL)
+
+	d := &Downloader{}
+	task := Task{
+		DramaID: providerDramaID(sourceDongpiandi, "d1"),
+		Chapter: Chapter{
+			ID:      providerDramaID(sourceDongpiandi, "e-cache-1"),
+			Source:  sourceDongpiandi,
+			PageURL: srv.server.URL + "/player/d1",
+		},
+	}
+	// 第一次冷起播：全链解析并把线路写进缓存。
+	media, err := d.resolveDongpiandiMedia(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media.URL != srv.server.URL+"/v1.mp4" {
+		t.Fatalf("first cold start wrong: %+v", media)
+	}
+	if len(dongpiandiCachedLines("e-cache-1")) == 0 {
+		t.Fatal("expected lines cached after first resolve")
+	}
+	srv.apiCalls.Store(0)
+
+	// 第二次冷起播：缓存命中，不打 /v1/ 接口。
+	media, err = d.resolveDongpiandiMedia(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.apiCalls.Load(); got != 0 {
+		t.Fatalf("cache hit should skip API calls, got %d", got)
+	}
+	if media.URL != srv.server.URL+"/v1.mp4" || media.Label != "主线" {
+		t.Fatalf("cache-first media wrong: %+v", media)
+	}
+
+	// 地址存在但已死：必须走全链刷新（会打 API）。
+	srv.apiCalls.Store(0)
+	deadTask := task
+	deadTask.Chapter.VideoURL = srv.server.URL + "/dead.mp4"
+	if _, err := d.resolveDongpiandiMedia(context.Background(), deadTask); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.apiCalls.Load(); got == 0 {
+		t.Fatal("dead address must refresh via API, cache bypassed")
+	}
+}
+
 func TestFetchDongpiandiDetailDedup(t *testing.T) {
 	srv := newDongpiandiRouteServer(
 		`{"id":"d1","title":"测试剧","episodes":[
@@ -527,9 +586,10 @@ func TestDongpiandiResolveLinesDropsFailedRedemptions(t *testing.T) {
 	if len(lines) != 0 {
 		t.Fatalf("failed redemptions must be dropped: %+v", lines)
 	}
-	// 每张票据先试一次、失败后再重试一次（见 dongpiandiRedeemTickets）。
-	if stub.redeemCalls != 4 {
-		t.Fatalf("both tickets must be attempted and retried on probe: %d", stub.redeemCalls)
+	// 每张票据先试一次、失败后再退避重试两次（见 dongpiandiRedeemTickets：
+	// 站点 429「请求太频繁」会让官方线整条消失，所以重试给到 3 次机会）。
+	if stub.redeemCalls != 6 {
+		t.Fatalf("both tickets must be attempted and retried twice on probe: %d", stub.redeemCalls)
 	}
 }
 

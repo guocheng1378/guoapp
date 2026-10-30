@@ -5,165 +5,106 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 雾面（TopFog）全部可调参数。
 ///
-/// 设计动机：雾面浓度/形态已经历多轮「改码→构建→装机→截图→用户反馈」
-/// 循环（0.17→0.34→0.92→0.55…），每轮都要猜数字。调参台把所有真值
-/// 暴露成滑块实时生效，用户自行定调后一键复制参数固化。
+/// **2026-10-29（v2236）按用户定调「把旧的删除、照搬官方不要改」收口**：
+/// 只保留 MIUI 雾面带真值直译档**真正在用**的维度，删掉历轮自加的遗留层
+/// （白平涂 / 白 softLight / 灰 softLight / 灰平涂底 / 饱和矩阵 / 动态取色染色）。
 ///
-/// 字段口径：
-/// - 三层 tint 直接暴露**最终 alpha**（不含旧的 master 系数——那只是
-///   三层共同缩放，滑块空间里没有存在意义）。默认值 = v2157 固化
-///   自用户调参台回发（0.34/1.0/0.16）。
-/// - 暗色主题按 [darkScale] 比例跟随（历史惯例 暗=亮×0.78），不单独
-///   暴露暗色滑块。
-/// - [verticalGrad] 是「雾形」维度：0 = 均匀（玻璃板感），
-///   1 = 雾形全开——雾的「上浓下淡」气感，是「一块玻璃」与「一层
-///   雾」的形态级差异（用户定调方向）。
-/// - [topBoost] 是顶部增幅强度：雾形只提供梯度方向，顶部增浓多少
-///   倍单独可调（topMul = 1 + topBoost × verticalGrad）。硬编码
-///   +50% 在低基础浓度底子上顶部无感（用户实测「上面不浓」），
-///   抽成滑块（v2157 用户定调顶格 3.0，雾形顶格时顶部 4×）。
+/// 保留的 4 个维度与它们对应的官方行为：
+/// - [blurSigma] 20 = 官方 `ImageFilter.blur(σ20)`（渐变模糊由 `haze` 提供，
+///   σ 从顶边满值连续衰减到 0）；
+/// - [feather] 底缘羽化 160px = **我们加的改良**（官方是硬边 → 用户反复
+///   投诉"明显的分界线"）；
+/// - [verticalGrad] 上浓下淡雾形 = **我们加的改良**（用户 2150 定调），
+///   实现方式 = **只让底部衰减**（顶部恒为官方基准浓度）：顶部一旦乘算放大，
+///   官方层3 `#99060606` 的 alpha 0.6 会被顶到 >1 → clamp 成不透明近黑
+///   → 顶部盖出一层"黑蒙版"；
+/// - [fogHeight] 雾面带高度（正档向下延伸 / 负档收窄）。
+///
+/// 删掉的遗留层（各自都是"官方没有、我们自加"的历史方案）：
+/// - `whiteNormal` / `whiteSoftLight` / `graySoftLight`：奶白平涂与灰厚度层
+///   （官方雾面带没有白平涂，加了就读作白板）；
+/// - `fogBase`：65% 纯灰平涂底（那是我们 demo 自己 2026-10-20 加的，
+///   官方是"底色隐身"）；
+/// - `saturation`：demo 色彩矩阵（官方雾面带无矩阵；矩阵只作用在模糊后的
+///   内容上，无法叠进 tint 层）；
+/// - `tintMix` + 动态取色采样链（`FogTintSampler`）：只服务上面的白平涂层，
+///   白平涂删除后无消费者 → 整条链一并删除；
+/// - `topBoost`（顶部额外增浓倍数）：乘算会把层 alpha 顶爆 → 见 [verticalGrad]。
 class FogTuningState {
-  /// 默认值 = v2157 用户调参台回发的 10 参数（调参台「复制参数」
-  /// 回发固化流程的落点），新装机/恢复默认即此配方。
+  /// 发布默认值 = MIUI 雾面带真值直译档 + 自加改良（羽化 / 上浓下淡）。
   const FogTuningState({
-    this.blurSigma = 3.0,
-    this.saturation = 1.6,
-    this.whiteNormal = 0.34,
-    this.whiteSoftLight = 1.0,
-    this.graySoftLight = 0.16,
-    this.feather = 120,
+    this.blurSigma = 20.0,
+    this.feather = 48,
     this.verticalGrad = 1.0,
-    this.topBoost = 3.0,
-    this.tintMix = 0.10,
-    this.fogHeight = -14,
+    this.fogHeight = 0,
   });
 
-  /// 模糊半径（σ）。用户定调量程 0–3（demo 原始真值 46 在实机过糊，
-  /// 有效观感区间就是小 σ；0=不糊只剩 tint 白蒙，3=量程顶格最雾）。
+  /// 模糊半径（σ）。官方雾面带真值 20（`ImageFilter.blur(sigmaX: 20)`），
+  /// 上限同为 20。
+  ///
+  /// ⚠️ 实际生效值由 `haze` 的 `fitSigma` 决定：上限 = 雾带高度 × 7.87%
+  /// （雾带 ~80 逻辑像素 → σ 上限 ≈ 6.3）。传 20 是"要满值"，真实强度看
+  /// 雾带总高。
   final double blurSigma;
 
-  /// 饱和度矩阵强度：1=当前矩阵（色更「湿」），0=无矩阵，>1 超调。
-  final double saturation;
-
-  /// 薄奶白 normal 平涂提亮层。
-  final double whiteNormal;
-
-  /// 白 softLight 提密保色层。
-  final double whiteSoftLight;
-
-  /// 灰 softLight 玻璃「厚度」层。
-  final double graySoftLight;
-
   /// 底缘羽化高度（px）。0=硬切边。
+  ///
+  /// v2239：160 → **48**。羽化比雾带还长时会把浓度提前吃掉 → 分组栏那段
+  /// 就没有雾、看着"雾没盖到分组栏底部"。48 = 浓度一直盖到分组栏底边、
+  /// 底缘再干脆收尾。
   final double feather;
 
   /// 垂直浓度渐变强度（0 均匀 → 1 上浓下淡全开）。
+  ///
+  /// 实现：顶部 = 官方基准浓度（恒定），底部 = 基准 × (1 − 0.75 × 本值)。
   final double verticalGrad;
 
-  /// 顶部增幅：topMul = 1 + topBoost × verticalGrad。0=雾形只衰减
-  /// 底部；默认 3.0 = 雾形顶格时顶部 4 倍（用户定调顶格）。
-  final double topBoost;
-
-  /// 动态取色浓度：0–1。雾面提亮层基色从纯白向「内容实时采样平均
-  /// 色」靠拢的比例（采样由 FogTintSampler 提供，null 时回落纯白）。
-  /// 0 = 现状纯白雾；默认 0.10（轻取色，色相隐约跟随内容）。
-  final double tintMix;
-
-  /// 雾面高度调节量（px）：双向——正档在「状态栏+顶栏」（首页吸顶
-  /// 头为整条吸顶头）基础上把雾面带向下多盖一段（糊化、染色、雾形、
-  /// 羽化整体跟随加高）；负档把雾面收窄（底缘上移，经 [bandHeight]
-  /// 最多收到 0）；0 = 现状高度。v2154 新增，v2156 扩双向（用户定调
-  /// 「高度要往上调不是往下」= 负档收窄雾面）。
+  /// 雾面高度调节量（px）：双向——正档在「状态栏+顶栏」基础上把雾面带向下
+  /// 多盖一段；负档把雾面收窄（经 [bandHeight] 最多收到 0）。
+  ///
+  /// v2239 默认 **0** = 雾面带底边**正好贴住分组栏底边**（不再向下多盖
+  /// 56px，避免分组栏底与内容区之间挂一条雾）。
   final double fogHeight;
 
-  /// 暗色主题整体浓度比例（历史惯例 0.78）。
-  static const double darkScale = 0.78;
-
-  /// 当前发布默认（v2157：用户调参台回发 10 参数固化）。
+  /// 当前发布默认（官方直译档）。
   static const FogTuningState fallback = FogTuningState();
 
-  /// blur σ 合理上限（用户定调 0–3；超过没有观感意义且更吃性能）。
-  static const double maxBlurSigma = 3.0;
+  /// blur σ 上限（MIUI 雾面带真值 20）。
+  static const double maxBlurSigma = 20.0;
 
-  /// 顶部增幅上限（雾形顶格时顶部最多 4 倍）。
-  static const double maxTopBoost = 3.0;
-
-  /// 底缘羽化量程上限（用户 80 顶格不够，扩到 120）。
-  static const double maxFeather = 120;
-
-  /// 动态取色浓度上限（1=完全采用采样色相，经 sampler 端亮度整形）。
-  static const double maxTintMix = 1.0;
+  /// 底缘羽化量程上限（px）。
+  static const double maxFeather = 160;
 
   /// 雾面高度正档上限（px）。吸顶头约 176px，再延伸 240 到半屏。
   static const double maxFogHeight = 240;
 
-  /// 雾面高度负档下限（px）：正好把 110px 基准雾带收到 0（用户定调
-  /// 「高度要往上调」= 负档收窄雾面）。
+  /// 雾面高度负档下限（px）：正好把 110px 基准雾带收到 0。
   static const double minFogHeight = -110;
-
-  /// demo 真值矩阵（σ46 伴生的饱和+轻色偏矩阵）。
-  static const List<double> _demoMatrix = <double>[
-    1.35415, -0.32175, -0.0324, 0, 0, //
-    -0.09585, 1.12825, -0.0324, 0, 0, //
-    -0.09585, -0.32175, 1.4176, 0, 0, //
-    0, 0, 0, 1, 0,
-  ];
-
-  /// 恒等矩阵（saturation=0 时的插值端点）。
-  static const List<double> _identityMatrix = <double>[
-    1, 0, 0, 0, 0, //
-    0, 1, 0, 0, 0, //
-    0, 0, 1, 0, 0, //
-    0, 0, 0, 1, 0,
-  ];
-
-  /// 按强度插值生成色彩矩阵。
-  List<double> colorMatrix() {
-    final t = saturation.clamp(0.0, 2.0);
-    return <double>[
-      for (var i = 0; i < _demoMatrix.length; i++)
-        _identityMatrix[i] + (_demoMatrix[i] - _identityMatrix[i]) * t,
-    ];
-  }
 
   FogTuningState copyWith({
     double? blurSigma,
-    double? saturation,
-    double? whiteNormal,
-    double? whiteSoftLight,
-    double? graySoftLight,
     double? feather,
     double? verticalGrad,
-    double? topBoost,
-    double? tintMix,
     double? fogHeight,
   }) => FogTuningState(
         blurSigma: blurSigma ?? this.blurSigma,
-        saturation: saturation ?? this.saturation,
-        whiteNormal: whiteNormal ?? this.whiteNormal,
-        whiteSoftLight: whiteSoftLight ?? this.whiteSoftLight,
-        graySoftLight: graySoftLight ?? this.graySoftLight,
         feather: feather ?? this.feather,
         verticalGrad: verticalGrad ?? this.verticalGrad,
-        topBoost: topBoost ?? this.topBoost,
-        tintMix: tintMix ?? this.tintMix,
         fogHeight: fogHeight ?? this.fogHeight,
       );
 
   Map<String, Object> toJson() => <String, Object>{
         'blurSigma': blurSigma,
-        'saturation': saturation,
-        'whiteNormal': whiteNormal,
-        'whiteSoftLight': whiteSoftLight,
-        'graySoftLight': graySoftLight,
         'feather': feather,
         'verticalGrad': verticalGrad,
-        'topBoost': topBoost,
-        'tintMix': tintMix,
         'fogHeight': fogHeight,
       };
 
   /// 防御性解析：缺失/非法字段逐个回落默认，单字段坏值不拖垮整组。
+  ///
+  /// 旧档 JSON 里的遗留键（`whiteNormal` / `whiteSoftLight` /
+  /// `graySoftLight` / `fogBase` / `saturation` / `tintMix`）**直接被忽略**
+  /// → 读出来就是官方直译档，不需要额外的迁移分支。
   factory FogTuningState.fromJson(Map<String, Object?> json) {
     double read(String key, double fallback, double min, double max) {
       final v = json[key];
@@ -176,14 +117,8 @@ class FogTuningState {
     const d = FogTuningState.fallback;
     return FogTuningState(
       blurSigma: read('blurSigma', d.blurSigma, 0, maxBlurSigma),
-      saturation: read('saturation', d.saturation, 0, 2),
-      whiteNormal: read('whiteNormal', d.whiteNormal, 0, 0.6),
-      whiteSoftLight: read('whiteSoftLight', d.whiteSoftLight, 0, 1),
-      graySoftLight: read('graySoftLight', d.graySoftLight, 0, 0.6),
       feather: read('feather', d.feather, 0, maxFeather),
       verticalGrad: read('verticalGrad', d.verticalGrad, 0, 1),
-      topBoost: read('topBoost', d.topBoost, 0, maxTopBoost),
-      tintMix: read('tintMix', d.tintMix, 0, maxTintMix),
       fogHeight: read('fogHeight', d.fogHeight, minFogHeight, maxFogHeight),
     );
   }
@@ -203,14 +138,8 @@ class FogTuningState {
   /// 全字段值相等（fromJson 每次新实例，实例判等必错）。
   bool equals(FogTuningState other) =>
       blurSigma == other.blurSigma &&
-      saturation == other.saturation &&
-      whiteNormal == other.whiteNormal &&
-      whiteSoftLight == other.whiteSoftLight &&
-      graySoftLight == other.graySoftLight &&
       feather == other.feather &&
       verticalGrad == other.verticalGrad &&
-      topBoost == other.topBoost &&
-      tintMix == other.tintMix &&
       fogHeight == other.fogHeight;
 }
 
@@ -231,8 +160,40 @@ abstract final class FogTuningStore {
     try {
       final raw = prefs.getString(_key);
       if (raw == null) return;
-      state.value = FogTuningState.fromJsonString(raw);
+      final saved = FogTuningState.fromJsonString(raw);
+      final next = _migrate(saved);
+      state.value = next;
+      if (!next.equals(saved)) {
+        try {
+          await prefs.setString(_key, next.toJsonString());
+        } catch (_) {}
+      }
     } catch (_) {}
+  }
+
+  /// 旧档收敛：把「旧发布默认档的羽化 / 雾高 / σ」收回到当前发布默认
+  /// （v2240：羽化 160→48、雾高 +56→0、σ 非 20→20）。
+  ///
+  /// 只匹配**旧发布默认值**（feather==160 / fogHeight==56），用户用调参台
+  /// 主动调出来的其它值不动——避免误伤。遗留层与 topBoost 键已在上游删除参数
+  /// 时由 fromJson 忽略，无需迁移分支。
+  ///
+  /// 羽化与上浓下淡是我们加的改良（非官方），但**默认值形态会随观感迭代**：
+  /// v2240 把羽化从 160 收到 48（浓度盖到分组栏底、贴底收尾干脆）、雾高从
+  /// +56 收到 0（雾带底边正好贴分组栏底边，不再向下多挂一条）。
+  static FogTuningState _migrate(FogTuningState v) {
+    final d = FogTuningState.fallback;
+    final sigmaDrift = v.blurSigma != d.blurSigma;
+    final featherOldDefault = v.feather == 160;
+    final heightOldDefault = v.fogHeight == 56;
+    if (!sigmaDrift && !featherOldDefault && !heightOldDefault) {
+      return v;
+    }
+    return v.copyWith(
+      blurSigma: sigmaDrift ? d.blurSigma : v.blurSigma,
+      feather: featherOldDefault ? d.feather : v.feather,
+      fogHeight: heightOldDefault ? d.fogHeight : v.fogHeight,
+    );
   }
 
   /// 写盘并通知全部雾面刷新；写失败仅静默（下次启动不记忆）。
@@ -246,4 +207,8 @@ abstract final class FogTuningStore {
 
   /// 恢复发布默认。
   static Future<void> reset() => save(FogTuningState.fallback);
+
+  /// 供测试重置「已恢复」标记（同一测试文件里需要多次从盘上恢复时用）。
+  @visibleForTesting
+  static void resetLoadedFlag() => _loaded = false;
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'app_scaffold.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'media_library.dart';
@@ -171,18 +172,15 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
     animation: widget.library,
     builder: (context, _) {
       final jobs = widget.library.merges.items;
-      return Scaffold(
-        appBar: AppBar(
-          flexibleSpace: const TopFog(),
-          title: const Text('合并队列'),
-          actions: [
-            IconButton(
-              tooltip: '添加多部剧',
-              onPressed: _adding || !_allowed ? null : _add,
-              icon: AppIcon(AppIcons.add),
-            ),
-          ],
-        ),
+      return AppScaffold(
+        title: '合并队列',
+        actions: [
+          IconButton(
+            tooltip: '添加多部剧',
+            onPressed: _adding || !_allowed ? null : _add,
+            icon: AppIcon(AppIcons.add),
+          ),
+        ],
         body: !_allowed
             ? const StatusPanel(title: '当前用户已切换', message: '请返回后重新打开合并队列。')
             : _loading

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'follow_state.dart';
 import 'glass.dart';
@@ -21,6 +22,12 @@ Future<void> openPlaybackDirectly(
   required AppRepository repository,
   required LocalStore store,
 }) {
+  // 兜底：搜索建议直达 / 追剧卡 / 以后新增的入口都不经过搜索框的
+  // onTapOutside，起播前统一释放文本焦点——否则键盘会跟着 opaque:false
+  // 浮层一路弹进播放器。电视模式不动遥控焦点。
+  if (!AppLayout.isTelevision(context)) {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
   return Navigator.of(context).push(
     PageRouteBuilder<void>(
       // opaque:false：转场与加载期间底下页面不被遮挡，浮层只是叠加。

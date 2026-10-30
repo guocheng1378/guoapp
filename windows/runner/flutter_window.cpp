@@ -44,6 +44,23 @@ bool FlutterWindow::OnCreate() {
           result->Success(flutter::EncodableValue(info));
           return;
         }
+        if (call.method_name() == "battery") {
+          // 播放器状态区电量：BatteryLifePercent=255 表示未知（台式机无电池），
+          // 返回 null 让 Dart 侧整颗图标隐藏。
+          SYSTEM_POWER_STATUS status{};
+          if (GetSystemPowerStatus(&status) == 0 ||
+              status.BatteryLifePercent == 255) {
+            result->Success();
+            return;
+          }
+          flutter::EncodableMap battery;
+          battery[flutter::EncodableValue("level")] = flutter::EncodableValue(
+              static_cast<int32_t>(status.BatteryLifePercent));
+          battery[flutter::EncodableValue("charging")] =
+              flutter::EncodableValue(status.ACLineStatus == 1);
+          result->Success(flutter::EncodableValue(battery));
+          return;
+        }
         if (call.method_name() != "playbackPower") {
           result->NotImplemented();
           return;

@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart';
 import 'danmaku_controller.dart';
 import 'lan_controller.dart';
 import 'player_interactions.dart';
+import 'soft_glass.dart';
 import 'widgets.dart';
 import 'video_enhancement.dart';
 import 'app_icons.dart';
@@ -20,9 +21,7 @@ class PlayerControls extends StatefulWidget {
     required this.fullscreen,
     required this.showOnPlaybackReady,
     this.onFullscreen,
-    this.portraitRotate = false,
     this.forceLandscape = false,
-    this.onPortraitRotate,
     required this.onBack,
     required this.title,
     required this.onTogglePlayback,
@@ -35,6 +34,7 @@ class PlayerControls extends StatefulWidget {
     this.routeLabel,
     this.onRoute,
     this.onDisplayOptions,
+    this.skipMarksSet = false,
     this.showDanmaku = false,
     this.danmakuEnabled = false,
     this.danmaku,
@@ -46,6 +46,17 @@ class PlayerControls extends StatefulWidget {
     this.onPush,
     this.onPictureInPicture,
     this.enhancement,
+    this.onNext,
+    this.hasNext = false,
+    this.compact = false,
+    this.landscapeChrome = false,
+    this.showQuality = true,
+    this.onPortraitFullscreen,
+    this.onLandscapeFullscreen,
+    this.onExitFullscreen,
+    this.onLockChanged,
+    this.danmakuStatusText = '',
+    this.batteryLevel,
   });
 
   final Player player;
@@ -55,10 +66,7 @@ class PlayerControls extends StatefulWidget {
   final bool showOnPlaybackReady;
   final VoidCallback? onFullscreen;
 
-  /// 短剧竖屏播放：全屏顶栏显示旋转按钮（竖屏 ⇄ 横屏）。
-  final bool portraitRotate;
   final bool forceLandscape;
-  final VoidCallback? onPortraitRotate;
   final VoidCallback onBack;
   final String title;
   final VoidCallback onTogglePlayback;
@@ -71,8 +79,11 @@ class PlayerControls extends StatefulWidget {
   final String? routeLabel;
   final Future<void> Function()? onRoute;
 
-  /// 画面比例与音轨入口（玻璃菜单）。
+  /// 画面比例 / 音轨 / 片头尾入口（右侧面板，一颗按钮全包）。
   final Future<void> Function()? onDisplayOptions;
+
+  /// 这部剧是否已标定过片头尾：真则上行「画面」按钮点亮。
+  final bool skipMarksSet;
   final bool showDanmaku;
   final bool danmakuEnabled;
   final DanmakuController? danmaku;
@@ -85,6 +96,33 @@ class PlayerControls extends StatefulWidget {
   final Future<void> Function()? onPictureInPicture;
   final VideoEnhancementController? enhancement;
 
+  /// 下一集（横屏下行左侧「▶|」）；hasNext=false 时置灰。
+  final VoidCallback? onNext;
+  final bool hasNext;
+
+  /// 非全屏竖屏：视频区只有 200 来 dp，套两行会吃掉半屏画面，
+  /// 降级为单行紧凑栏。
+  final bool compact;
+
+  /// 当前是否横屏全屏（决定上行/下行的按钮组合）。
+  final bool landscapeChrome;
+
+  /// 清晰度只对红果源开放（用户定调：其他源不要这颗按钮）。
+  final bool showQuality;
+  final VoidCallback? onPortraitFullscreen;
+
+  /// 右下角「横屏全屏」键：非全屏时进横屏全屏，横屏全屏态下改为退出全屏。
+  final VoidCallback? onLandscapeFullscreen;
+  final VoidCallback? onExitFullscreen;
+
+  /// 锁定状态变化回调：横屏锁屏时外层要据此把屏幕朝向钉住，
+  /// 否则锁了照样能旋转设备看画面。
+  final ValueChanged<bool>? onLockChanged;
+
+  /// 弹幕只读状态文案（本项目无发送能力，替代参考 App 的输入框）。
+  final String danmakuStatusText;
+  final int? batteryLevel;
+
   @override
   State<PlayerControls> createState() => _PlayerControlsState();
 }
@@ -94,15 +132,8 @@ class _PlayerControlsState extends State<PlayerControls> {
   Timer? _hideTimer;
   bool _visible = true;
 
-  /// 中间 HUD（中央播放/暂停按钮）独立于上下控制栏管理：
-  /// 同一次唤出时一起出现，但先收起（1.5s vs 上下 2.5s），
-  /// 且倍速、手势、缓冲、切集中强制隐藏，不挡画面。
-  bool _centerVisible = true;
-
-  /// 中间 HUD 淡出 180ms 窗口内保持，结束后下线停绘。
-  bool _centerFading = true;
-  Timer? _centerTimer;
-  Timer? _centerFadeTimer;
+  /// 横屏锁定：控制栏收起且点击画面不再唤出，只留左中锁钮可解锁。
+  bool _locked = false;
 
   /// 控制栏子树是否在树上：淡出 180ms 窗口内保持，结束后下线停绘。
   bool _fading = true;
@@ -116,7 +147,6 @@ class _PlayerControlsState extends State<PlayerControls> {
   void initState() {
     super.initState();
     _visible = widget.showOnPlaybackReady;
-    _centerVisible = widget.showOnPlaybackReady;
     _lastPlaying = widget.player.state.playing;
     // position/duration/buffer 是播放中最高频的流（~4 次/秒），不再
     // 在这里整树 setState——由 _progressRow 内的 StreamBuilder 自行
@@ -151,6 +181,17 @@ class _PlayerControlsState extends State<PlayerControls> {
   @override
   void didUpdateWidget(PlayerControls oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // 退出横屏版式（退回内嵌/转竖屏）时必须解掉锁定：竖屏没有锁钮，
+    // 留着 _locked 会让控制栏再也唤不出来，只能退出播放页。
+    if (!widget.landscapeChrome && _locked) {
+      _locked = false;
+      _visible = true;
+      _fading = true;
+      _scheduleHide();
+      // 离开横屏版式自动解锁：外层钉住的方向也要一并松开，
+      // 否则退回竖屏后方向还被锁着。
+      widget.onLockChanged?.call(false);
+    }
     if (widget.enabled != oldWidget.enabled ||
         widget.panelOpen != oldWidget.panelOpen ||
         widget.fullscreen != oldWidget.fullscreen ||
@@ -160,26 +201,19 @@ class _PlayerControlsState extends State<PlayerControls> {
       // 隐藏则等淡出结束后把子树下线。
       _fading = true;
       if (!widget.enabled && oldWidget.enabled) {
-        // 播放出错/切集（enabled=false）时收起控制栏与中间按钮
+        // 播放出错/切集（enabled=false）时收起控制栏
         _visible = false;
-        _centerVisible = false;
       }
       if (widget.enabled && !oldWidget.enabled) {
-        // 播放就绪只提示一次；暂停恢复不再自动弹工具栏，避免中央按钮常驻
+        // 播放就绪只提示一次；暂停恢复不再自动弹工具栏
         _visible = widget.showOnPlaybackReady;
-        _centerVisible = widget.showOnPlaybackReady;
       } else if (widget.panelOpen != oldWidget.panelOpen ||
           widget.fullscreen != oldWidget.fullscreen) {
         _visible = true;
-        _centerVisible = true;
       }
+      if (_locked) _visible = false;
       if (!_visible) _scheduleControlsOffline();
       _scheduleHide();
-      if (_centerVisible) {
-        _syncCenterTimer();
-      } else {
-        _scheduleCenterOffline();
-      }
     }
   }
 
@@ -203,14 +237,15 @@ class _PlayerControlsState extends State<PlayerControls> {
     _hideTimer?.cancel();
     // 暂停中也要照常收起：以前这里把「暂停」当成不隐藏的条件，
     // 结果点了暂停后中央按钮就长期杵在画面上
-    if (!widget.enabled || widget.panelOpen || _seekValue != null) {
+    if (!widget.enabled || widget.panelOpen || _seekValue != null || _locked) {
       return;
     }
     _hideTimer = Timer(const Duration(milliseconds: 2500), () {
       if (!mounted ||
           !widget.enabled ||
           widget.panelOpen ||
-          _seekValue != null) {
+          _seekValue != null ||
+          _locked) {
         return;
       }
       // 倍速/缓冲中直接收起，不再续期：倍速有提示胶囊、缓冲有中央转圈，
@@ -227,68 +262,54 @@ class _PlayerControlsState extends State<PlayerControls> {
     });
   }
 
-  /// 中间 HUD 的 1.5s 独立计时：显示中就排收起，收起后下线停绘。
-  void _syncCenterTimer() {
-    _centerTimer?.cancel();
-    if (!_centerVisible) {
-      _scheduleCenterOffline();
-      return;
-    }
-    _centerTimer = Timer(const Duration(milliseconds: 1500), () {
-      if (!mounted) return;
-      setState(() => _centerVisible = false);
-      _scheduleCenterOffline();
-    });
-  }
-
-  /// 中间 HUD 淡出动画结束（180ms + 20ms 余量）后下线停绘。
-  void _scheduleCenterOffline() {
-    _centerFadeTimer?.cancel();
-    _centerFadeTimer = Timer(const Duration(milliseconds: 200), () {
-      if (mounted && !_centerVisible) setState(() => _centerFading = false);
-    });
-  }
-
   /// 统一切换控制栏可见性：显示即上线，隐藏等淡出结束后下线。
-  /// 中间 HUD 跟随同一次唤出：一起出现但 1.5s 先收，隐藏时立即走。
   void _setVisible(bool value) {
     if (!mounted) return;
+    if (value && _locked) return;
     setState(() {
       _visible = value;
       _fading = true;
-      _centerVisible = value;
     });
     if (!value) {
       _scheduleControlsOffline();
-      _scheduleCenterOffline();
-    } else {
-      _syncCenterTimer();
     }
   }
 
   void _show() {
-    if (!mounted) return;
-    if (!_visible) {
-      _setVisible(true);
-    } else if (!_centerVisible) {
-      // 已显示但中间按钮已被独立收起（如倍速/缓冲结束后）：重新唤出
-      setState(() => _centerVisible = true);
-      _syncCenterTimer();
-    }
+    if (!mounted || _locked) return;
+    if (!_visible) _setVisible(true);
     _scheduleHide();
   }
 
   void _tap() {
-    if (widget.interactions.suppressTap) return;
+    if (widget.interactions.suppressTap || _locked) return;
     widget.onFocusSurface();
-    // 单击切换控制条显隐（横竖屏一致）；播放/暂停走中央按钮。
-    // 必须走 _setVisible：子树下线（_fading=false）后只有它会重新上线，
-    // 否则控制栏收起一次就再也唤不出来了。
+    // 单击切换控制条显隐；控制栏收起后子树会下线，必须走 _setVisible
+    // 才会重新上线。
     _setVisible(!_visible);
     _scheduleHide();
   }
 
+  /// 横屏锁定：收起控制栏并禁止唤出，再点左中锁钮解锁。
+  /// 锁定还要真的锁住屏幕方向（通知外层把朝向钉住），否则旋转设备
+  /// 画面照样跟着转，锁了等于没锁。
+  void _toggleLock() {
+    setState(() {
+      _locked = !_locked;
+      _visible = !_locked;
+      _fading = true;
+    });
+    widget.onLockChanged?.call(_locked);
+    if (_locked) {
+      _hideTimer?.cancel();
+      _scheduleControlsOffline();
+    } else {
+      _scheduleHide();
+    }
+  }
+
   Future<void> _panel(Future<void> Function() open) async {
+    if (_locked) return;
     _hideTimer?.cancel();
     widget.interactions.cancel();
     await open();
@@ -361,8 +382,6 @@ class _PlayerControlsState extends State<PlayerControls> {
   void dispose() {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
-    _centerTimer?.cancel();
-    _centerFadeTimer?.cancel();
     widget.interactions.removeListener(_interactionChanged);
     for (final subscription in _subscriptions) {
       subscription.cancel();
@@ -373,255 +392,300 @@ class _PlayerControlsState extends State<PlayerControls> {
   @override
   Widget build(BuildContext context) {
     // 手势 HUD 的显隐（gestureActive）逐帧变化，把依赖 interactions 的
-    // 可见性判断收进 ListenableBuilder：手势期间只重建控制层子树，
-    // 而不是让整个播放页每帧 setState 重建。
+    // 可见性判断收进 ListenableBuilder：手势期间只重建控制层子树。
     return ListenableBuilder(
       listenable: widget.interactions,
       builder: (context, _) {
         final state = widget.player.state;
-        // 手势进行中（滑动调进度/亮度/音量/切集）强制隐藏控制栏：
-        // 滑动 seek 会冻结预览（临时暂停），不能因「未播放」把中间按钮顶出来挡 HUD
         final gestureActive =
             widget.interactions.hudState.type != SwipeAction.none;
-        // 只有用户主动唤出或面板打开时才显示：暂停、缓冲都不再自动弹出，
-        // 否则中央的上一集/播放/下一集会常驻在画面上（很突兀）
-        final visible = (_visible || widget.panelOpen) && !gestureActive;
+        // 锁定后控制栏彻底不出现（面板也不弹），只留左中锁钮。
+        final visible =
+            (_visible || widget.panelOpen) && !gestureActive && !_locked;
         return MouseRegion(
-      onHover: (_) => _show(),
-      cursor: visible ? SystemMouseCursors.basic : SystemMouseCursors.none,
-      child: LayoutBuilder(
-        builder: (context, constraints) => Stack(
-          fit: StackFit.expand,
-          children: [
-            Listener(
-              key: const ValueKey('player-gesture-surface'),
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (event) {
-                widget.onFocusSurface();
-                // 控件显示时，落在底部控制区的手势交给控件自己处理（否则裸
-                // Listener 会先启动长按，把按钮长按抢成 2 倍速）；控件隐藏时
-                // 整屏手势都归播放器，底部照样能上下滑调亮度/音量
-                if (visible &&
-                    _hitsControlBand(
-                      event.localPosition,
-                      constraints.biggest,
-                    )) {
-                  return;
-                }
-                widget.interactions.pointerDown(
-                  event,
-                  swipeEnabled: widget.swipeEnabled,
-                  width: constraints.maxWidth,
-                  height: constraints.maxHeight,
-                );
-              },
-              onPointerMove: widget.interactions.pointerMove,
-              onPointerUp: widget.interactions.pointerUp,
-              onPointerCancel: widget.interactions.pointerCancel,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _tap,
-                onDoubleTap: () {
-                  if (!widget.enabled || widget.interactions.suppressTap) {
-                    return;
-                  }
-                  final origin = widget.interactions.lastTapOrigin;
-                  final width = widget.interactions.viewWidth;
-                  if (origin != null && width > 0 && widget.onSeek != null) {
-                    final back = origin.dx < width * 0.5;
-                    final state = widget.player.state;
-                    final durationSec = state.duration.inSeconds;
-                    var target =
-                        state.position.inSeconds + (back ? -10 : 10);
-                    if (durationSec > 0) {
-                      target = target.clamp(0, durationSec);
-                    } else if (target < 0) {
-                      target = 0;
+          onHover: (_) => _show(),
+          cursor: visible ? SystemMouseCursors.basic : SystemMouseCursors.none,
+          child: LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              fit: StackFit.expand,
+              children: [
+                Listener(
+                  key: const ValueKey('player-gesture-surface'),
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (event) {
+                    widget.onFocusSurface();
+                    if (_locked) return;
+                    // 控件显示时，落在底部控制区的手势交给控件自己处理，
+                    // 否则裸 Listener 会先启动长按，把按钮长按抢成 2 倍速。
+                    if (visible &&
+                        _hitsControlBand(
+                          event.localPosition,
+                          constraints.biggest,
+                        )) {
+                      return;
                     }
-                    unawaited(widget.onSeek!(Duration(seconds: target)));
-                    widget.interactions.hint(back ? '快退 10 秒' : '快进 10 秒');
-                    _spawnRipple(origin, forward: !back);
-                    _show();
-                  } else {
-                    widget.onTogglePlayback();
-                    _show();
-                  }
-                },
-              ),
-            ),
-            if (_ripple != null) _buildTapRipple(constraints),
-            if (state.buffering && widget.enabled)
-              const IgnorePointer(
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            IgnorePointer(
-              ignoring: !visible,
-              child: ExcludeFocus(
-                excluding: !visible,
-                // 淡出动画结束（+20ms 余量）后把整棵控制栏下线：早期
-                // AnimatedOpacity 常驻 opacity:0，子树仍参与布局与绘制
-                // （顶栏/按钮/渐变层/弹幕开关全画一遍）。
-                child: _fading
-                    ? AnimatedOpacity(
-                        opacity: visible ? 1 : 0,
-                        duration: const Duration(milliseconds: 180),
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            const IgnorePointer(
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      Color(0xAA000000),
-                                      Colors.transparent,
-                                      Color(0xE6000000),
-                                    ],
-                                    stops: [0, .45, 1],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Padding(
-                              padding: EdgeInsets.fromLTRB(
-                                8,
-                                _topChromeInset(),
-                                8,
-                                _bottomChromeInset(),
-                              ),
-                              child: Stack(
-                                children: [
-                                  if (widget.fullscreen) _topBar(),
-                                  _sideDanmakuControl(),
-                                  _bottomControls(
-                                    constraints: constraints,
-                                    volume: state.volume,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ),
-            // 顶部剧集信息行跟随控制栏一起淡出：常驻会一直占着画面上方一条
-            if (widget.swipeEnabled && !widget.fullscreen && widget.enabled)
-              IgnorePointer(
-                ignoring: !visible,
-                child: AnimatedOpacity(
-                  opacity: visible ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: _feedTopBar(),
-                ),
-              ),
-            // 中间 HUD：独立于上下控制栏的生命周期（1.5s 先收），
-            // 倍速/手势/缓冲/切集（enabled=false）中强制隐藏，不挡画面
-            if ((_centerVisible || _centerFading) &&
-                !gestureActive &&
-                !widget.interactions.boosting &&
-                !state.buffering &&
-                widget.enabled &&
-                constraints.maxHeight >= (widget.swipeEnabled ? 168 : 220))
-              IgnorePointer(
-                ignoring: !_centerVisible,
-                child: ExcludeFocus(
-                  excluding: !_centerVisible,
-                  child: AnimatedOpacity(
-                    opacity: _centerVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: _centerPlayback(state.playing),
+                    widget.interactions.pointerDown(
+                      event,
+                      swipeEnabled: widget.swipeEnabled,
+                      width: constraints.maxWidth,
+                      height: constraints.maxHeight,
+                    );
+                  },
+                  onPointerMove: (event) {
+                    if (_locked) return;
+                    widget.interactions.pointerMove(event);
+                  },
+                  onPointerUp: (event) {
+                    if (_locked) return;
+                    widget.interactions.pointerUp(event);
+                  },
+                  onPointerCancel: widget.interactions.pointerCancel,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _tap,
+                    onDoubleTap: () {
+                      if (_locked ||
+                          !widget.enabled ||
+                          widget.interactions.suppressTap) {
+                        return;
+                      }
+                      final origin = widget.interactions.lastTapOrigin;
+                      final width = widget.interactions.viewWidth;
+                      if (origin != null &&
+                          width > 0 &&
+                          widget.onSeek != null) {
+                        final back = origin.dx < width * 0.5;
+                        final state = widget.player.state;
+                        final durationSec = state.duration.inSeconds;
+                        var target =
+                            state.position.inSeconds + (back ? -10 : 10);
+                        if (durationSec > 0) {
+                          target = target.clamp(0, durationSec);
+                        } else if (target < 0) {
+                          target = 0;
+                        }
+                        unawaited(widget.onSeek!(Duration(seconds: target)));
+                        widget.interactions.hint(
+                          back ? '快退 10 秒' : '快进 10 秒',
+                        );
+                        _spawnRipple(origin, forward: !back);
+                        _show();
+                      } else {
+                        widget.onTogglePlayback();
+                        _show();
+                      }
+                    },
                   ),
                 ),
-              ),
-            _gestureFeedback(),
-          ],
-        ),
-      ),
+                if (_ripple != null) _buildTapRipple(constraints),
+                if (state.buffering && widget.enabled)
+                  const IgnorePointer(
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                IgnorePointer(
+                  ignoring: !visible,
+                  child: ExcludeFocus(
+                    excluding: !visible,
+                    // 淡出动画结束（+20ms 余量）后把整棵控制栏下线停绘。
+                    child: _fading
+                        ? AnimatedOpacity(
+                            opacity: visible ? 1 : 0,
+                            duration: const Duration(milliseconds: 180),
+                            child: _chromeLayer(constraints),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+                // 左中锁钮：横屏全屏常驻（控制栏显示时也在）。
+                // 锁定时不看 enabled：加载中/出错时若把锁钮一起藏掉，用户就
+                // 再也解不开锁、只能退出页面。
+                if (widget.landscapeChrome && (widget.enabled || _locked))
+                  _lockButton(visible || _locked),
+                _gestureFeedback(),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  /// 竖屏沉浸（feed）模式的常驻顶栏：返回 + 剧名·第N集 + 旋转，
-  /// 不随控制条淡出——红果短剧的做法，切集后始终能看到当前剧集上下文。
-  Widget _feedTopBar() {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 4, right: 4, top: 8),
-        child: Row(
-          children: [
-            _overlayIconButton(
-              tooltip: '返回',
-              onPressed: widget.onBack,
-              icon: AppIcon(AppIcons.arrowBack),
-            ),
-            Expanded(
-              child: Text(
-                widget.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
-                ),
+  /// 控制栏主体：上行（返回/标题/状态钮）+ 进度行 + 下行（播放/切集/功能）。
+  /// 版式按参考截图：进度条在按钮行上方，按钮行分左右两组。
+  Widget _chromeLayer(BoxConstraints constraints) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xAA000000),
+                  Colors.transparent,
+                  Color(0xE6000000),
+                ],
+                stops: [0, .45, 1],
               ),
             ),
-            if (widget.onFullscreen != null)
-              _overlayIconButton(
-                tooltip: '旋转与全屏',
-                onPressed: widget.onFullscreen,
-                icon: AppIcon(AppIcons.screenRotate),
-              ),
-          ],
+          ),
         ),
-      ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            4 + _sideChromeInset(left: true),
+            _topChromeInset(),
+            4 + _sideChromeInset(left: false),
+            _bottomChromeInset(),
+          ),
+          child: Column(
+            children: [
+              _topRow(),
+              const Spacer(),
+              // 下行自带进度行（横竖屏都是「进度在上、按钮在下」）。
+              _bottomRow(width: constraints.maxWidth),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _topBar() {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 4, right: 4),
-        child: Row(
-          children: [
-            _overlayIconButton(
-              tooltip: '退出全屏',
-              onPressed: widget.onFullscreen,
-              icon: AppIcon(AppIcons.arrowBack),
-            ),
-            Expanded(
-              child: Text(
-                widget.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
-                ),
-              ),
-            ),
-            // 短剧竖屏全屏：手动旋转竖屏 ⇄ 横屏。
-            if (widget.portraitRotate && widget.onPortraitRotate != null)
-              _overlayIconButton(
-                tooltip: widget.forceLandscape ? '转回竖屏' : '旋转到横屏',
-                onPressed: widget.onPortraitRotate,
-                icon: AppIcon(
-                  AppIcons.screenRotate,
-                  color: widget.forceLandscape
-                      ? Theme.of(context).colorScheme.primary
-                      : Colors.white,
-                ),
-              ),
-          ],
+  /// 上行栏：返回 + 剧名 + 画质小标签，右端状态钮组（比例/投屏/画中画）
+  /// 与电池时间。返回恒为「返回上一页」，退出全屏另有独立键。
+  Widget _topRow() {
+    final landscape = widget.landscapeChrome;
+    // 窄屏（真机竖屏逻辑宽常常只有 320）上行挤满状态钮后，Expanded 会被
+    // 压到 0 —— 剧名整条消失。这里让紧凑档让位：时间文字与画质标签收窄，
+    // 保证标题始终有可读宽度。
+    final width = MediaQuery.sizeOf(context).width;
+    final dense = !landscape && width < 400;
+    return Row(
+      children: [
+        _overlayIconButton(
+          tooltip: '返回',
+          onPressed: widget.onBack,
+          icon: AppIcon(AppIcons.arrowBack, size: 22),
         ),
+        const SizedBox(width: 2),
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
+                  ),
+                ),
+              ),
+              if (widget.showQuality && widget.qualityLabel.isNotEmpty)
+                _qualityTag(dense: dense),
+            ],
+          ),
+        ),
+        ..._topStatusButtons(landscape, dense: dense),
+        if (widget.batteryLevel != null) _batteryStatus(dense: dense),
+      ],
+    );
+  }
+
+  /// 画质小标签：11px 白 70%，点开清晰度面板（旧版是一颗方块按钮，
+  /// 和倍速/线路挤在一行，现在收进标题行右侧）。
+  Widget _qualityTag({bool dense = false}) => Padding(
+    padding: EdgeInsets.only(left: dense ? 4 : 6),
+    child: GestureDetector(
+      key: const ValueKey('player-quality'),
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.enabled ? () => _panel(widget.onQuality) : null,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 4 : 6,
+          vertical: dense ? 1 : 2,
+        ),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: .14),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          widget.qualityLabel,
+          maxLines: 1,
+          style: TextStyle(
+            fontSize: dense ? 10 : 11,
+            height: 1.2,
+            fontWeight: FontWeight.w600,
+            color: Colors.white.withValues(alpha: .78),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  /// 上行右侧状态钮：横屏给比例/投屏/画中画/退出全屏，竖屏给弹幕/投屏/画中画。
+  List<Widget> _topStatusButtons(bool landscape, {bool dense = false}) {
+    final danmakuInTop = !landscape && widget.showDanmaku && widget.danmaku != null;
+    return [
+      if (danmakuInTop) _danmakuTool(badge: false),
+      // 画面比例 + 音轨 + 片头尾合成一颗，两栏都在上行（用户定调）。
+      if (widget.onDisplayOptions != null)
+        _toolIcon(
+          key: const ValueKey('player-display'),
+          tooltip: '画面比例与片头尾',
+          icon: AppIcon(AppIcons.tune, size: 20),
+          onPressed: widget.enabled
+              ? () => _panel(widget.onDisplayOptions!)
+              : null,
+          selected: widget.skipMarksSet,
+        ),
+      if (widget.onPush != null)
+        _lanPushTool(const ValueKey('fullscreen-lan-push')),
+      if (widget.onPictureInPicture != null)
+        _toolIcon(
+          key: const ValueKey('player-picture-in-picture'),
+          tooltip: '画中画',
+          icon: AppIcon(AppIcons.pip, size: 20),
+          onPressed: widget.enabled
+              ? () => _panel(widget.onPictureInPicture!)
+              : null,
+        ),
+    ];
+  }
+
+  /// 电池 + 当前时间（照参考截图）：电量换算成图标内部填充宽度，
+  /// 取不到电量时整颗不渲染。窄屏只留电池图标——把 38dp 让给剧名更值。
+  Widget _batteryStatus({bool dense = false}) {
+    final level = widget.batteryLevel!.clamp(0, 100);
+    final now = DateTime.now();
+    final clock =
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      padding: EdgeInsets.only(left: dense ? 4 : 6, right: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Tooltip(
+            message: '$level%',
+            child: _BatteryMeter(level: level),
+          ),
+          if (!dense) ...[
+            const SizedBox(width: 4),
+            Text(
+              clock,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.white.withValues(alpha: .9),
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -641,64 +705,374 @@ class _PlayerControlsState extends State<PlayerControls> {
     ),
   );
 
-  /// 中间 HUD 只保留播放/暂停大按钮：切集走中间竖滑手势和底部选集，
-  /// 两侧的上一集/下一集按钮挡画面还占唤出时间。
-  Widget _centerPlayback(bool playing) => Center(
-    child: IconButton.filledTonal(
-      tooltip: playing ? '暂停播放' : '开始播放',
-      iconSize: 38,
-      onPressed: () {
-        widget.onTogglePlayback();
-        _show();
-      },
-      icon: playing ? AppIcon(AppIcons.pause) : AppIcon(AppIcons.play),
-    ),
-  );
+  /// 播放/暂停键：**恢复原来的样式**（白瓷圆底 + 深色图标，M3 tonal 风）。
+  ///
+  /// 用户 2026-10-29 定调「播放暂停键改回原来的样式」——此前改成了玻璃岛
+  /// （半透玻璃圆），在视频画面上读作"一块浮起来的玻璃"，不是按键。位置仍
+  /// 留在下行栏（2153 HUD 分离改造的布局决定不动，只换外观）。
+  Widget _playPauseButton({required bool playing, double size = 26}) =>
+      IconButton(
+        key: const ValueKey('player-play-pause'),
+        tooltip: playing ? '暂停播放' : '开始播放',
+        iconSize: size + 8,
+        style: IconButton.styleFrom(
+          backgroundColor: Colors.white.withValues(alpha: .92),
+          foregroundColor: Colors.black87,
+          minimumSize: const Size(44, 44),
+          padding: EdgeInsets.zero,
+        ),
+        onPressed: widget.enabled
+            ? () {
+                widget.onTogglePlayback();
+                _show();
+              }
+            : null,
+        icon: AppIcon(
+          playing ? AppIcons.playerPause : AppIcons.playerPlay,
+          size: size,
+          color: Colors.black87,
+        ),
+      );
 
-  Widget _sideDanmakuControl() {
-    if (!widget.showDanmaku) return const SizedBox.shrink();
+  /// 左中锁钮：只在横屏出现，跟控制栏一起显隐。
+  /// 锁定后控制栏消失、这颗常驻，图标换成「开锁」——用户要能一眼看出
+  /// 现在锁着、点它就是解锁（旧版一直是同一把锁，看不出可点）。
+  Widget _lockButton(bool show) {
     return Align(
-      alignment: Alignment.centerRight,
-      child: Padding(
-        padding: EdgeInsets.only(right: widget.swipeEnabled ? 0 : 4),
-        child: _danmakuTool(),
+      alignment: const Alignment(-.94, 0),
+      child: IgnorePointer(
+        ignoring: !show,
+        child: AnimatedOpacity(
+          opacity: show ? 1 : 0,
+          duration: const Duration(milliseconds: 120),
+          child: GestureDetector(
+            key: const ValueKey('player-lock'),
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggleLock,
+            child: Tooltip(
+              message: _locked ? '点击解锁' : '锁定屏幕',
+              child: Opacity(
+                opacity: _locked ? .78 : 1,
+                // 柔光圆：半透玻璃 + 上内阴影/下内高光/渐变描边，
+                // 代替原来的纯色圆（平面感 → 玻璃感）。
+                child: SoftGlassSurface.inherit(
+                  shape: SoftGlassShape.circle,
+                  tint: Colors.white.withValues(alpha: _locked ? .30 : .22),
+                  edgeColor: Colors.white.withValues(alpha: .28),
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Center(
+                      child: _locked
+                          ? AppIcon(
+                              AppIcons.playerLockOpen,
+                              size: 20,
+                              color: Colors.white,
+                            )
+                          : AppIcon(
+                              AppIcons.playerLock,
+                              size: 20,
+                              color: Colors.white.withValues(alpha: .9),
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _bottomControls({
-    required BoxConstraints constraints,
-    required double volume,
-  }) {
-    final width = constraints.maxWidth;
-    final fullscreen = widget.fullscreen;
-    final mobile = widget.swipeEnabled;
-    final showEpisodes = fullscreen;
-    final showSpeedQuality =
-        mobile || fullscreen && width >= 720 || !fullscreen && width >= 560;
-    final showPush =
-        widget.onPush != null &&
-        (mobile || fullscreen && width >= 860 || !fullscreen && width >= 680);
-    final showCompare = fullscreen && width >= 820;
-    final showVolume = !widget.swipeEnabled && width >= 360;
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  Widget _bottomRow({required double width}) {
+    return widget.landscapeChrome
+        ? _landscapeBottomRow(width: width)
+        : _portraitBottomRow(width: width);
+  }
+
+  /// 弹幕状态文字（横屏下行按钮右侧）：状态随加载进度变化，这里局部监听，
+  /// 不惊动整棵控制栏。[danmakuStatusText] 非空时优先（宿主可覆盖文案）。
+  Widget _danmakuStatusLabel() {
+    if (widget.danmakuStatusText.isNotEmpty) {
+      return _danmakuStatusText(widget.danmakuStatusText);
+    }
+    final danmaku = widget.danmaku;
+    if (danmaku == null) return const SizedBox.shrink();
+    return ListenableBuilder(
+      listenable: danmaku,
+      builder: (context, _) {
+        final status = danmaku.status;
+        if (status.isEmpty) return const SizedBox.shrink();
+        return _danmakuStatusText(status);
+      },
+    );
+  }
+
+  Widget _danmakuStatusText(String text) => Text(
+    text,
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: TextStyle(
+      fontSize: 12,
+      height: 1.2,
+      color: Colors.white.withValues(alpha: .7),
+    ),
+  );
+
+  /// 横屏下行：进度行在上，按钮行在下（左：播放/弹幕+状态文字，
+  /// 右：播放源/倍速/选集/下一集/全屏键）。不再用 FittedBox 等比缩小整行
+  /// ——按钮被压小正是旧版「挤成一坨」的根源。
+  Widget _landscapeBottomRow({required double width}) {
+    final playing = widget.player.state.playing;
+    final hasDanmaku = widget.showDanmaku && widget.danmaku != null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 与竖屏、参考截图同一层次：进度条在按钮行上方。
+        _progressRow(),
+        SizedBox(
+          height: 46,
+          child: Row(
+            children: [
+              _playPauseButton(playing: playing),
+              // 下一集在左侧播放键旁（用户定调：放回左侧）。
+              _toolIcon(
+                key: const ValueKey('player-next-episode'),
+                tooltip: '下一集',
+                icon: AppIcon(AppIcons.skipNext, size: 22),
+                onPressed:
+                    widget.enabled && widget.hasNext && widget.onNext != null
+                    ? widget.onNext
+                    : null,
+              ),
+              if (hasDanmaku) ...[
+                const SizedBox(width: 4),
+                _danmakuTool(badge: false),
+              ],
+              if (widget.showDanmaku && widget.danmaku != null) ...[
+                const SizedBox(width: 8),
+                // 弹幕状态文字**不参与 flex 瓜分**：原先 Flexible(状态) +
+                // Spacer + Expanded(右侧组) 三方平分剩余空间，右侧按钮组
+                // 只拿到 1/3，容器右缘停在屏幕中段 →「图标没靠右」根因。
+                // 固定宽度上限 + ellipsis：超长文字不推挤右侧。
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 140),
+                  child: _danmakuStatusLabel(),
+                ),
+              ],
+              // 右侧按钮组吃满剩余宽度：容器右缘 = 屏幕右缘，按钮组贴右。
+              // 反向滚动保留：内容溢出时「退出全屏」始终可见（用户定调）。
+              // 右侧按钮组（线路/倍速/选集/增强对比/转竖屏全屏/退出全屏）
+              // 包进横向滚动容器：窄宽（测试以竖屏设备模拟横屏视图模式，宽约
+              // 390）下不再溢出，所有按钮始终保留（不再按宽度隐藏线路钮）；
+              // reverse:true 让最右的「退出全屏」始终贴右边缘可见。
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  reverse: true,
+                  child: Row(
+                    // 收缩到内容宽：反向滚动视口在内容不足时把内容贴右，
+                    // 配合上面的 Expanded 容器 → 整组按钮贴屏幕右边缘。
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.routeLabel != null && widget.onRoute != null)
+                        _toolText(
+                          key: const ValueKey('player-route'),
+                          tooltip: '切换播放线路',
+                          label: widget.routeLabel!,
+                          onPressed: widget.enabled
+                              ? () => _panel(widget.onRoute!)
+                              : null,
+                          width: 84,
+                        ),
+                      const SizedBox(width: 12),
+                      _toolText(
+                        key: const ValueKey('player-speed'),
+                        tooltip: '倍速',
+                        label: '${widget.speed}x',
+                        onPressed:
+                            widget.enabled ? () => _panel(widget.onSpeed) : null,
+                        width: 50,
+                      ),
+                      const SizedBox(width: 12),
+                      _toolText(
+                        key: const ValueKey('player-episodes'),
+                        tooltip: '选集',
+                        label: '选集',
+                        onPressed: widget.enabled
+                            ? () => _panel(widget.onEpisodes)
+                            : null,
+                        width: 44,
+                      ),
+                      if (width >= 820) _enhancementCompareButton(),
+                      // 横屏全屏态下给「转竖屏全屏」键：视频类全屏后没有任何旋转入口，
+                      // 与最右的「退出全屏」组成右下角固定双钮簇（短剧也有，和底栏去重）。
+                      if (widget.onPortraitFullscreen != null)
+                        _toolIcon(
+                          key: const ValueKey('player-portrait-fullscreen'),
+                          tooltip: '竖屏全屏',
+                          icon: AppIcon(AppIcons.screenRotate, size: 20),
+                          onPressed: widget.onPortraitFullscreen,
+                        ),
+                      // 退出全屏放最右下（用户定调）：下行最右一颗，不再占上行。
+                      if (widget.onExitFullscreen != null) ...[
+                        const SizedBox(width: 8),
+                        _toolIcon(
+                          key: const ValueKey('player-fullscreen-exit'),
+                          tooltip: '退出全屏',
+                          icon: AppIcon(AppIcons.fullscreenExit, size: 20),
+                          onPressed: widget.onExitFullscreen,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 竖屏下行：进度行在上、按钮行在下（与横屏同一套视觉层次）。
+  /// 按钮是固定宽度的一行，按可用宽度逐级让位（横屏全屏键 <340 不出现），
+  /// 绝不再整行 FittedBox 等比缩小。
+  Widget _portraitBottomRow({required double width}) {
+    final playing = widget.player.state.playing;
+    // 半屏内嵌（compact）：进度条与按钮合并成一条 44 高的单行（见
+    // _compactBottomRow），不再上下两行吃掉半屏画面；极窄时自动藏全屏钮。
+    if (widget.compact) return _compactBottomRow(width: width);
+    // 窄屏（<360）逐级让位：按钮收窄、低频的「片头尾」整颗收起，
+    // 保证任何宽度下都不会整行溢出（旧版靠 FittedBox 缩，按钮被压得看不清）。
+    final dense = width < 360;
+    // 半屏（内嵌）与全屏给不同的按钮组：半屏藏掉三颗大按钮。
+    final full = !widget.compact;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _progressRow(),
+        SizedBox(
+          height: 46,
+          child: Row(
+            children: [
+              _playPauseButton(playing: playing),
+              // 半屏（内嵌）只留播放与两颗全屏键：播放源/倍速/选集都收进
+              // 下方详情页，视频区不再被大按钮压住，主体更干净。
+              if (full && widget.routeLabel != null && widget.onRoute != null)
+                _toolText(
+                  key: const ValueKey('player-route'),
+                  tooltip: '切换播放线路',
+                  label: '播放源',
+                  onPressed: widget.enabled
+                      ? () => _panel(widget.onRoute!)
+                      : null,
+                  width: dense ? 48 : 52,
+                ),
+              if (full)
+                _toolText(
+                  key: const ValueKey('player-speed'),
+                  tooltip: '倍速',
+                  label: '${widget.speed}x',
+                  onPressed: widget.enabled ? () => _panel(widget.onSpeed) : null,
+                  width: dense ? 40 : 44,
+                ),
+              const Spacer(),
+              if (full)
+                _toolText(
+                  key: const ValueKey('player-episodes'),
+                  tooltip: '选集',
+                  label: '选集',
+                  onPressed: widget.enabled
+                      ? () => _panel(widget.onEpisodes)
+                      : null,
+                  width: dense ? 36 : 40,
+                ),
+              // 竖屏全屏 / 横屏全屏 两颗互斥切换：所在形态那颗变「退出全屏」，
+              // 另一颗变交叉切换（竖↔横），任何时候都能一键换形态。
+              _toolIcon(
+                key: const ValueKey('player-portrait-fullscreen'),
+                tooltip: widget.fullscreen
+                    ? (widget.landscapeChrome ? '竖屏全屏' : '退出全屏')
+                    : '竖屏全屏',
+                icon: AppIcon(
+                  widget.fullscreen && !widget.landscapeChrome
+                      ? AppIcons.fullscreenExit
+                      : AppIcons.fullscreen,
+                  size: 20,
+                ),
+                onPressed: widget.enabled
+                    ? (widget.fullscreen
+                          ? (widget.landscapeChrome
+                                ? widget.onPortraitFullscreen
+                                : (widget.onExitFullscreen ??
+                                    widget.onFullscreen))
+                          : widget.onPortraitFullscreen)
+                    : null,
+              ),
+              _toolIcon(
+                key: const ValueKey('player-landscape-fullscreen'),
+                tooltip: widget.landscapeChrome ? '退出全屏' : '横屏全屏',
+                icon: AppIcon(AppIcons.screenRotate, size: 20),
+                onPressed: widget.enabled
+                    ? (widget.landscapeChrome
+                          ? (widget.onExitFullscreen ?? widget.onFullscreen)
+                          : widget.onLandscapeFullscreen)
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 半屏内嵌（compact）：进度条与按钮合并成一条 44 高的单行——播放键在左，
+  /// 中间是进度滑块（不显示两侧时间，省宽度），右侧两颗全屏切换钮。原版上下两行
+  /// 会吃掉小窗近三分之一画面，单行更矮更干净。内嵌小窗可能很窄（首页续播条 /
+  /// 详情页窄列），低于 200dp 时藏掉两颗全屏钮只留播放+进度，绝不溢出黄黑条。
+  Widget _compactBottomRow({required double width}) {
+    final playing = widget.player.state.playing;
+    final showRotate = width >= 200;
+    final slider = Expanded(child: _progressRow(showTimes: false));
+    return SizedBox(
+      height: 44,
+      child: Row(
         children: [
-          if (mobile)
-            _mobileControlRow(fullscreen: fullscreen)
-          else
-            _desktopControlRow(
-              fullscreen: fullscreen,
-              showEpisodes: showEpisodes,
-              showSpeedQuality: showSpeedQuality,
-              showPush: showPush,
-              showCompare: showCompare,
-              showVolume: showVolume,
-              volume: volume,
+          _playPauseButton(playing: playing),
+          slider,
+          if (showRotate && widget.onPortraitFullscreen != null)
+            _toolIcon(
+              key: const ValueKey('player-portrait-fullscreen'),
+              tooltip: widget.fullscreen
+                  ? (widget.landscapeChrome ? '竖屏全屏' : '退出全屏')
+                  : '竖屏全屏',
+              icon: AppIcon(
+                widget.fullscreen && !widget.landscapeChrome
+                    ? AppIcons.fullscreenExit
+                    : AppIcons.fullscreen,
+                size: 20,
+              ),
+              onPressed: widget.enabled
+                  ? (widget.fullscreen
+                        ? (widget.landscapeChrome
+                              ? widget.onPortraitFullscreen
+                              : (widget.onExitFullscreen ?? widget.onFullscreen))
+                        : widget.onPortraitFullscreen)
+                  : null,
             ),
-          _progressRow(),
+          if (showRotate && widget.onLandscapeFullscreen != null)
+            _toolIcon(
+              key: const ValueKey('player-landscape-fullscreen'),
+              tooltip: widget.landscapeChrome ? '退出全屏' : '横屏全屏',
+              icon: AppIcon(AppIcons.screenRotate, size: 20),
+              onPressed: widget.enabled
+                  ? (widget.landscapeChrome
+                        ? (widget.onExitFullscreen ?? widget.onFullscreen)
+                        : widget.onLandscapeFullscreen)
+                  : null,
+            ),
         ],
       ),
     );
@@ -706,7 +1080,7 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   /// 进度行独立订阅 position 流：播放中唯一 ~4 次/秒的事件只重建这一行，
   /// 不再拖着整棵控制栏（顶栏/按钮/弹幕开关/渐变层）一起重建。
-  Widget _progressRow() {
+  Widget _progressRow({bool showTimes = true}) {
     final player = widget.player;
     return StreamBuilder<Duration>(
       stream: player.stream.position,
@@ -714,6 +1088,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       builder: (context, _) {
         final state = player.state;
         return _progressRowContent(
+          showTimes: showTimes,
           duration: state.duration.inMilliseconds / 1000,
           position: state.position.inMilliseconds / 1000,
           buffered: state.buffer.inMilliseconds / 1000,
@@ -723,28 +1098,34 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   double _topChromeInset() {
-    // 用 viewPadding 而不是 padding：视频画面在手机横屏是铺到屏幕边缘的
-    // （外层不再让位给状态栏），顶栏的可点区域得自己按系统栏高度退让。
+    // 全屏走 immersiveSticky：系统栏是本应用自己隐藏的，但 viewPadding 依旧
+    // 会报状态栏高度——按它退让就等于「画面已经贴边、HUD 还挂在下面一条」，
+    // 用户看到的就是「HUD 也在规避状态栏」。全屏一律按贴边处理。
+    if (widget.fullscreen) return 8;
+    // 非全屏竖屏：外层 SafeArea 已经给系统栏让过位，这里不再叠加。
+    if (!widget.swipeEnabled) return 0;
     final top = MediaQuery.viewPaddingOf(context).top;
-    if (widget.fullscreen) {
-      if (top <= 0) return 16;
-      return (top + 16).clamp(40.0, 80.0);
-    }
-    if (widget.swipeEnabled) {
-      if (top <= 0) return 10;
-      return (top + 8).clamp(18.0, 60.0);
-    }
-    return 0;
+    if (top <= 0) return 8;
+    return (top + 6).clamp(14.0, 60.0);
   }
 
   double _bottomChromeInset() {
-    if (widget.fullscreen) {
-      return (MediaQuery.viewPaddingOf(context).bottom + 12).clamp(48.0, 80.0);
-    }
-    return 0;
+    // 同理：全屏手势条已隐藏，底部只留极小余量，不再按导航栏高度顶起工具行。
+    return widget.fullscreen ? 12 : 0;
+  }
+
+  /// 横屏时挖孔会落在左右边缘（本机左边缘 144px），画面铺满整屏不让位，
+  /// 但返回/标题这些控件必须避开它，否则会被摄像头区域挡住。
+  double _sideChromeInset({required bool left}) {
+    if (!widget.fullscreen && !widget.swipeEnabled) return 0;
+    final padding = MediaQuery.paddingOf(context);
+    final inset = left ? padding.left : padding.right;
+    if (inset <= 0) return 0;
+    return inset.clamp(0.0, 160.0);
   }
 
   Widget _progressRowContent({
+    bool showTimes = true,
     required double duration,
     required double position,
     required double buffered,
@@ -760,14 +1141,15 @@ class _PlayerControlsState extends State<PlayerControls> {
         height: 28,
         child: Row(
           children: [
-            SizedBox(
-              width: 43,
-              child: Text(
-                formatPosition(_seekValue ?? position),
-                style: timeStyle,
-                textAlign: TextAlign.end,
+            if (showTimes)
+              SizedBox(
+                width: 43,
+                child: Text(
+                  formatPosition(_seekValue ?? position),
+                  style: timeStyle,
+                  textAlign: TextAlign.end,
+                ),
               ),
-            ),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, trackConstraints) {
@@ -858,10 +1240,11 @@ class _PlayerControlsState extends State<PlayerControls> {
                 },
               ),
             ),
-            SizedBox(
-              width: 43,
-              child: Text(formatPosition(duration), style: timeStyle),
-            ),
+            if (showTimes)
+              SizedBox(
+                width: 43,
+                child: Text(formatPosition(duration), style: timeStyle),
+              ),
           ],
         ),
       ),
@@ -874,11 +1257,13 @@ class _PlayerControlsState extends State<PlayerControls> {
     required Widget icon,
     required VoidCallback? onPressed,
     bool selected = false,
+    bool island = false,
   }) => _toolButton(
     key: key,
     tooltip: tooltip,
     onPressed: onPressed,
     selected: selected,
+    island: island,
     child: icon,
   );
 
@@ -907,6 +1292,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     required Widget child,
     required VoidCallback? onPressed,
     bool selected = false,
+    bool island = false,
     double visualWidth = 36,
   }) {
     final scheme = Theme.of(context).colorScheme;
@@ -915,34 +1301,49 @@ class _PlayerControlsState extends State<PlayerControls> {
         ? scheme.primary
         : Colors.white.withValues(alpha: enabled ? .92 : .48);
     final targetWidth = visualWidth < 40 ? 44.0 : visualWidth + 8;
+    final button = GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: onPressed,
+      child: SizedBox(
+        width: targetWidth,
+        height: 44,
+        child: Center(
+          child: IconTheme.merge(
+            data: IconThemeData(color: foreground, size: 22),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                color: foreground,
+                fontSize: 13.5,
+                height: 1,
+                fontWeight: FontWeight.w700,
+              ),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
     return Tooltip(
       message: tooltip,
       child: Semantics(
         button: true,
         enabled: enabled,
         label: tooltip,
-        child: GestureDetector(
-          key: key,
-          behavior: HitTestBehavior.opaque,
-          onTap: onPressed,
-          child: SizedBox(
-            width: targetWidth,
-            height: 44,
-            child: Center(
-              child: IconTheme.merge(
-                data: IconThemeData(color: foreground, size: 22),
-                child: DefaultTextStyle.merge(
-                  style: TextStyle(
-                    color: foreground,
-                    fontSize: 13.5,
-                    height: 1,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  child: child,
-                ),
-              ),
-            ),
-          ),
+        // 「点按有光，操作有回应」：跟随指针的局部高光（官方
+        // InteractiveHighlight）。静止时画面干净，按下才有回应。
+        child: SoftGlassPressHighlight(
+          // 主键用柔光圆岛（MIUI 播放器观感）：半透玻璃 + 上内阴影/
+          // 下内高光/渐边描边。继承式（不自带 backdrop）——控制层浮在
+          // 视频上，再糊一层会把画面吃掉。
+          child: island
+              ? SoftGlassSurface.inherit(
+                  shape: SoftGlassShape.circle,
+                  tint: Colors.white.withValues(alpha: .16),
+                  edgeColor: Colors.white.withValues(alpha: .28),
+                  child: button,
+                )
+              : button,
         ),
       ),
     );
@@ -969,28 +1370,24 @@ class _PlayerControlsState extends State<PlayerControls> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : link.connection == null
-                    ? AppIcon(AppIcons.cast, size: 22)
-                    : AppIcon(AppIcons.castConnected, size: 22),
+                    ? AppIcon(AppIcons.playerCast, size: 22)
+                    : AppIcon(AppIcons.playerCastConnected, size: 22),
           ),
         );
       },
     );
   }
 
-  Widget _clusteredToolRow(List<Widget> tools) {
-    if (tools.isEmpty) return const SizedBox.shrink();
-    return Row(mainAxisAlignment: MainAxisAlignment.end, children: tools);
-  }
-
-  /// 控件带命中判定：底部控制区（进度条 + 工具行）与右侧竖排控件（弹幕/音量）。
-  /// 底部高度比常规 44px 工具行更宽，进度条本身还要留出拖动区。
-  /// 控件带命中判定：只圈底部控制区（进度条 + 工具行）。
-  /// 带高度按视口比例设上限，避免在小尺寸布局下把手势区整片吃掉
-  /// （那会让右侧音量、中间切集等手势全部失灵）。
+  /// 控件带命中判定：只圈底部控制区（48 按钮行 + 28 进度行）。
+  /// 26% 视口比例只是「别把手势区整片吃掉」的上限；小视口（竖屏内嵌视频区
+  /// 只有 ~220dp）里 26% 比控件本身还矮，按钮下半部会落进手势区，点按被
+  /// 长按抢成 2 倍速，所以下限必须压住控件真实高度。
   bool _hitsControlBand(Offset position, Size size) {
     if (!size.width.isFinite || !size.height.isFinite) return false;
     if (size.width <= 0 || size.height <= 0) return false;
-    final band = math.min(150.0, size.height * .22);
+    // compact 内嵌是单行 44 高（进度与按钮合并），非 compact 是按钮行 46 + 进度行 28。
+    final chrome = (widget.compact ? 44 : 46 + 28) + _bottomChromeInset();
+    final band = math.min(190.0, math.max(chrome + 8, size.height * .26));
     return position.dy >= size.height - band;
   }
 
@@ -1014,7 +1411,9 @@ class _PlayerControlsState extends State<PlayerControls> {
     return null; // 已关闭 / 等待播放：按钮颜色已经说明，不再占位
   }
 
-  Widget _danmakuTool() {
+  /// 弹幕按钮。[badge] 为 false 时不带上方状态小字——上行栏只有 44 高，
+  /// 状态文字改由横屏下行的 danmakuStatusText 承担。
+  Widget _danmakuTool({bool badge = true}) {
     final danmaku = widget.danmaku;
     if (danmaku == null) return const SizedBox.shrink();
     // 弹幕状态（加载中/已载入 N 条/可重试…）随播放进度频繁变化：
@@ -1050,9 +1449,9 @@ class _PlayerControlsState extends State<PlayerControls> {
                   ),
                 ),
         );
-        final badge = _danmakuBadge(status);
-        if (badge == null) return button;
-        return _danmakuBadgeColumn(badge, button);
+        final label = badge ? _danmakuBadge(status) : null;
+        if (label == null) return button;
+        return _danmakuBadgeColumn(label, button);
       },
     );
   }
@@ -1086,262 +1485,6 @@ class _PlayerControlsState extends State<PlayerControls> {
     );
   }
 
-  Widget _desktopControlRow({
-    required bool fullscreen,
-    required bool showEpisodes,
-    required bool showSpeedQuality,
-    required bool showPush,
-    required bool showCompare,
-    required bool showVolume,
-    required double volume,
-  }) {
-    final tools = [
-      if (showSpeedQuality) ...[
-        _toolText(
-          key: const ValueKey('player-speed'),
-          tooltip: '倍速',
-          label: '${widget.speed}x',
-          onPressed: widget.enabled ? () => _panel(widget.onSpeed) : null,
-          width: 50,
-        ),
-        _toolText(
-          key: const ValueKey('player-quality'),
-          tooltip: '清晰度',
-          label: widget.qualityLabel,
-          onPressed: widget.enabled ? () => _panel(widget.onQuality) : null,
-          width: 52,
-        ),
-        if (widget.routeLabel != null && widget.onRoute != null)
-          _toolText(
-            key: const ValueKey('player-route'),
-            tooltip: '切换播放线路',
-            label: widget.routeLabel!,
-            onPressed: widget.enabled ? () => _panel(widget.onRoute!) : null,
-            width: 62,
-          ),
-      ],
-      if (showPush) _lanPushTool(const ValueKey('fullscreen-lan-push')),
-      if (showEpisodes)
-        _toolIcon(
-          key: const ValueKey('player-episodes'),
-          tooltip: '选集',
-          icon: AppIcon(AppIcons.gridView, size: 22),
-          onPressed: widget.enabled ? () => _panel(widget.onEpisodes) : null,
-        ),
-      if (showCompare) _enhancementCompareButton(),
-      if (showVolume)
-        _toolIcon(
-          key: const ValueKey('player-volume'),
-          tooltip: '音量',
-          icon: volume == 0
-              ? AppIcon(AppIcons.volumeOff, size: 22)
-              : AppIcon(AppIcons.volumeUp, size: 22),
-          onPressed: widget.enabled
-              ? () => _panel(() => _openVolume(volume))
-              : null,
-        ),
-      if (widget.onPictureInPicture != null)
-        _toolIcon(
-          key: const ValueKey('player-picture-in-picture'),
-          tooltip: '画中画',
-          icon: AppIcon(AppIcons.pip, size: 22),
-          onPressed: widget.enabled
-              ? () => _panel(widget.onPictureInPicture!)
-              : null,
-        ),
-      if (widget.onFullscreen != null)
-        _toolIcon(
-          key: const ValueKey('player-fullscreen'),
-          tooltip: fullscreen ? '退出全屏' : '旋转与全屏',
-          icon: fullscreen
-              ? AppIcon(AppIcons.fullscreenExit, size: 22)
-              : AppIcon(AppIcons.fullscreen, size: 22),
-          onPressed: widget.onFullscreen,
-        ),
-    ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-      child: _clusteredToolRow(tools),
-    );
-  }
-
-  Widget _mobileControlRow({required bool fullscreen}) {
-    final tools = [
-      _toolText(
-        key: const ValueKey('player-speed'),
-        tooltip: '倍速',
-        label: '${widget.speed}x',
-        onPressed: widget.enabled ? () => _panel(widget.onSpeed) : null,
-        width: 50,
-      ),
-      _toolText(
-        key: const ValueKey('player-quality'),
-        tooltip: '清晰度',
-        label: widget.qualityLabel,
-        onPressed: widget.enabled ? () => _panel(widget.onQuality) : null,
-        width: 52,
-      ),
-      if (widget.routeLabel != null && widget.onRoute != null)
-        _toolText(
-          key: const ValueKey('player-route'),
-          tooltip: '切换播放线路',
-          label: widget.routeLabel!,
-          onPressed: widget.enabled ? () => _panel(widget.onRoute!) : null,
-          width: 62,
-        ),
-      if (widget.onDisplayOptions != null)
-        _toolIcon(
-          key: const ValueKey('player-display'),
-          tooltip: '画面比例与音轨',
-          icon: AppIcon(AppIcons.tune, size: 22),
-          onPressed: widget.enabled ? () => _panel(widget.onDisplayOptions!) : null,
-        ),
-      if (widget.onPush != null)
-        _lanPushTool(const ValueKey('fullscreen-lan-push')),
-      if (fullscreen)
-        _toolIcon(
-          key: const ValueKey('player-episodes'),
-          tooltip: '选集',
-          icon: AppIcon(AppIcons.gridView, size: 22),
-          onPressed: widget.enabled ? () => _panel(widget.onEpisodes) : null,
-        ),
-      if (widget.onPictureInPicture != null)
-        _toolIcon(
-          key: const ValueKey('player-picture-in-picture'),
-          tooltip: '画中画',
-          icon: AppIcon(AppIcons.pip, size: 22),
-          onPressed: widget.enabled
-              ? () => _panel(widget.onPictureInPicture!)
-              : null,
-        ),
-      // 右下角固定全屏键：竖屏进入全屏、全屏时退出
-      _toolIcon(
-        key: const ValueKey('player-fullscreen-toggle'),
-        tooltip: fullscreen ? '退出全屏' : '进入全屏',
-        icon: fullscreen
-            ? AppIcon(AppIcons.fullscreenExit, size: 22)
-            : AppIcon(AppIcons.fullscreen, size: 22),
-        onPressed: widget.enabled && widget.onFullscreen != null
-            ? widget.onFullscreen
-            : null,
-      ),
-    ];
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
-      child: _clusteredToolRow(tools),
-    );
-  }
-
-  Future<void> _openVolume(double initialVolume) async {
-    var volume = initialVolume.clamp(0.0, 100.0);
-    await showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 140),
-      pageBuilder: (dialogContext, animation, secondaryAnimation) =>
-          StatefulBuilder(
-            builder: (context, setState) => SafeArea(
-              child: Align(
-                alignment: Alignment.bottomRight,
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    right: widget.swipeEnabled ? 12 : 20,
-                    bottom: widget.fullscreen ? 88 : 74,
-                  ),
-                  child: Material(
-                    color: Colors.black.withValues(alpha: .88),
-                    borderRadius: BorderRadius.circular(18),
-                    child: SizedBox(
-                      width: 62,
-                      height: 192,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            tooltip: volume == 0 ? '恢复音量' : '静音',
-                            constraints: const BoxConstraints.tightFor(
-                              width: 44,
-                              height: 40,
-                            ),
-                            padding: EdgeInsets.zero,
-                            onPressed: () {
-                              final next = volume == 0 ? 100.0 : 0.0;
-                              setState(() => volume = next);
-                              unawaited(widget.player.setVolume(next));
-                            },
-                            icon: volume == 0
-                                ? AppIcon(AppIcons.volumeOff,
-                                    color: Colors.white, size: 22)
-                                : AppIcon(AppIcons.volumeUp,
-                                    color: Colors.white, size: 22),
-                          ),
-                          SizedBox(
-                            width: 44,
-                            height: 112,
-                            child: RotatedBox(
-                              quarterTurns: -1,
-                              child: SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 3,
-                                  thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 6,
-                                  ),
-                                  overlayShape: const RoundSliderOverlayShape(
-                                    overlayRadius: 14,
-                                  ),
-                                ),
-                                child: Slider(
-                                  value: volume,
-                                  max: 100,
-                                  divisions: 20,
-                                  onChanged: (value) {
-                                    setState(() => volume = value);
-                                    unawaited(widget.player.setVolume(value));
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                          SizedBox(
-                            height: 28,
-                            child: Center(
-                              child: Text(
-                                '${volume.round()}%',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontFeatures: [FontFeature.tabularFigures()],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      transitionBuilder: (context, animation, secondaryAnimation, child) =>
-          FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position:
-                  Tween<Offset>(
-                    begin: const Offset(.04, .08),
-                    end: Offset.zero,
-                  ).animate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut),
-                  ),
-              child: child,
-            ),
-          ),
-    );
-  }
-
   Widget _enhancementCompareButton() {
     final enhancement = widget.enhancement;
     if (enhancement == null) return const SizedBox.shrink();
@@ -1371,11 +1514,11 @@ class _PlayerControlsState extends State<PlayerControls> {
     builder: (context, _) {
       final feedback = widget.interactions.feedback;
       if (feedback.isEmpty) return const SizedBox.shrink();
-      // 长按倍速这类常驻提示要克制：半透明小胶囊 + 贴近画面上缘，
-      // 避免压住画面中心的内容（倍速期间画面要留着看剧情）
+      // 长按倍速这类常驻提示要克制：半透明小胶囊 + 画面正中偏上，
+      // 顶部让给手势 HUD 的新细条，避免两者叠在一起。
       return IgnorePointer(
         child: Align(
-          alignment: const Alignment(0, -.82),
+          alignment: const Alignment(0, -.5),
           child: AnimatedOpacity(
             opacity: feedback.contains('松开恢复') ? .72 : .9,
             duration: const Duration(milliseconds: 180),
@@ -1413,4 +1556,60 @@ class _TapRipple {
   final int seq;
   final Offset origin;
   final bool forward;
+}
+
+/// 电量图标：外框 + 按电量填充的内条 + 右端小凸起，低电转橙红。
+/// 自己画而不是引图标资源，省得为一个 22×11 的小件加 SVG。
+class _BatteryMeter extends StatelessWidget {
+  const _BatteryMeter({required this.level});
+
+  final int level;
+
+  @override
+  Widget build(BuildContext context) {
+    final low = level <= 20;
+    final color = low
+        ? const Color(0xFFFF7043)
+        : Colors.white.withValues(alpha: .9);
+    final ratio = (level.clamp(0, 100)) / 100;
+    return SizedBox(
+      width: 22,
+      height: 12,
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(1.5),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: color, width: 1.1),
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: ratio == 0 ? 0.08 : ratio,
+                  child: Container(
+                    height: double.infinity,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(1),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Container(
+            width: 1.8,
+            height: 5,
+            margin: const EdgeInsets.only(left: 1),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

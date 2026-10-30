@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
+import 'soft_glass.dart';
 
 /// 悬浮玻璃胶囊底栏：整条是未选态白玻璃胶囊（分类条 pill 材质），
 /// 内部每枚导航项等宽分布，选中态以选中态深/白玻璃小胶囊高亮
@@ -30,11 +31,13 @@ class AppBottomNavigation extends StatelessWidget {
       top: false,
       child: Padding(
         padding: EdgeInsets.fromLTRB(10, 0, 10, compact ? 6 : 12),
-        // 整条一枚双态玻璃胶囊（未选态白玻璃+σ18 磨砂+白描边），
-        // 内部选中项再浮选中态小胶囊——与分类条同材质语言。
+        // 整条一枚双态玻璃条（未选态白玻璃+σ18 磨砂+白描边），内部选中项再浮
+        // 选中态小胶囊。**形态：方形圆角矩形**（用户 2026-10-29「那些大胶囊
+        // 换成方的」——整条宽扁玻璃容器不做药丸）。
         child: GlassSurface(
           variant: GlassVariant.surface,
           radius: GlassTokens.radiusBar,
+          borderRadius: BorderRadius.circular(GlassTokens.radiusBar),
           tint: GlassTint.pill,
           child: Row(
             children: [
@@ -89,25 +92,20 @@ class _Pill extends StatelessWidget {
           container: true,
           button: true,
           selected: selected,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
+          child: SoftGlassSurface.inherit(
+            // 选中项=胶囊（继承整条底栏的磨砂，不重复采样）；未选项
+            // 透明无底，直接坐在胶囊底栏上。
+            shape: SoftGlassShape.capsule,
+            tint: selected
+                ? GlassChipTokens.pillSelected(dark)
+                : Colors.transparent,
+            edgeColor: selected
+                ? GlassChipTokens.pillEdge(dark, selected: true)
+                : Colors.transparent,
+            decorative: selected,
             padding: EdgeInsets.symmetric(
               horizontal: 10,
               vertical: compact ? 7 : 14,
-            ),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              // 与分类胶囊同一套双态材质：选中=深玻璃小胶囊（暗色反转
-              // 白玻璃）+白描边；未选项透明无底（直接坐在胶囊底栏上）。
-              color: selected
-                  ? GlassChipTokens.pillSelected(dark)
-                  : Colors.transparent,
-              border: selected
-                  ? Border.all(
-                      color: GlassChipTokens.pillEdge(dark, selected: true),
-                    )
-                  : null,
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,

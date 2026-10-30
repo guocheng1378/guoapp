@@ -24,16 +24,53 @@ const SpringDescription kFolmeSpring = SpringDescription(
   damping: 26,
 );
 
+/// 官方 miuix 档位换算：damping = 2·ζ·√(stiffness·mass)（mass=1）。
+///
+/// - 按压高光（参照源 `InteractiveHighlight`）：ζ=0.5 / k=300 → d≈17.32
+/// - 拖拽主值（参照源 `DampedDragAnimation`）：ζ=1.0 / k=1000 → d≈63.25
+/// - 拖拽 X 缩放：ζ=0.6 / k=250 → d≈18.97
+/// - 拖拽 Y 缩放：ζ=0.7 / k=250 → d≈22.14
+const SpringDescription kSoftGlassPressSpring = SpringDescription(
+  mass: 1,
+  stiffness: 300,
+  damping: 17.32,
+);
+
+const SpringDescription kSoftGlassDragValueSpring = SpringDescription(
+  mass: 1,
+  stiffness: 1000,
+  damping: 63.25,
+);
+
+const SpringDescription kSoftGlassDragScaleXSpring = SpringDescription(
+  mass: 1,
+  stiffness: 250,
+  damping: 18.97,
+);
+
+const SpringDescription kSoftGlassDragScaleYSpring = SpringDescription(
+  mass: 1,
+  stiffness: 250,
+  damping: 22.14,
+);
+
 /// 弹簧驱动器：目标值切换走 [SpringSimulation] 并携带当前速度续跳，
 /// 快速连续触发（连点、连滚）不会像 Tween 那样每段重新起步。
 ///
 /// 测试环境（[Motion.inTest]）直接跳到目标值，保证 pumpAndSettle 收敛。
 class SpringDriver {
-  SpringDriver(TickerProvider vsync, {double value = 0}) {
+  SpringDriver(
+    TickerProvider vsync, {
+    double value = 0,
+    this.spring = kFolmeSpring,
+  }) {
     _controller = AnimationController.unbounded(vsync: vsync, value: value);
   }
 
   late final AnimationController _controller;
+
+  /// 本驱动器使用的弹簧档位（默认 MIUI Folme 手感基准）。
+  final SpringDescription spring;
 
   double get value => _controller.value;
   Animation<double> get view => _controller;
@@ -47,7 +84,7 @@ class SpringDriver {
     }
     _controller.animateWith(
       SpringSimulation(
-        kFolmeSpring,
+        spring,
         _controller.value,
         target,
         _controller.velocity,

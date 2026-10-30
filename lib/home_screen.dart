@@ -9,7 +9,6 @@ import 'about_card.dart';
 import 'app_bottom_navigation.dart';
 import 'core_bridge.dart';
 import 'folme.dart';
-import 'fog_tint_sampler.dart';
 import 'fog_tuning.dart';
 import 'glass.dart';
 import 'glass_menu.dart';
@@ -30,6 +29,7 @@ import 'live_screen.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
+import 'home_feed_models.dart';
 import 'vip_icon.dart';
 import 'settings_screen.dart';
 import 'profiles_screen.dart';
@@ -93,6 +93,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
   FollowUpdater? _followUpdater;
+  // 更新提醒「去看看」：给追剧页的一次性筛选请求（'updates'=有更新）。
+  // 离开追剧页即清空，避免下次切回来还停在筛选态。
+  final _libraryFilter = ValueNotifier<String>('');
   // 首页继续观看条每次启动提醒一次：条目真正出现起 8 秒无操作自动收起，
   // 点条目去播放或点「不再提醒」立即收起，收起后本会话不再出现。
   bool _resumeDismissed = false;
@@ -113,16 +116,16 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 岛与分类胶囊白描边亮起；滚回顶部（px=0）熄灭。同值不通知。
   final ValueNotifier<double> _prox = ValueNotifier<double>(0);
 
-  /// 雾面动态取色采样色（null=纯白雾）：FogTintSampler 节流采样内容
-  /// 区像素平均色，驱动 _pinnedFiltersBar 与其他 tab 顶部的 TopFog
-  /// 染色（调参台 tintMix 控制浓度，0=现状纯白）。
-  final ValueNotifier<Color?> _fogTint = ValueNotifier<Color?>(null);
   // 调参台「雾面高度」延伸量：吸顶头 extent 与雾面挂点高度随之加
   // 高（0=现状）。仅此参数需要整页 rebuild（extent 变化），其余调
   // 参维度由 TopFog 内部监听自行重建。
   double _fogHeight = 0;
   bool _showRecommendations = false;
   bool _catalogLoadScheduled = false;
+  // 远端主页（站点 /v1/feed/home 自描述区块）：分类条与轮播的内容源。
+  HomeFeed? _homeFeed;
+  bool _homeFeedLoading = false;
+  int _homeSectionPage = 1;
   final _filtersKey = GlobalKey<RemoteRowState>();
   final _gridKey = GlobalKey<RemoteGridState>();
   final _navKey = GlobalKey<RemoteListState>();
@@ -194,6 +197,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _showRecommendations ? _recommendationCategory : _category;
   List<CatalogCategory> get _displayCategories => [
     CatalogCategory.all,
+    // 站点下发的板块紧跟在「全部」之后：远端主页优先，本地不内置清单，
+    // 站点给多少就有多少（增删/改名即刻生效）。
+    ..._remoteHomeCategories,
     if (_group.id == 'hongguo')
       const CatalogCategory(_recommendationCategory, '推荐'),
     ..._categories.where((entry) => entry.id.isNotEmpty),
@@ -221,8 +227,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _categoriesError = error;
     });
+    // 站点板块分类不属于源站分类列表，不能被「分类不存在」逻辑踢回全部。
     if (!_showRecommendations &&
         _category.isNotEmpty &&
+        remoteSectionIdOf(_category) == null &&
         !_categories.any((entry) => entry.id == _category)) {
       _changeCategory('');
     }
@@ -236,6 +244,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     await _loadCategories(force: true);
+    // 下拉刷新同时刷新站点板块（站点改了板块名/增删板块即刻生效）。
+    await _loadHomeFeed(force: true);
     if (mounted) await _load(force: true);
   }
 
@@ -454,12 +464,18 @@ class _HomeScreenState extends State<HomeScreen> {
       // 颗间距 10px：四颗是独立胶囊岛（对齐小米主题商店顶栏图标钮），
       // 之前 left:4 等于没有间隙，三颗贴死读作一坨。
       padding: const EdgeInsets.only(left: 10),
-      // demo 雾玻璃配方（FogPill）：σ18 真磨砂 + 半透玻璃底 + 白描边
+      // demo 雾玻璃配方（FogPill）：σ 真磨砂 + 半透玻璃底 + 白描边
       // 随滚动亮起（回顶熄灭）。不再用瓷面岛——瓷面半透白瓷（0.72 白）
       // 叠在雾面上读作一层透明膜，也让顶栏区域雾感与分类条不一致。
       // Folme 果冻按压：按下 0.96、松手弹簧弹回（轻过冲）。
+      //
+      // inheritBlur：顶栏区域已有整条 TopFog 模糊（状态栏→顶栏一条
+      // BackdropFilter），四颗胶囊若各自再带一层 blur = 同层双采样 →
+      // 整体发灰。默认继承整条模糊（胶囊只画 tint + 柔光特征）；
+      // 只有雾面高度被调成负档（整条模糊盖不满顶栏）时才让胶囊自带磨砂。
       child: FogPill(
         prox: _prox,
+        inheritBlur: _fogHeight >= 0,
         child: FolmePress(child: child),
       ),
     );
@@ -708,6 +724,71 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// 当前源是否走远端主页（/v1/feed/home 自描述区块）：是则分类条里出现
+  /// 站点板块、轮播播站点主推板块，本地不维护任何板块清单。
+  String? get _remoteHomeFeedSource {
+    for (final source in _group.sources) {
+      if (_remoteHomeSources.contains(source.id)) return source.id;
+    }
+    return null;
+  }
+
+  /// 支持远端主页板块的站源（/v1/feed/home 自描述区块）。
+  static const _remoteHomeSources = <String>{'dongpiandi'};
+
+  /// 分类 id 前缀：命中即表示这是站点下发的一个板块（不是源站分类）。
+  static const _remoteSectionPrefix = 'home:';
+
+  /// 当前选中的分类是不是站点板块；是则返回板块 id。
+  String? remoteSectionIdOf(String category) {
+    if (!category.startsWith(_remoteSectionPrefix)) return null;
+    final id = category.substring(_remoteSectionPrefix.length);
+    return id.isEmpty ? null : id;
+  }
+
+  /// 站点板块在分类条里的分类项：名称取板块标题前两个字（「韩剧在追」→
+  /// 「韩剧」），站点改名/增删即刻生效。
+  List<CatalogCategory> get _remoteHomeCategories => [
+    for (final section in _homeFeed?.secondary ?? const <HomeSection>[])
+      CatalogCategory(
+        '$_remoteSectionPrefix${section.id}',
+        _shortSectionLabel(section.title),
+      ),
+  ];
+
+  static String _shortSectionLabel(String title) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return trimmed;
+    final characters = trimmed.characters.toList();
+    return characters.length <= 2
+        ? trimmed
+        : characters.take(2).join();
+  }
+
+  /// 轮播内容：站点主推板块（「大家都在看」）的卡片。
+  List<Drama>? get _remoteCarouselItems =>
+      _homeFeed?.primary?.items.take(HomeCarousel.maxItems).toList();
+
+  Future<void> _loadHomeFeed({bool force = false}) async {
+    final source = _remoteHomeFeedSource;
+    if (source == null) {
+      if (_homeFeed != null) setState(() => _homeFeed = null);
+      return;
+    }
+    if (_homeFeedLoading) return;
+    _homeFeedLoading = true;
+    try {
+      final feed = await widget.repository.homeFeed(source, force: force);
+      if (!mounted) return;
+      setState(() => _homeFeed = feed);
+    } catch (_) {
+      // 远端主页拉不到就退回纯本地浏览（分类条不出现站点板块），
+      // 首页主体不受影响，也不弹错。
+    } finally {
+      _homeFeedLoading = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -729,6 +810,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (widget.store.sources.isNotEmpty) {
       _load(useCache: true);
       _loadCategories();
+      // 远端主页板块（分类条与轮播的内容源）异步补上，失败自动退回本地浏览。
+      unawaited(_loadHomeFeed());
     } else {
       _loading = false;
     }
@@ -742,12 +825,20 @@ class _HomeScreenState extends State<HomeScreen> {
         widget.store,
         onUpdated: (updated) {
           if (!mounted) return;
+          // 文案用「累计未读部数」，与追剧页角标同源（本轮新增但已被读掉
+          // 的情况累计为 0，就不弹）。
+          final total = widget.store.favorites
+              .where(
+                (drama) => widget.store.following(drama.id)?.hasUpdates == true,
+              )
+              .length;
+          if (total <= 0) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('追剧有 $updated 部更新'),
+              content: Text('追剧有 $total 部更新'),
               action: SnackBarAction(
                 label: '去看看',
-                onPressed: () => _changeTab(1),
+                onPressed: _showFollowUpdates,
               ),
               // 右侧 X：用户不想现在看时可直接关闭
               showCloseIcon: true,
@@ -781,6 +872,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _updater.dispose();
     _cacheRefreshTimer?.cancel();
     _followUpdater?.dispose();
+    _libraryFilter.dispose();
     _resumeHideTimer?.cancel();
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
     _generation++;
@@ -794,7 +886,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _fabHideTimer?.cancel();
     _scroll.dispose();
     _prox.dispose();
-    _fogTint.dispose();
     FogTuningStore.state.removeListener(_onFogTuning);
     _appBarFocus.dispose();
     _selectionFocus.dispose();
@@ -946,6 +1037,30 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final view = widget.store.catalogView;
+      // 站点板块分类：直接按站点给的 browse 参数翻页（本地不做类别推断）。
+      final sectionId = query.isEmpty ? remoteSectionIdOf(_category) : null;
+      if (sectionId != null) {
+        final page = more ? _homeSectionPage + 1 : 1;
+        final result = await widget.repository.homeSection(
+          _source.id,
+          sectionId,
+          page: page,
+        );
+        if (!mounted || generation != _generation) return;
+        setState(() {
+          _items = more ? _appendPage(_items, result.items) : result.items;
+          _hasMore = result.hasMore;
+          _homeSectionPage = page;
+          _submittedQuery = query;
+          _loading = false;
+          _loadingMore = false;
+          _error = result.warning.isEmpty ? null : result.warning;
+        });
+        unawaited(
+          saveUserChange(context, () => widget.store.refreshDramas(result.items)),
+        );
+        return;
+      }
       final result = await _browser.load(
         group,
         category: _category,
@@ -967,6 +1082,18 @@ class _HomeScreenState extends State<HomeScreen> {
         _error = error.toString();
       });
     }
+  }
+
+  /// 翻页追加：站点板块的分页可能有重复条目（榜单重算），按 id 去重。
+  List<Drama> _appendPage(List<Drama> current, List<Drama> page) {
+    final seen = {for (final drama in current) drama.id};
+    final merged = <Drama>[...current];
+    for (final drama in page) {
+      if (seen.contains(drama.id)) continue;
+      seen.add(drama.id);
+      merged.add(drama);
+    }
+    return merged;
   }
 
   void _changeSource(SourceSite source) {
@@ -991,11 +1118,16 @@ class _HomeScreenState extends State<HomeScreen> {
         () => widget.store.setCatalogSource(source.id, allSources: false),
       ),
     );
+    // 切源立即冲刷合并窗：上一个源待写的剧库快照先落盘，别等 2 秒窗口
+    // 或下一个源的首次写入（进程此时被杀会丢掉旧源的最后一次变更）。
+    unawaited(flushNativeCatalogWrites());
     if (_scroll.hasClients) {
       _scroll.jumpTo(0);
     }
+    _homeFeed = null;
     _load(useCache: true);
     _loadCategories();
+    unawaited(_loadHomeFeed());
   }
 
   void _searchChanged(String query) {
@@ -1111,8 +1243,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _openDrama(Drama drama, {bool resume = false, bool download = false}) {
+  void _openDrama(Drama drama, {bool download = false}) {
     _pauseCatalog();
+    // 搜索态点卡会带着输入框焦点起播，键盘跟到播放器上；这里统一收口
+    // （电视模式跳过，别清掉遥控焦点）。
+    if (!AppLayout.isTelevision(context)) {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
     if (download) {
       Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -1158,7 +1295,15 @@ class _HomeScreenState extends State<HomeScreen> {
     _selectedDramas.clear();
     // 新 tab 尚无滚动帧，残留的旧 tab 接近度会让描边虚亮——复位。
     _prox.value = 0;
+    // 筛选请求是一次性的：离开追剧页即消费掉，下次切回来是「全部」。
+    if (tab != 1) _libraryFilter.value = '';
   });
+
+  /// 更新提醒「去看看」：切到追剧页并自动选中「有更新」筛选。
+  void _showFollowUpdates() {
+    _changeTab(1);
+    _libraryFilter.value = 'updates';
+  }
 
   /// 首页继续观看条：最近一条还没看完的观看记录（history 已按时间倒序）。
   /// 判定式与追剧页 continue-watching 卡一致。
@@ -1231,7 +1376,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () {
           // 提醒已响应：收起后去播放，回到首页不再常驻此条。
           _dismissResume();
-          _openDrama(entry.drama, resume: true);
+          _openDrama(entry.drama);
         },
       ),
     );
@@ -1282,7 +1427,6 @@ class _HomeScreenState extends State<HomeScreen> {
     context,
     drama: drama,
     store: widget.store,
-    onContinue: () => _openDrama(drama, resume: true),
     onDownload: widget.repository.supportsDownloads && widget.store.canDownload
         ? () => _openDrama(drama, download: true)
         : null,
@@ -1311,7 +1455,6 @@ class _HomeScreenState extends State<HomeScreen> {
       actions: DramaActionButton(
         drama: drama,
         store: widget.store,
-        onContinue: () => _openDrama(drama, resume: true),
         onDownload: widget.repository.supportsDownloads && widget.store.canDownload
             ? () => _openDrama(drama, download: true)
             : null,
@@ -1353,7 +1496,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? false
           : null;
       if (isLong != null) {
-        // 短剧/长剧档：按单集时长（>10 分钟=长剧）全源统一判定。
+        // 短剧/长剧档：按显式定性 / 分类标签 / 站源属性判定（不看时长）。
         if (dramaIsLongDrama(drama, SourceSite.byId(drama.source)) != isLong) {
           return false;
         }
@@ -1811,15 +1954,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   // 接近度信号覆盖全部 tab：任何 tab 的滚动通知都驱动
                   // _prox（顶栏岛/分类胶囊白描边亮起），只听首页
                   // ScrollController 的旧实现让其他 tab 滚动时描边不亮。
-                  // FogTintSampler 同样覆盖全 tab：节流采样内容区像素
-                  // 平均色驱动雾面染色（行带避开顶部雾面自身，防反馈
-                  // 循环；测试环境整体禁用）。
-                  child: FogTintSampler(
-                    tint: _fogTint,
-                    sampleBandStart: 0.30,
-                    sampleBandEnd: 0.62,
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: _onBodyScroll,
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _onBodyScroll,
                     child: Stack(
                       children: [
                         _tab == 0
@@ -1851,14 +1987,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : 0,
                                 topInset: topInset,
                                 history: _tab == 2,
+                                filterRequest: _libraryFilter,
                                 remoteAutofocus: television,
                                 onExitLeft: television
                                     ? () =>
                                           _navKey.currentState?.focusCurrent()
                                     : null,
                                 onOpen: _openDrama,
-                                onContinue: (drama) =>
-                                    _openDrama(drama, resume: true),
+                                onContinue: (drama) => _openDrama(drama),
                                 onDownload:
                                     widget.repository.supportsDownloads &&
                                     widget.store.canDownload
@@ -1871,9 +2007,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                         // 其他三个 tab（追剧/最近/下载）没有首页那条 pinned
                         // 雾面带——雾面挂在 _catalog 内部只随 tab0 存在。
-                        // 在 body 顶部补同一条 σ46 雾面（高度=顶栏整体），
-                        // 滚动内容穿顶时同样糊化提亮、色跟内容走；底缘由
-                        // tint painter 内置羽化自然消散。
+                        // 在 body 顶部补同一条雾面（高度=顶栏整体），
+                        // 滚动内容穿顶时同样糊化；底缘由 tint painter
+                        // 内置羽化自然消散。
                         if (_tab != 0 && topInset > 0)
                           Positioned(
                             top: 0,
@@ -1881,17 +2017,13 @@ class _HomeScreenState extends State<HomeScreen> {
                             right: 0,
                             child: SizedBox(
                               // 「雾面高度」正档向下延伸、负档收窄（糊化
-                              // /染色/雾形/羽化整体跟随）；clamp≥0 防负高度。
+                              // /雾形/羽化整体跟随）；clamp≥0 防负高度。
                               height: _fogBandHeight(topInset),
-                              child: ValueListenableBuilder<Color?>(
-                                valueListenable: _fogTint,
-                                builder: (_, tint, _) => TopFog(tint: tint),
-                              ),
+                              child: const TopFog(),
                             ),
                           ),
                       ],
                     ),
-                  ),
                   ),
                 ),
               ],
@@ -2428,6 +2560,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               onOpen: _openCarouselDrama,
                               fallbackItems: items,
                               anchor: _source,
+                              // 站点主推板块（大家都在看）有数据时轮播播它。
+                              remoteItems: _remoteCarouselItems,
                             ),
                           ),
                         ),
@@ -2592,7 +2726,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Folme 果冻按压），浮在雾面之上。
   /// 分类条构造（TV 列表/搜索岛/吸顶条三处共用）：差异仅在电视焦点
   /// 出口回调，由 [televisionFocus] 开关。
-  Widget _catalogFilters({bool televisionFocus = false}) {
+  Widget _catalogFilters({
+    bool televisionFocus = false,
+    bool inheritBlur = false,
+  }) {
     return CatalogFilters(
       key: ValueKey('filters-${_group.id}'),
       categories: _displayCategories,
@@ -2608,6 +2745,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onCategory: _changeCategory,
       onRetry: () => _loadCategories(force: true),
       proxListenable: _prox,
+      inheritBlur: inheritBlur,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2640,21 +2778,20 @@ class _HomeScreenState extends State<HomeScreen> {
           // 硬切）：用户定调「不要凹凸感」——只垫上沿会在雾面与清晰
           // 内容之间留一条明暗分界台阶；整块糊化后无分界。TopFog 按
           // 自身高度自适应（玻璃开关总控，关闭即完全穿透）。
-          // 动态取色：采样色经调参台 tintMix 混入提亮层（null=纯白）。
           // 雾面定高：负档时雾短于吸顶头（分类 chips 区露出来）。
           Positioned(
             top: 0,
             left: 0,
             right: 0,
             height: _fogBandHeight(topInset + _filtersExtent),
-            child: ValueListenableBuilder<Color?>(
-              valueListenable: _fogTint,
-              builder: (_, tint, _) => TopFog(tint: tint),
-            ),
+            child: const TopFog(),
           ),
           Padding(
             padding: EdgeInsets.only(top: topInset),
-            child: _catalogFilters(),
+            // 吸顶头已有整条雾面模糊盖住分类条 → 分类胶囊继承该模糊，
+            // 不再各自采样（同层单 backdrop，避免整体发灰）。
+            // 雾面高度调成负档时整条模糊盖不满分类条，胶囊回退自带磨砂。
+            child: _catalogFilters(inheritBlur: _fogHeight >= 0),
           ),
         ],
       ),
@@ -2725,8 +2862,10 @@ class _HomeScreenState extends State<HomeScreen> {
           return GlassSurface(
             variant: GlassVariant.surface,
             radius: GlassTokens.radiusBar,
+            // 形态：方形圆角矩形（宽扁顶栏条不做药丸）。
+            borderRadius: BorderRadius.circular(GlassTokens.radiusBar),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+            // 双态玻璃材质：与分类条/底栏同源（pill 档）。
             tint: GlassTint.pill,
             child: content,
           );

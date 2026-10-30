@@ -13,6 +13,8 @@ import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
+import 'related_catalog_screen.dart';
+import 'related_dramas.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
@@ -514,6 +516,8 @@ class _DetailScreenState extends State<DetailScreen> {
                                 return RemoteEpisodeButton(
                                   key: ValueKey('episode-${episode.number}'),
                                   number: episode.number,
+                                  label: episode.remoteLabel,
+                                  semanticsLabel: episode.title,
                                   vip: episode.vip,
                                   current: episode.number == watched?.episode,
                                   onPressed: () => _play(start + index),
@@ -556,9 +560,11 @@ class _DetailScreenState extends State<DetailScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: GlassSurface(
                     variant: GlassVariant.surface,
-                    // 全胶囊形：大块玻璃条改成悬浮胶囊（radius 999 自适应全圆）。
-                    radius: 999,
-                    // 双态玻璃胶囊材质：与分类条/底栏同源（pill 档）。
+                    // 形态：方形圆角矩形（用户 2026-10-29「那些大胶囊换成方的」
+                    // ——宽扁工具条不做药丸）。
+                    radius: 24,
+                    borderRadius: BorderRadius.circular(24),
+                    // 双态玻璃材质：与分类条/底栏同源（pill 档）。
                     tint: GlassTint.pill,
                     child: Center(
                       heightFactor: 1,
@@ -686,12 +692,8 @@ class _DetailScreenState extends State<DetailScreen> {
 
   Widget _overview(Drama drama) {
     final colors = Theme.of(context).colorScheme;
-    final meta = [
-      SourceSite.byId(drama.source)?.name ?? '未知源',
-      if (drama.episodes > 0) '共 ${drama.episodes} 集',
-      if (drama.releaseStatus.isNotEmpty && drama.releaseStatus != 'unknown')
-        drama.releaseLabel,
-    ];
+    final sourceName = SourceSite.byId(drama.source)?.name ?? '未知源';
+    final metaStyle = TextStyle(color: colors.onSurfaceVariant, height: 1.5);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -715,19 +717,44 @@ class _DetailScreenState extends State<DetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Text(
-                    meta.join(' · '),
-                    style: TextStyle(
-                      color: colors.onSurfaceVariant,
-                      height: 1.5,
-                    ),
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      MetaLink(
+                        label: sourceName,
+                        tooltip: '查看$sourceName的全部作品',
+                        onTap: () => openSourceCatalog(
+                          context,
+                          repository: widget.repository,
+                          store: widget.store,
+                          drama: drama,
+                          sourceName: sourceName,
+                        ),
+                      ),
+                      if (drama.episodes > 0) ...[
+                        Text(' · ', style: metaStyle),
+                        Text(drama.episodeLabel, style: metaStyle),
+                      ],
+                      if (drama.releaseStatus.isNotEmpty &&
+                          drama.releaseStatus != 'unknown') ...[
+                        Text(' · ', style: metaStyle),
+                        Text(drama.releaseLabel, style: metaStyle),
+                      ],
+                    ],
                   ),
                   if (drama.category.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        drama.category,
-                        style: TextStyle(color: colors.onSurfaceVariant),
+                      child: MetaLink(
+                        label: drama.category,
+                        tooltip: '查看同类${drama.category}',
+                        onTap: () => openRelatedCatalog(
+                          context,
+                          repository: widget.repository,
+                          store: widget.store,
+                          drama: drama,
+                          label: drama.category,
+                        ),
                       ),
                     ),
                   if (drama.source == 'huangdou')
@@ -771,19 +798,35 @@ class _DetailScreenState extends State<DetailScreen> {
               runSpacing: 6,
               children: [
                 for (final tag in drama.tags.take(12))
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colors.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 5,
-                      ),
-                      child: Text(
-                        tag,
-                        style: Theme.of(context).textTheme.bodySmall,
+                  Tooltip(
+                    message: '查看「$tag」相关内容',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => openRelatedCatalog(
+                          context,
+                          repository: widget.repository,
+                          store: widget.store,
+                          drama: drama,
+                          label: tag,
+                        ),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: colors.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 5,
+                            ),
+                            child: Text(
+                              tag,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -817,7 +860,27 @@ class _DetailScreenState extends State<DetailScreen> {
               style: TextStyle(color: colors.error),
             ),
           ),
+        RelatedDramaRail(
+          repository: widget.repository,
+          store: widget.store,
+          drama: drama,
+          onOpen: _openRelatedDrama,
+        ),
       ],
+    );
+  }
+
+  /// 点推荐卡条里的某部剧：推它自己的简介页（不复用 [openRelatedCatalog]，
+  /// 那里指的是结果页）。
+  Future<void> _openRelatedDrama(Drama next) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailScreen(
+          drama: next,
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
     );
   }
 
