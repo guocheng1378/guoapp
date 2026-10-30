@@ -509,3 +509,197 @@ func TestDongpiandiRenewMediaRedeemsCachedTicket(t *testing.T) {
 		t.Fatalf("重兑结果应刷新官方缓存: %+v", cached)
 	}
 }
+
+// ---- 2026-10-30 在线路面板「显示不全/消失回不来」四缺口修复回归 ----
+
+// 官方线增量合并：fresh 在前（新地址优先）、按线 ID 去重、无 ID 按 URL 兜底。
+func TestDongpiandiMergeOfficialLines(t *testing.T) {
+	old := []dongpiandiLine{
+		{ID: "l2", URL: "http://o.test/b-old.mp4", Official: true},
+		{ID: "l1", URL: "http://o.test/a-old.mp4", Official: true},
+		{URL: "http://o.test/noid-old.mp4", Official: true},
+	}
+	fresh := []dongpiandiLine{
+		{ID: "l1", URL: "http://o.test/a-new.mp4", Official: true},
+		{URL: "http://o.test/noid-new.mp4", Official: true},
+	}
+	got := dongpiandiMergeOfficialLines(old, fresh)
+	if len(got) != 4 {
+		t.Fatalf("合并后应 4 条（同 ID/同 URL 去重）: %+v", got)
+	}
+	if got[0].ID != "l1" || got[0].URL != "http://o.test/a-new.mp4" {
+		t.Fatalf("fresh 应在前（新地址优先）: %+v", got[0])
+	}
+	if got[1].URL != "http://o.test/noid-new.mp4" {
+		t.Fatalf("fresh 的无 ID 线应紧随其后: %+v", got[1])
+	}
+	if got[2].ID != "l2" {
+		t.Fatalf("old 中未被 fresh 覆盖的线应保留: %+v", got[2])
+	}
+	if got[3].URL != "http://o.test/noid-old.mp4" {
+		t.Fatalf("old 的无 ID 线按 URL 去重后应保留: %+v", got[3])
+	}
+	if got := dongpiandiMergeOfficialLines(nil, fresh); len(got) != len(fresh) {
+		t.Fatalf("old 为空应直接返回 fresh: %+v", got)
+	}
+}
+
+// 残缺兑换（部分票据 404/限流）并入缓存：官方线增量合并不丢线；
+// 全量兑换成功：官方线整表替换（旧线不残留）。
+func TestDongpiandiLineCacheMergesOfficialOnIncomplete(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	epID := "av_merge"
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{ID: "la", URL: "http://cached.test/a-old.mp4", Label: "1080P-官方D", Official: true, Resolved: true},
+		{ID: "lb", URL: "http://cached.test/b.mp4", Label: "1080P-官方S", Official: true, Resolved: true},
+		{URL: "http://cached.test/third.m3u8", Label: "新浪资源", Resolved: true},
+	}, true)
+	// 残缺刷新：la 兑出新地址、lb 撞限流没兑出，另带回新三方线。
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{ID: "la", URL: "http://cached.test/a-new.mp4", Label: "1080P-官方D", Official: true, Resolved: true},
+		{URL: "http://cached.test/third2.m3u8", Label: "索尼资源", Resolved: true},
+	}, false)
+	lines := dongpiandiCachedLines(epID)
+	if len(lines) != 3 {
+		t.Fatalf("官方两条 + 新三方一条，得到 %d 条: %+v", len(lines), lines)
+	}
+	if !lines[0].Official || !lines[1].Official {
+		t.Fatalf("官方段应保留两条: %+v", lines)
+	}
+	if lines[0].ID != "la" || lines[0].URL != "http://cached.test/a-new.mp4" {
+		t.Fatalf("la 应并入新地址且排最前: %+v", lines[0])
+	}
+	if lines[1].ID != "lb" {
+		t.Fatalf("lb 不得因残缺刷新丢失: %+v", lines[1])
+	}
+	if lines[2].Official || !strings.Contains(lines[2].URL, "third2") {
+		t.Fatalf("三方段应整表替换为最新: %+v", lines[2])
+	}
+	// 全量刷新只兑出 lc：官方整表替换，旧线（lb）不残留。
+	dongpiandiCacheLines(epID, []dongpiandiLine{
+		{ID: "lc", URL: "http://cached.test/c.mp4", Label: "1080P-官方T", Official: true, Resolved: true},
+	}, true)
+	lines = dongpiandiCachedLines(epID)
+	if len(lines) != 2 || !lines[0].Official || lines[0].ID != "lc" {
+		t.Fatalf("全量刷新后官方段应只剩 lc: %+v", lines)
+	}
+}
+
+// 冷却窗三档：抖动 15s / 限流 30s / 无票 60s，各自到期后才允许再试。
+func TestDongpiandiOfficialRetryGapTiers(t *testing.T) {
+	resetDongpiandiLineCache(t)
+	if !dongpiandiOfficialTryDue("av_cool") {
+		t.Fatalf("无冷却记录应立即可试")
+	}
+	epID := "av_cool"
+	backdate := func(d time.Duration) {
+		dongpiandiLinesMu.Lock()
+		entry := dongpiandiLinesCache[epID]
+		entry.officialTriedAt = time.Now().Add(-d)
+		dongpiandiLinesCache[epID] = entry
+		dongpiandiLinesMu.Unlock()
+	}
+	dongpiandiMarkOfficialTried(epID)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("刚记录冷却应不可试")
+	}
+	backdate(dongpiandiOfficialRetryGapShort - time.Second)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("15s 短冷却未到期不应可试")
+	}
+	backdate(dongpiandiOfficialRetryGapShort + time.Second)
+	if !dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("15s 短冷却到期应可试")
+	}
+
+	dongpiandiMarkOfficialRetry(epID, dongpiandiOfficialRetryGapThrottl)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("30s 限流冷却刚记录应不可试")
+	}
+	backdate(dongpiandiOfficialRetryGapThrottl - time.Second)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("30s 限流冷却未到期不应可试")
+	}
+	backdate(dongpiandiOfficialRetryGapThrottl + time.Second)
+	if !dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("30s 限流冷却到期应可试")
+	}
+
+	dongpiandiMarkOfficialExhausted(epID)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("60s 无票冷却刚记录应不可试")
+	}
+	backdate(dongpiandiOfficialRetryGap - time.Second)
+	if dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("60s 无票冷却未到期不应可试")
+	}
+	backdate(dongpiandiOfficialRetryGap + time.Second)
+	if !dongpiandiOfficialTryDue(epID) {
+		t.Fatalf("60s 无票冷却到期应可试")
+	}
+}
+
+// 播放期补线失败要按原因定冷却档：限流 30s、确认无票 60s，
+// 而不是一律按短冷却空转（每 15s 白付一次完整往返）。
+func TestDongpiandiRouteLinesFailureMarksCooldownTier(t *testing.T) {
+	t.Run("throttled", func(t *testing.T) {
+		resetDongpiandiLineCache(t)
+		var srv *httptest.Server
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v1/catalog/"):
+				fmt.Fprint(w, `{"id":"av_th","title":"限流剧","episodes":[{"id":"av_th1","title":"第1集","token":"tk-th"}]}`)
+			case strings.HasPrefix(r.URL.Path, "/v1/playback/resolve/"):
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, `{"message":"请求太频繁"}`)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+		srv = httptest.NewServer(handler)
+		t.Cleanup(srv.Close)
+		withDongpiandiBaseURL(t, srv.URL)
+		lines := (&Downloader{}).dongpiandiRouteLinesFresh(context.Background(), Task{Chapter: Chapter{
+			ID:      providerDramaID(sourceDongpiandi, "av_th1"),
+			PageURL: srv.URL + "/player/av_th",
+		}}, "av_th1")
+		if len(lines) != 0 {
+			t.Fatalf("限流时应返回空线: %+v", lines)
+		}
+		dongpiandiLinesMu.Lock()
+		gap := dongpiandiLinesCache["av_th1"].officialRetryGap
+		dongpiandiLinesMu.Unlock()
+		if gap != dongpiandiOfficialRetryGapThrottl {
+			t.Fatalf("限流后冷却档应为 30s，得到 %v", gap)
+		}
+	})
+	t.Run("no tickets", func(t *testing.T) {
+		resetDongpiandiLineCache(t)
+		var srv *httptest.Server
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasPrefix(r.URL.Path, "/v1/catalog/"):
+				fmt.Fprint(w, `{"id":"av_nt","title":"无票剧","episodes":[{"id":"av_nt1","title":"第1集","token":"tk-nt"}]}`)
+			case strings.HasPrefix(r.URL.Path, "/v1/playback/resolve/"):
+				// 站点这一集没下发票据：只有三方直连。
+				fmt.Fprintf(w, `{"object":"playback.resolve","line_options":[
+					{"id":"l1","label":"新浪资源","url":"%s/third/index.m3u8","url_kind":"m3u8","resolved":true,"preference_weight":900}]}`, srv.URL)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		})
+		srv = httptest.NewServer(handler)
+		t.Cleanup(srv.Close)
+		withDongpiandiBaseURL(t, srv.URL)
+		(&Downloader{}).dongpiandiRouteLinesFresh(context.Background(), Task{Chapter: Chapter{
+			ID:      providerDramaID(sourceDongpiandi, "av_nt1"),
+			PageURL: srv.URL + "/player/av_nt",
+		}}, "av_nt1")
+		dongpiandiLinesMu.Lock()
+		gap := dongpiandiLinesCache["av_nt1"].officialRetryGap
+		dongpiandiLinesMu.Unlock()
+		if gap != dongpiandiOfficialRetryGap {
+			t.Fatalf("确认无票后冷却档应为 60s，得到 %v", gap)
+		}
+	})
+}

@@ -130,8 +130,9 @@ func TestDongpiandiBackfillSkipsEpisodeWithFreshOfficial(t *testing.T) {
 	}
 }
 
-// 连续两集「有票据但一张都兑不出来」= 站点限流/线路整体不可用，立即收手：
-// 第三集不能再打请求，否则会把限流放大。
+// 连续四集「有票据但一张都兑不出来」= 站点限流/线路整体不可用，立即收手：
+// 第五集不能再打请求，否则会把限流放大。（阈值 2→4：两三集偶发 429 不再
+// 把整轮补兑提前放弃，收手前逐次退避 400ms→800ms→1.6s 给站点喘息。）
 func TestDongpiandiBackfillStopsWhenTicketsNeverRedeem(t *testing.T) {
 	resetDongpiandiLineCache(t)
 	var resolveCalls int32
@@ -159,6 +160,8 @@ func TestDongpiandiBackfillStopsWhenTicketsNeverRedeem(t *testing.T) {
 		{ID: "ep1", Token: "t1"},
 		{ID: "ep2", Token: "t2"},
 		{ID: "ep3", Token: "t3"},
+		{ID: "ep4", Token: "t4"},
+		{ID: "ep5", Token: "t5"},
 	}
 	(&Downloader{}).dongpiandiBackfillOfficialLines(
 		context.Background(),
@@ -166,8 +169,8 @@ func TestDongpiandiBackfillStopsWhenTicketsNeverRedeem(t *testing.T) {
 		"d3",
 		episodes,
 	)
-	if resolveCalls != 2 {
-		t.Fatalf("连续两集兑不出应停止，第三集不该再请求，实际 resolve=%d", resolveCalls)
+	if resolveCalls != 4 {
+		t.Fatalf("连续四集兑不出应停止，第五集不该再请求，实际 resolve=%d", resolveCalls)
 	}
 	for _, ep := range episodes {
 		for _, line := range dongpiandiCachedLines(ep.ID) {

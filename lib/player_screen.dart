@@ -201,6 +201,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 片头/片尾标记（按剧保存在 store 里，播放中据此自动跳过）。
   EpisodeSkipMarks _skipMarks = const EpisodeSkipMarks();
 
+  /// 站源下发的社区跳过预设（秒，真果·鉴详情随播放计划下发）：
+  /// 片头结束位置 / 片尾起点距结尾。手动标定优先，缺的段才用预设。
+  int _skipIntroSeconds = 0;
+  int _skipOutroFromEnd = 0;
+
   /// 当前这一集是否已跳过片头/片尾：保证一段播放里每段只生效一次。
   bool _introSkipped = false;
   bool _outroSkipped = false;
@@ -1402,6 +1407,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           await platform.setProperty('network-timeout', '30');
         }
         _plan = plan;
+        _skipIntroSeconds = plan.skipIntroSeconds > 0 ? plan.skipIntroSeconds : 0;
+        _skipOutroFromEnd =
+            plan.skipOutroFromEndSeconds > 0 ? plan.skipOutroFromEndSeconds : 0;
         installed = true;
         _acceptErrors = true;
         await _player.open(
@@ -2090,6 +2098,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// 生效的跳过标记：手动标定优先，缺的段用站源社区预设补上。预设的
+  /// 片尾是「距结尾 N 秒」，要拿到片长才换算得成绝对位置；片长未知
+  /// 时该段保持 0（[resolveSkipAction] 会当作未设置）。
+  EpisodeSkipMarks _effectiveSkipMarks(double duration) {
+    if (_skipIntroSeconds <= 0 && _skipOutroFromEnd <= 0) return _skipMarks;
+    return EpisodeSkipMarks(
+      introEnd:
+          _skipMarks.hasIntro ? _skipMarks.introEnd : _skipIntroSeconds.toDouble(),
+      outroStart: _skipMarks.hasOutro || duration <= 0
+          ? _skipMarks.outroStart
+          : (duration - _skipOutroFromEnd).clamp(0.0, duration).toDouble(),
+    );
+  }
+
   /// 播到片头/片尾标记点时自动跳过（判定规则在 [resolveSkipAction]）。
   ///
   /// 加载中、出错、面板打开、后台与画中画都不打扰，免得和用户的操作打架；
@@ -2103,7 +2125,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         !_foreground) {
       return;
     }
-    final marks = _skipMarks;
+    final marks = _effectiveSkipMarks(
+      _player.state.duration.inMilliseconds / 1000,
+    );
     if (marks.isEmpty) return;
     final action = resolveSkipAction(
       position: position.inMilliseconds / 1000,

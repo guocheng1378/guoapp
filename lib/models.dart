@@ -588,6 +588,8 @@ class PlaybackPlan {
     this.routeLabels = const [],
     this.routeOfficial = const [],
     this.local = false,
+    this.skipIntroSeconds = 0,
+    this.skipOutroFromEndSeconds = 0,
   });
   final String url;
   final Map<String, String> headers;
@@ -606,6 +608,11 @@ class PlaybackPlan {
   /// 真果·鉴有）。空表表示该源没有官方线，线路面板按平铺处理。
   final List<bool> routeOfficial;
   final bool local;
+
+  /// 站源下发的社区跳过预设（秒，真果·鉴）：片头在该秒结束 / 片尾从
+  /// 距结尾这么多秒处开始。0 表示站源未下发，播放器沿用手动标定。
+  final int skipIntroSeconds;
+  final int skipOutroFromEndSeconds;
   bool get hasAlternative => session.isNotEmpty && routeIndex + 1 < routeCount;
 
   bool _isOfficial(int index) =>
@@ -649,6 +656,8 @@ class PlaybackPlan {
     routeOfficial: (json['routeOfficial'] as List? ?? [])
         .map((flag) => flag == true)
         .toList(),
+    skipIntroSeconds: intValue(json['skipIntroSeconds']),
+    skipOutroFromEndSeconds: intValue(json['skipOutroFromEndSeconds']),
   );
 }
 

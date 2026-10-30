@@ -14,12 +14,15 @@ type nativePlaybackChoice struct {
 	danmakuSource string
 	danmakuSeries string
 	danmakuVideo  string
-	media         []providerMedia
-	index         int
-	qualities     []int
-	streamSession string
-	created       time.Time
-	refresher     func(context.Context) (providerMedia, error)
+	// 社区跳过预设（真果·鉴）：片头结束秒数 / 片尾起点距结尾秒数。
+	skipIntro        int
+	skipOutroFromEnd int
+	media            []providerMedia
+	index            int
+	qualities        []int
+	streamSession    string
+	created          time.Time
+	refresher        func(context.Context) (providerMedia, error)
 }
 
 func nativePlaybackChoices(media providerMedia, quality int) nativePlaybackChoice {
@@ -83,8 +86,9 @@ func (engine *nativeEngine) nativeOpenPlayback(ctx context.Context, choice nativ
 		return nativePlan{}, errors.New("无法初始化播放会话")
 	}
 	plan := nativePlan{
-		DanmakuID: choice.danmakuVideo,
-		URL:       media.URL, Headers: map[string]string{"User-Agent": hongguoWebMediaUserAgent(media.URL), "Referer": media.Referer},
+		DanmakuID:        choice.danmakuVideo,
+		SkipIntroSeconds: choice.skipIntro, SkipOutroFromEndSeconds: choice.skipOutroFromEnd,
+		URL: media.URL, Headers: map[string]string{"User-Agent": hongguoWebMediaUserAgent(media.URL), "Referer": media.Referer},
 		Key: hex.EncodeToString(media.CENCKey), Quality: media.Quality, Qualities: choice.qualities,
 		RouteIndex: choice.index, RouteCount: len(choice.media), RouteLabels: nativeRouteLabels(choice.media),
 		RouteOfficial: nativeRouteOfficial(choice.media), Session: hex.EncodeToString(tokenBytes),

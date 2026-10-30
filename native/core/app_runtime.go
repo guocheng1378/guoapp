@@ -144,19 +144,23 @@ type nativeCatalogResult struct {
 }
 
 type nativePlan struct {
-	ExpiresAt       int64             `json:"expiresAt,omitempty"`
-	PrefetchedBytes int64             `json:"prefetchedBytes,omitempty"`
-	DanmakuID       string            `json:"danmakuId,omitempty"`
-	Local           bool              `json:"local"`
-	URL             string            `json:"url"`
-	Headers         map[string]string `json:"headers"`
-	Key             string            `json:"decryptionKey,omitempty"`
-	Quality         int               `json:"quality"`
-	Qualities       []int             `json:"qualities"`
-	Session         string            `json:"session,omitempty"`
-	RouteIndex      int               `json:"routeIndex"`
-	RouteCount      int               `json:"routeCount"`
-	RouteLabels     []string          `json:"routeLabels,omitempty"`
+	ExpiresAt       int64  `json:"expiresAt,omitempty"`
+	PrefetchedBytes int64  `json:"prefetchedBytes,omitempty"`
+	DanmakuID       string `json:"danmakuId,omitempty"`
+	// 社区跳过预设（秒，真果·鉴下发）：片头结束位置 / 片尾起点距结尾。
+	// 0 表示站源未下发，播放器按既有手动标定逻辑处理。
+	SkipIntroSeconds        int               `json:"skipIntroSeconds,omitempty"`
+	SkipOutroFromEndSeconds int               `json:"skipOutroFromEndSeconds,omitempty"`
+	Local                   bool              `json:"local"`
+	URL                     string            `json:"url"`
+	Headers                 map[string]string `json:"headers"`
+	Key                     string            `json:"decryptionKey,omitempty"`
+	Quality                 int               `json:"quality"`
+	Qualities               []int             `json:"qualities"`
+	Session                 string            `json:"session,omitempty"`
+	RouteIndex              int               `json:"routeIndex"`
+	RouteCount              int               `json:"routeCount"`
+	RouteLabels             []string          `json:"routeLabels,omitempty"`
 	// RouteOfficial 与 RouteLabels 一一对应：true 表示该线路是站源官方线。
 	// 面板据此把第三方线路折叠，避免几十条三方线把官方源淹没。
 	RouteOfficial []bool `json:"routeOfficial,omitempty"`
@@ -1124,6 +1128,20 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 	}
 	if danmakuSource, series, video, valid := danmakuPlaybackIDs(task); valid {
 		choice.danmakuSource, choice.danmakuSeries, choice.danmakuVideo = danmakuSource, series, video
+		// 真果·鉴的剧集维度弹幕 ID 恰好也是详情 ID，顺手查社区跳过预设
+		//（详情/线路刷新拉取时已写入缓存，这里只读不打网络）。
+		if danmakuSource == sourceDongpiandi {
+			if preset, ok := dongpiandiCachedSkipPreset(series); ok {
+				choice.skipIntro = int(preset.IntroEndSeconds + 0.5)
+				choice.skipOutroFromEnd = int(preset.OutroFromEndSeconds + 0.5)
+			}
+		}
+	}
+	// 跨源：其他站源的剧按剧名借真果·鉴的社区跳过预设（只读缓存零网络，
+	// 未命中后台静默补映射，下一集/下次播放生效）。真果·鉴本源走上面的
+	// 分支，不再重复。
+	if source, _, valid := splitProviderDramaID(input.Drama.ID); valid && source != sourceDongpiandi {
+		engine.downloader.dongpiandiBridgeApplySkip(input.Drama.Title, &choice)
 	}
 	return engine.nativeOpenPlayback(ctx, choice)
 }

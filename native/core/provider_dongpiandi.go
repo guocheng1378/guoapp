@@ -702,29 +702,48 @@ func dongpiandiReleaseStatus(status string, completed bool, progress string) str
 	return "unknown"
 }
 
+// dongpiandiSkipPreset 是详情顶层下发的社区共创跳过预设（单位：秒）：
+// intro_end_seconds=片头在该秒结束，outro_from_end_seconds=片尾从距结尾
+// 这么多秒处开始（绝对位置要等播放器拿到片长后换算）。
+// 秒数用 float64：站点实测会下发小数（如 113.4），int 解析会让整条
+// 详情 JSON 失败；消费侧按半秒进位取整。
+type dongpiandiSkipPreset struct {
+	Source              string  `json:"source"`
+	IntroEndSeconds     float64 `json:"intro_end_seconds"`
+	OutroFromEndSeconds float64 `json:"outro_from_end_seconds"`
+	SampleCount         int     `json:"sample_count"`
+}
+
+// valid 只要有一段给出正数秒数就值得下发；站点没有共创数据时两段都是 0。
+func (p dongpiandiSkipPreset) valid() bool {
+	return p.IntroEndSeconds > 0 || p.OutroFromEndSeconds > 0
+}
+
 // dongpiandiDetail 对应 /v1/catalog/{id} 的完整响应。
 type dongpiandiDetail struct {
-	ID                    string              `json:"id"`
-	Title                 string              `json:"title"`
-	ContentKind           string              `json:"content_kind"`
-	Year                  int                 `json:"year"`
-	Area                  string              `json:"area"`
-	Language              string              `json:"language"`
-	Genres                []string            `json:"genres"`
-	Actors                []string            `json:"actors"`
-	Directors             []string            `json:"directors"`
-	PosterURL             string              `json:"poster_url"`
-	Description           string              `json:"description"`
-	Remark                string              `json:"remarks"`
-	EpisodeCount          int                 `json:"episode_count"`
-	AvailableEpisodeCount int                 `json:"available_episode_count"`
-	CurrentEpisodeCount   int                 `json:"current_episode_count"`
-	TotalEpisodeCount     int                 `json:"total_episode_count"`
-	IsCompleted           bool                `json:"is_completed"`
-	UpdateStatus          string              `json:"update_status"`
-	EpisodeProgressText   string              `json:"episode_progress_text"`
-	Episodes              []dongpiandiEpisode `json:"episodes"`
-	EpisodePagination     struct {
+	// PlaybackSkipSettingsPreset 是社区共创的跳过片头/片尾预设（剧级）。
+	PlaybackSkipSettingsPreset dongpiandiSkipPreset `json:"playback_skip_settings_preset"`
+	ID                         string               `json:"id"`
+	Title                      string               `json:"title"`
+	ContentKind                string               `json:"content_kind"`
+	Year                       int                  `json:"year"`
+	Area                       string               `json:"area"`
+	Language                   string               `json:"language"`
+	Genres                     []string             `json:"genres"`
+	Actors                     []string             `json:"actors"`
+	Directors                  []string             `json:"directors"`
+	PosterURL                  string               `json:"poster_url"`
+	Description                string               `json:"description"`
+	Remark                     string               `json:"remarks"`
+	EpisodeCount               int                  `json:"episode_count"`
+	AvailableEpisodeCount      int                  `json:"available_episode_count"`
+	CurrentEpisodeCount        int                  `json:"current_episode_count"`
+	TotalEpisodeCount          int                  `json:"total_episode_count"`
+	IsCompleted                bool                 `json:"is_completed"`
+	UpdateStatus               string               `json:"update_status"`
+	EpisodeProgressText        string               `json:"episode_progress_text"`
+	Episodes                   []dongpiandiEpisode  `json:"episodes"`
+	EpisodePagination          struct {
 		Offset     int  `json:"offset"`
 		Limit      int  `json:"limit"`
 		HasMore    bool `json:"has_more"`
@@ -780,6 +799,38 @@ type dongpiandiLine struct {
 	Official bool `json:"-"`
 }
 
+// dongpiandiSkipCache 按 detail ID 记社区跳过预设。预设是剧级常量（社区
+// 中位数不会频繁变），只存内存，进程重启后随下一次详情拉取自然回填。
+var (
+	dongpiandiSkipMu    sync.Mutex
+	dongpiandiSkipCache = map[string]dongpiandiSkipPreset{}
+)
+
+// dongpiandiCacheSkipPreset 记录一整部剧的社区跳过预设（仅收有效值）。
+func dongpiandiCacheSkipPreset(detailID string, preset dongpiandiSkipPreset) {
+	if detailID == "" || !preset.valid() {
+		return
+	}
+	dongpiandiSkipMu.Lock()
+	if len(dongpiandiSkipCache) >= 512 {
+		// 容量护栏：塞满时逐出一条（Go map 遍历无序，缓存逐出无需公平）。
+		for key := range dongpiandiSkipCache {
+			delete(dongpiandiSkipCache, key)
+			break
+		}
+	}
+	dongpiandiSkipCache[detailID] = preset
+	dongpiandiSkipMu.Unlock()
+}
+
+// dongpiandiCachedSkipPreset 取某部剧的社区跳过预设。
+func dongpiandiCachedSkipPreset(detailID string) (dongpiandiSkipPreset, bool) {
+	dongpiandiSkipMu.Lock()
+	defer dongpiandiSkipMu.Unlock()
+	preset, ok := dongpiandiSkipCache[detailID]
+	return preset, ok
+}
+
 // fetchDongpiandiDetail 拉取详情并同步解析每一集的 m3u8 地址。
 // 对于 short_drama，episodes 字段是批次（如 第1-20集），每个批次一个 m3u8。
 func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string) (Drama, []Chapter, error) {
@@ -796,6 +847,7 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 	if err := json.Unmarshal(body, &detail); err != nil {
 		return Drama{}, nil, fmt.Errorf("dongpiandi: 解析详情失败: %w", err)
 	}
+	dongpiandiCacheSkipPreset(sourceID, detail.PlaybackSkipSettingsPreset)
 	if detail.Title == "" {
 		return Drama{}, nil, errors.New("真果·鉴返回的详情不完整")
 	}
@@ -965,12 +1017,22 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 }
 
 // 详情页后台补兑的取参：集数上限（几十集的剧只补前一段，其余集播放期按需
-// 兑换）、启动延迟（让路给用户立刻点播）、单部剧总预算。
+// 兑换）、启动延迟（让路给用户立刻点播）、单部剧总预算。上限 48：真网常见
+// 60~100 集的剧，24 集之外的集永远没人补、只能靠播放期现场兑换（用户翻到
+// 后面集数看到的全是三方源）；预算同步放宽到 150s 兜住 48 集的串行节奏。
 const (
-	dongpiandiBackfillLimit  = 24
+	dongpiandiBackfillLimit  = 48
 	dongpiandiBackfillDelay  = 2 * time.Second
-	dongpiandiBackfillBudget = 90 * time.Second
+	dongpiandiBackfillBudget = 150 * time.Second
 	dongpiandiBackfillGap    = 400 * time.Millisecond
+)
+
+// 播放期 attach 线路表的等待窗：缓存已有官方线时 attach 几乎零成本，2.4s
+// 足够；缓存没有官方线时要现场 resolve + 兑换（真网单集约 1.5~2.5s），2.4s
+// 常常刚好超时 → 线路面板没有官方源，放宽到 3.5s。
+const (
+	dongpiandiAttachWaitFresh = 2400 * time.Millisecond
+	dongpiandiAttachWaitCold  = 3500 * time.Millisecond
 )
 
 var (
@@ -1001,8 +1063,9 @@ func dongpiandiHasFreshOfficial(episodeID string) bool {
 // dongpiandiLinesCache，用户点开任意一集都能直接命中官方线（≈2186 的
 // 「详情页全量兑换」体验，但不拖慢详情页首屏）。
 //
-// 连续两集「有票据但一张都兑不出来」视为站点限流/线路整体不可用，立即收手，
-// 避免把限流放大成更长时间的封禁。
+// 连续四集「有票据但一张都兑不出来」视为站点限流/线路整体不可用，立即收手，
+// 避免把限流放大成更长时间的封禁。收手前每次退避一档（400ms→800ms→1.6s）
+// 给站点喘息：两三集偶发 429 不再把整轮补兑提前放弃。
 func (d *Downloader) dongpiandiBackfillOfficialLines(ctx context.Context, client *dongpiandiClient, detailID string, episodes []dongpiandiEpisode) {
 	if client == nil || len(episodes) == 0 {
 		return
@@ -1026,6 +1089,7 @@ func (d *Downloader) dongpiandiBackfillOfficialLines(ctx context.Context, client
 		limit = dongpiandiBackfillLimit
 	}
 	stalled := 0
+	gap := dongpiandiBackfillGap
 	for i := 0; i < limit; i++ {
 		if ctx.Err() != nil {
 			return
@@ -1042,16 +1106,19 @@ func (d *Downloader) dongpiandiBackfillOfficialLines(ctx context.Context, client
 		if err != nil {
 			// resolve 本身失败（网络/站点错误）：换下一集，不在这里重试。
 			stalled = 0
+			gap = dongpiandiBackfillGap
 		} else if set.Tickets > 0 && set.Redeemed == 0 {
 			stalled++
-			if stalled >= 2 {
+			if stalled >= 4 {
 				return
 			}
+			gap = dongpiandiBackfillGap << (stalled - 1)
 		} else {
 			stalled = 0
+			gap = dongpiandiBackfillGap
 		}
 		select {
-		case <-time.After(dongpiandiBackfillGap):
+		case <-time.After(gap):
 		case <-ctx.Done():
 			return
 		}
@@ -1731,6 +1798,9 @@ type dongpiandiLineCacheEntry struct {
 	// 线路面板都会想重解析；没有这个冷却就会把 1~3s 的网络等待反复加到用
 	// 户头上（真网实测：站点无票的剧每次都会走完整条解析链）。
 	officialTriedAt time.Time
+	// officialRetryGap 是该集下一次重兑官方票的冷却窗，由最近一次失败的
+	// 原因决定（默认抖动 15s / 确认限流 30s / 站点无票 60s）。零值=短冷却。
+	officialRetryGap time.Duration
 }
 
 const (
@@ -1745,6 +1815,38 @@ var (
 	dongpiandiLinesMu    sync.Mutex
 	dongpiandiLinesCache = map[string]dongpiandiLineCacheEntry{}
 )
+
+// dongpiandiMergeOfficialLines 把新兑出的官方线并入旧官方段：按线 ID 去重
+// （ID 空则退化用 URL），同 ID 以新线为准——新直链总是比旧的新鲜。fresh 在
+// 前、old 在后只是入表顺序，最终展示排序由 LineScore 决定。
+func dongpiandiMergeOfficialLines(old, fresh []dongpiandiLine) []dongpiandiLine {
+	if len(old) == 0 {
+		return fresh
+	}
+	merged := make([]dongpiandiLine, 0, len(old)+len(fresh))
+	seen := make(map[string]struct{}, len(old)+len(fresh))
+	add := func(line dongpiandiLine) {
+		key := line.ID
+		if strings.TrimSpace(key) == "" {
+			key = line.URL
+		}
+		if key == "" {
+			return
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, line)
+	}
+	for _, line := range fresh {
+		add(line)
+	}
+	for _, line := range old {
+		add(line)
+	}
+	return merged
+}
 
 // dongpiandiCacheLines 记录某集的线路表（key=分集 ID）。
 // 三方直连无条件刷新；官方线在两种情况下刷新：票据全兑出来（officialComplete），
@@ -1800,8 +1902,20 @@ func dongpiandiCacheLines(episodeID string, lines []dongpiandiLine, officialComp
 		}
 	}
 	entry := dongpiandiLinesCache[episodeID]
-	if len(official) > 0 && (officialComplete || len(entry.official) == 0) {
-		entry.official = official
+	if len(official) > 0 {
+		if officialComplete {
+			// 全量兑换成功：整表替换（防旧线残留）。
+			entry.official = official
+		} else {
+			// 残缺兑换（部分票据 404/限流）：按线 ID 增量并入——旧线不丢、
+			// 新线不弃。原来只在「这一集还没有官方线」时才收残缺结果，首次
+			// 只兑出 1/3 的集就永远定格在 1 条（官方源显示不全）；14 分钟后
+			// 旧直链过期，官方段被读取逻辑剔除、重兑结果又不完整 → 不写回，
+			// 官方线从面板上消失后再也回不来。增量合并且整段刷新 officialAt：
+			// 新线是刚兑出来的（旧线最多多活几分钟，过期直链有重签兜底），
+			// 换来的是官方线不再因 stale 死锁而缺席。
+			entry.official = dongpiandiMergeOfficialLines(entry.official, official)
+		}
 		entry.officialAt = now
 	}
 	if len(third) > 0 {
@@ -1916,25 +2030,49 @@ func dongpiandiCachedLinesState(episodeID string) ([]dongpiandiLine, bool) {
 	return out, officialStale
 }
 
-// dongpiandiOfficialRetryGap 是「没兑出官方线」后重解析同一集的冷却窗。
-// 站点这边相当一部分剧压根没有票据（真网探针三家剧里两家无票），不限流
-// 的话每次开线路面板都要付一次 catalog+resolve+兑换的完整往返。
-const dongpiandiOfficialRetryGap = 60 * time.Second
+// 「没兑出官方线」后重解析同一集的冷却窗，按失败原因分三档：
+//   - 默认（票据在缓存里但兑换空手/网络错误）：15s——兑换只是一次 POST，
+//     失败大概率是限流抖动，短冷却让官方线尽快自愈回来；
+//   - dongpiandiOfficialRetryGapThrottle：确认撞了 429——站点按分钟限流，
+//     15s 后多半还在限流窗里，按 30s 歇；
+//   - dongpiandiOfficialRetryGap：站点这一集根本没发票据——短冷却只会反复
+//     空跑 catalog+resolve+兑换的完整往返（真网探针：相当一部分剧无票）。
+const (
+	dongpiandiOfficialRetryGapShort   = 15 * time.Second
+	dongpiandiOfficialRetryGap        = 60 * time.Second
+	dongpiandiOfficialRetryGapThrottl = 30 * time.Second
+)
 
-// dongpiandiMarkOfficialTried 记下这一集刚刚去站点兑过官方票。
-// 先记再兑：并发进来（起播预拉 + 用户点面板）不会各跑一轮全链路。
-func dongpiandiMarkOfficialTried(episodeID string) {
+// dongpiandiMarkOfficialRetry 记下这一集刚去站点兑过官方票，并按失败原因
+// 定下下次重试的冷却窗（gap<=0 时取默认短冷却）。
+func dongpiandiMarkOfficialRetry(episodeID string, gap time.Duration) {
 	if episodeID == "" {
 		return
+	}
+	if gap <= 0 {
+		gap = dongpiandiOfficialRetryGapShort
 	}
 	dongpiandiLinesMu.Lock()
 	defer dongpiandiLinesMu.Unlock()
 	entry := dongpiandiLinesCache[episodeID]
 	entry.officialTriedAt = time.Now()
+	entry.officialRetryGap = gap
 	dongpiandiLinesCache[episodeID] = entry
 }
 
+// dongpiandiMarkOfficialTried 记下这一集刚刚去站点兑过官方票（短冷却档）。
+// 先记再兑：并发进来（起播预拉 + 用户点面板）不会各跑一轮全链路。
+func dongpiandiMarkOfficialTried(episodeID string) {
+	dongpiandiMarkOfficialRetry(episodeID, dongpiandiOfficialRetryGapShort)
+}
+
+// dongpiandiMarkOfficialExhausted 把冷却窗升到最长档（确认站点无票）。
+func dongpiandiMarkOfficialExhausted(episodeID string) {
+	dongpiandiMarkOfficialRetry(episodeID, dongpiandiOfficialRetryGap)
+}
+
 // dongpiandiOfficialTryDue 报告这一集现在是否值得再去兑一次官方票。
+// 冷却窗取该集最近一次失败定下的档位（旧条目/未定档取短冷却）。
 func dongpiandiOfficialTryDue(episodeID string) bool {
 	if episodeID == "" {
 		return true
@@ -1945,7 +2083,11 @@ func dongpiandiOfficialTryDue(episodeID string) bool {
 	if !ok || entry.officialTriedAt.IsZero() {
 		return true
 	}
-	return time.Since(entry.officialTriedAt) > dongpiandiOfficialRetryGap
+	gap := entry.officialRetryGap
+	if gap <= 0 {
+		gap = dongpiandiOfficialRetryGapShort
+	}
+	return time.Since(entry.officialTriedAt) > gap
 }
 
 // dongpiandiDetailIDFromPageURL 从 /player/{id} 形态的章节页地址里抽剧集 ID。
@@ -2064,10 +2206,14 @@ func (d *Downloader) resolveDongpiandiMedia(ctx context.Context, task Task) (pro
 		if err != nil {
 			return providerMedia{}, err
 		}
-		// 2.4s：详情页只兑换首集票据，其余集要靠这里现场 resolve + 兑换
-		// （真网单集约 1.5~2.5s，1.6s 常常刚好超时 → 线路面板没有官方源）。
-		// 缓存命中时（首集）这一步几乎零成本，不会拖慢起播。
-		d.dongpiandiAttachRoutes(ctx, &media, task, 2400*time.Millisecond)
+		// 等待窗自适应：缓存已有官方线（首集/近期解析过）attach 几乎零成本，
+		// 2.4s 足够；缓存没有官方线时这一步要现场 resolve + 兑换（真网单集
+		// 约 1.5~2.5s），2.4s 常常刚好超时 → 线路面板没有官方源，放宽到 3.5s。
+		wait := dongpiandiAttachWaitFresh
+		if _, sourceID, valid := splitProviderDramaID(task.Chapter.ID); !valid || !dongpiandiHasFreshOfficial(sourceID) {
+			wait = dongpiandiAttachWaitCold
+		}
+		d.dongpiandiAttachRoutes(ctx, &media, task, wait)
 		return media, nil
 	}
 	// 缓存优先起播（红果式：能不付全链就不付全链）。这一集解析过一次后，
@@ -2090,6 +2236,7 @@ func (d *Downloader) resolveDongpiandiMedia(ctx context.Context, task Task) (pro
 			if err == nil {
 				var detail dongpiandiDetail
 				if json.Unmarshal(body, &detail) == nil {
+					dongpiandiCacheSkipPreset(detailID, detail.PlaybackSkipSettingsPreset)
 					for _, ep := range detail.Episodes {
 						if ep.ID != sourceID || ep.Token == "" {
 							continue
@@ -2271,6 +2418,7 @@ func (d *Downloader) dongpiandiRouteLinesFresh(ctx context.Context, task Task, s
 	if json.Unmarshal(body, &detail) != nil {
 		return nil
 	}
+	dongpiandiCacheSkipPreset(detailID, detail.PlaybackSkipSettingsPreset)
 	for _, ep := range detail.Episodes {
 		if ep.ID != sourceID || ep.Token == "" {
 			continue
@@ -2278,9 +2426,19 @@ func (d *Downloader) dongpiandiRouteLinesFresh(ctx context.Context, task Task, s
 		// 播放期只解析当前这一集，可以耐心重试把官方线补回来。
 		set, err := dongpiandiResolveLinesSet(ctx, client, ep.Token, false, true, 2)
 		if err != nil {
+			// 撞限流把冷却档升到 30s（分钟级限流窗内 15s 重试多半还是 429，
+			// 白付全链）；其它错误维持入口处记下的短冷却。
+			if dongpiandiThrottled(err) {
+				dongpiandiMarkOfficialRetry(ep.ID, dongpiandiOfficialRetryGapThrottl)
+			}
 			return nil
 		}
-		// 三方直连照缓存；官方线残缺时保留上一次兑好的结果（不覆盖）。
+		if set.Tickets == 0 {
+			// 站点这一集根本没下发票据：短冷却只会每 15s 空跑一次完整往返，
+			// 升到 60s 长冷却（后续站点补票仍会在下一轮被兜回来）。
+			dongpiandiMarkOfficialExhausted(ep.ID)
+		}
+		// 三方直连照缓存；官方线残缺时增量并入上一次兑好的结果（不整表覆盖）。
 		dongpiandiCacheLines(ep.ID, set.Lines, set.complete())
 		dongpiandiCacheTickets(ep.ID, set.TicketLines)
 		return set.Lines
