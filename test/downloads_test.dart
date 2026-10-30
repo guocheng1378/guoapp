@@ -50,6 +50,27 @@ class DownloadRepository extends FixtureRepository {
   bool get supportsDownloads => true;
   @override
   Future<List<DownloadJob>> downloads() async => List.of(jobs);
+
+  int storageCalls = 0;
+  final moves = <String>[];
+  Map<String, dynamic> storageInfo = const {
+    'directory': '/data/downloads',
+    'bytes': 1024,
+    'free': 4096,
+    'files': 3,
+  };
+
+  @override
+  Future<Map<String, dynamic>> storage() async {
+    storageCalls++;
+    return storageInfo;
+  }
+
+  @override
+  Future<void> moveDownloads(String directory) async {
+    moves.add(directory);
+  }
+
   @override
   Future<DramaDetail> detail(Drama drama) async {
     detailCalls++;
@@ -572,4 +593,49 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('download storage entry opens the storage screen', (
+    tester,
+  ) async {
+    size(tester, const Size(390, 844));
+    final repository = DownloadRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DownloadsScreen(repository: repository, store: await makeStore()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('download-storage')));
+    await tester.pumpAndSettle();
+    expect(find.text('当前下载目录'), findsOneWidget);
+    expect(find.text('/data/downloads'), findsOneWidget);
+    expect(find.text('更改并迁移目录'), findsOneWidget);
+    expect(repository.storageCalls, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('TV toolbar exposes the storage entry and opens it', (
+    tester,
+  ) async {
+    size(tester, const Size(960, 540));
+    final repository = DownloadRepository();
+    await tester.pumpWidget(
+      televisionHost(
+        child: DownloadsScreen(
+          repository: repository,
+          store: await makeStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    focusRemote(tester, find.byKey(const ValueKey('tv-download-storage')));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.text('当前下载目录'), findsOneWidget);
+    expect(repository.storageCalls, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
 }

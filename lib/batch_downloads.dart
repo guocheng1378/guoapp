@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'core_bridge.dart';
+import 'download_summary.dart';
 import 'local_store.dart';
 import 'models.dart';
 
@@ -203,6 +204,7 @@ class BatchDownloads extends ChangeNotifier {
             item.added += count;
             item.existing += chunk.length - count;
             item._submitted.addAll(chunk.map((episode) => episode.number));
+            if (count > 0) DownloadSummary.instance.poke();
             _notify();
           } catch (error) {
             if (_valid) item.error = error.toString();

@@ -238,7 +238,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (error) {
-      if (mounted) setState(() => _message = error.toString());
+      if (mounted) setState(() => _message = friendlyError(error));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -251,7 +251,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       await widget.store.setAutoExport(!widget.store.autoExport);
     } catch (error) {
-      if (mounted) setState(() => _message = error.toString());
+      if (mounted) setState(() => _message = friendlyError(error));
     }
   }
 
@@ -616,7 +616,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             await widget.store.setAutoExport(value);
                           } catch (error) {
                             if (mounted) {
-                              setState(() => _message = error.toString());
+                              setState(() => _message = friendlyError(error));
                             }
                           }
                         },
@@ -695,7 +695,7 @@ class _StorageScreenState extends State<StorageScreen> {
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     }
   }
 
@@ -716,21 +716,33 @@ class _StorageScreenState extends State<StorageScreen> {
         directories[documents.path] = '文件 App 可见目录';
       }
       if (!mounted) return;
-      parent = await showDialog<String>(
-        context: context,
-        builder: (context) => GlassDialogShell(
-          child: SimpleDialog(
-            title: const Text('选择下载位置'),
-            children: [
-              for (final entry in directories.entries)
-                SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, entry.key),
-                  child: Text(entry.value),
+      // 电视端遥控无法操作 SimpleDialog 的触摸选项，改走焦点系统对话框。
+      parent = AppLayout.isTelevision(context)
+          ? await showDialog<String>(
+              context: context,
+              builder: (context) => TelevisionActionDialog(
+                title: '选择下载位置',
+                options: [
+                  for (final entry in directories.entries)
+                    TelevisionAction(value: entry.key, label: entry.value),
+                ],
+              ),
+            )
+          : await showDialog<String>(
+              context: context,
+              builder: (context) => GlassDialogShell(
+                child: SimpleDialog(
+                  title: const Text('选择下载位置'),
+                  children: [
+                    for (final entry in directories.entries)
+                      SimpleDialogOption(
+                        onPressed: () => Navigator.pop(context, entry.key),
+                        child: Text(entry.value),
+                      ),
+                  ],
                 ),
-            ],
-          ),
-        ),
-      );
+              ),
+            );
     } else {
       parent = await FilePicker.getDirectoryPath(dialogTitle: '选择下载保存位置');
     }
@@ -765,7 +777,7 @@ class _StorageScreenState extends State<StorageScreen> {
       await widget.repository.moveDownloads(parent);
       await _refresh();
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

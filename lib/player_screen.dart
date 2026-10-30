@@ -18,6 +18,7 @@ import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
 import 'detail_screen.dart';
 import 'download_picker.dart';
+import 'download_summary.dart';
 import 'downloads_screen.dart';
 import 'follow_state.dart';
 import 'local_store.dart';
@@ -1890,6 +1891,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       quality: selection.quality,
     );
     if (!mounted || _closed) return;
+    if (added > 0) DownloadSummary.instance.poke();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(added == 0 ? '所选集数已在下载列表中' : '已加入 $added 集，已有任务自动跳过'),

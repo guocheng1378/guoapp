@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'download_collections.dart';
+import 'download_summary.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'local_media_screen.dart';
@@ -78,6 +79,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   void initState() {
     super.initState();
+    // 用户正在看下载页：清空全局汇总徽标，避免边看边累计。
+    DownloadSummary.instance.markSeen();
     _epoch = widget.store.profileEpoch;
     _updater = DownloadCollectionUpdater(widget.repository, widget.store)
       ..addListener(_changed);
@@ -114,7 +117,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         });
       }
     } catch (error) {
-      if (mounted && _allowed) setState(() => _error = error.toString());
+      if (mounted && _allowed) setState(() => _error = friendlyError(error));
     } finally {
       _refreshing = false;
       if (mounted) setState(() => _loading = false);
@@ -198,10 +201,14 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           );
           if (!mounted || !_allowed) return;
           completed += result.completed.length;
+          // 继续/重试会让任务重新活跃：唤醒全局汇总轮询，别让它停摆。
+          if (command == 'resume' && result.completed.isNotEmpty) {
+            DownloadSummary.instance.poke();
+          }
           _selected.removeAll(result.completed);
           failures.addAll(result.failures);
         } catch (error) {
-          failures.addAll({for (final id in ids) id: error.toString()});
+          failures.addAll({for (final id in ids) id: friendlyError(error)});
         }
       }
       if (!mounted || !_allowed) return;
@@ -424,6 +431,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         ),
         icon: AppIcon(AppIcons.videoLibrary),
       ),
+      IconButton(
+        key: const ValueKey('download-storage'),
+        tooltip: '下载目录与空间',
+        onPressed: _openStorage,
+        icon: AppIcon(AppIcons.folder),
+      ),
     ],
     PopupMenuButton<String>(
       key: const ValueKey('download-queue-actions'),
@@ -634,6 +647,18 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   Iterable<DownloadJob> get _selectedJobs =>
       _jobs.where((job) => _selected.contains(job.id));
+
+  void _openStorage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => StorageScreen(
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
+  }
 
   Future<void> _televisionSearch() async {
     final value = await showDialog<String>(
@@ -848,6 +873,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           ),
         ),
         ('queue', '队列操作', AppIcon(AppIcons.tune), _busy ? null : _queueActions),
+        ('storage', '下载目录', AppIcon(AppIcons.folder), _openStorage),
       ],
       ('refresh', '刷新', AppIcon(AppIcons.refresh), _refresh),
     ];

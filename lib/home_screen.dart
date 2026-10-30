@@ -22,6 +22,7 @@ import 'rankings_screen.dart';
 import 'detail_screen.dart';
 import 'playback_launch_screen.dart';
 import 'downloads_screen.dart';
+import 'download_summary.dart';
 import 'featured_catalog.dart';
 import 'local_store.dart';
 import 'lan_screen.dart';
@@ -102,6 +103,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _resumeHideTimer;
   bool _refreshingUpdatedCache = false;
   bool _selectionMode = false;
+  // 下载全局汇总：已消费过的批次结束事件序号（防重复弹提示）。
+  int _seenSummaryBatch = 0;
   // 手机端二次退出保护：首次按返回的时间戳，2 秒内再按才真正退出。
   DateTime? _lastBackAt;
 
@@ -807,6 +810,11 @@ class _HomeScreenState extends State<HomeScreen> {
     // 「变化」——不先取当前值，雾面高度启动永远停在 0（用户症状根因）。
     _fogHeight = FogTuningStore.state.value.fogHeight;
     FogTuningStore.state.addListener(_onFogTuning);
+    // 下载完成/失败全局汇总：差量轮询引擎常驻，底栏下载入口亮未读徽标，
+    // 一批任务全部结束时弹一次汇总提示。
+    unawaited(DownloadSummary.instance.bind(widget.repository, widget.store));
+    DownloadSummary.instance.addListener(_onSummaryChanged);
+    _seenSummaryBatch = DownloadSummary.instance.batch;
     if (widget.store.sources.isNotEmpty) {
       _load(useCache: true);
       _loadCategories();
@@ -887,6 +895,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _scroll.dispose();
     _prox.dispose();
     FogTuningStore.state.removeListener(_onFogTuning);
+    DownloadSummary.instance.removeListener(_onSummaryChanged);
     _appBarFocus.dispose();
     _selectionFocus.dispose();
     super.dispose();
@@ -927,6 +936,41 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onFogTuning() {
     final h = FogTuningStore.state.value.fogHeight;
     if (h != _fogHeight && mounted) setState(() => _fogHeight = h);
+  }
+
+  /// 下载入口图标：有未读汇总（新完成/失败任务）时套数字徽标。
+  Widget _downloadIcon() {
+    final unread = DownloadSummary.instance.unread;
+    final icon = AppIcon(AppIcons.download);
+    return unread > 0 ? Badge(label: Text('$unread'), child: icon) : icon;
+  }
+
+  /// 下载全局汇总回调：刷新底栏未读徽标；一批任务全部结束时弹一次
+  /// 汇总提示（正看着下载页则不打扰）。
+  void _onSummaryChanged() {
+    if (!mounted) return;
+    final summary = DownloadSummary.instance;
+    if (summary.batch > _seenSummaryBatch) {
+      _seenSummaryBatch = summary.batch;
+      final text = summary.batchText;
+      if (text.isNotEmpty &&
+          _tab != 3 &&
+          widget.store.canDownload &&
+          !Motion.inTest) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(text),
+              action: SnackBarAction(
+                label: '查看',
+                onPressed: () => _changeTab(3),
+              ),
+            ),
+          );
+      }
+    }
+    setState(() {});
   }
 
   /// 雾面挂点实际高度：负档收窄（底缘上移），clamp≥0 防负高度断言。
@@ -1632,7 +1676,7 @@ class _HomeScreenState extends State<HomeScreen> {
           (0, AppIcon(AppIcons.explore), '发现'),
           (1, AppIcon(AppIcons.bookmark, filled: true), '追剧'),
           (2, AppIcon(AppIcons.history), '最近观看'),
-          if (widget.store.canDownload) (3, AppIcon(AppIcons.download), '下载'),
+          if (widget.store.canDownload) (3, _downloadIcon(), '下载'),
         ];
         // 手机横屏紧凑档：顶栏 56→44；沉浸后 padding.top=0 自动让位。
         final compactLandscape =
@@ -1942,8 +1986,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       if (widget.store.canDownload)
                         NavigationRailDestination(
-                          icon: AppIcon(AppIcons.download),
-                          selectedIcon: AppIcon(AppIcons.download),
+                          icon: _downloadIcon(),
+                          selectedIcon: _downloadIcon(),
                           label: Text('下载'),
                         ),
                     ],
@@ -2054,8 +2098,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     if (widget.store.canDownload)
                       NavigationDestination(
-                        icon: AppIcon(AppIcons.download),
-                        selectedIcon: AppIcon(AppIcons.download),
+                        icon: _downloadIcon(),
+                        selectedIcon: _downloadIcon(),
                         label: '下载',
                       ),
                   ],

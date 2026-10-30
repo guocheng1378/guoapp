@@ -9,6 +9,9 @@ import 'models.dart';
 import 'remote_widgets.dart';
 import 'app_icons.dart';
 import 'motion.dart';
+import 'error_text.dart';
+
+export 'error_text.dart' show friendlyError;
 
 Future<void> saveUserChange(
   BuildContext context,

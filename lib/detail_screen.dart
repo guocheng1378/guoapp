@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'download_picker.dart';
+import 'download_summary.dart';
 import 'downloads_screen.dart';
 import 'glass.dart';
 import 'local_store.dart';
@@ -208,6 +209,7 @@ class _DetailScreenState extends State<DetailScreen> {
         quality: selection.quality,
       );
       if (!mounted) return;
+      if (added > 0) DownloadSummary.instance.poke();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(added == 0 ? '所选集数已在下载列表中' : '已加入 $added 集，已有任务自动跳过'),
