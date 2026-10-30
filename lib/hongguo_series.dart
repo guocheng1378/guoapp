@@ -87,8 +87,9 @@ int? _seasonNumber(String label) {
   return number >= 1 && number <= _hongguoSeriesLimit ? number : null;
 }
 
+/// 系列解析对所有站源生效；「与锚点同源」的过滤由 [hongguoSeriesEntries]
+/// 在收集阶段做（不同站源的同名剧不是同一系列）。
 HongguoSeriesInfo? hongguoSeriesInfo(Drama drama, {String? unit}) {
-  if (drama.source != SourceSite.hongguo.id) return null;
   final title = drama.title.trim();
   final match = _seasonSuffix.firstMatch(title);
   if (match == null) {
@@ -117,14 +118,18 @@ List<HongguoSeriesEntry> hongguoSeriesEntries(
   Drama anchor,
   Iterable<Drama> candidates,
 ) {
-  if (anchor.source != SourceSite.hongguo.id) return const [];
+  // 系列按「与锚点同源」收集：别的站源的同名剧不是同一系列。
+  final pool = [
+    for (final drama in candidates)
+      if (drama.source == anchor.source) drama,
+  ];
   var anchorInfo = hongguoSeriesInfo(anchor);
   String key, unit;
   int anchorSeason;
   if (anchorInfo == null) {
     final baseKey = normalizedSearchText(anchor.title);
     final groups = <String, List<HongguoSeriesInfo>>{};
-    for (final drama in candidates) {
+    for (final drama in pool) {
       final info = hongguoSeriesInfo(drama);
       if (info != null && info.key == baseKey) {
         (groups[info.unit] ??= []).add(info);
@@ -160,8 +165,7 @@ List<HongguoSeriesEntry> hongguoSeriesEntries(
   // 收会把一半兄弟滤光；「之」类衍生剧没有后缀、key 是全名，靠精确
   // 相等天然排除。unit 只作无后缀条目（系列第一部语义）的占位。
   final byId = <String, HongguoSeriesEntry>{};
-  for (final drama in [anchor, ...candidates]) {
-    if (drama.source != SourceSite.hongguo.id) continue;
+  for (final drama in [anchor, ...pool]) {
     final info = hongguoSeriesInfo(drama, unit: unit);
     if (info == null || info.key != key) continue;
     byId[drama.id] = HongguoSeriesEntry(

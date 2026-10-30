@@ -19,8 +19,9 @@ class RelatedAttempt {
   final String query;
   final String category;
 
-  /// 红果源同系列：结果先经 [hongguoSeriesEntries] 精确提取（含锚点是
-  /// 系列第一部、自身无「第N部/季」后缀的场景），提取不出再回落主干搜索。
+  /// 同系列：结果先经 [hongguoSeriesEntries] 按「与锚点同源 + 主干精确
+  /// 相等」提取（含锚点是系列第一部、自身无「第N部/季」后缀的场景），
+  /// 提取不出再回落主干搜索结果。
   final bool seriesExtract;
 }
 
@@ -48,15 +49,12 @@ String seriesBaseTitle(String title) {
 List<RelatedAttempt> relatedAttemptsFor(Drama drama) {
   final attempts = <RelatedAttempt>[];
   final base = seriesBaseTitle(drama.title);
-  if (drama.source == SourceSite.hongguo.id) {
-    // 红果源：同系列尝试总是发起。锚点是系列第一部时标题没有「第N部/季」
-    // 后缀，seriesBaseTitle 会原样返回标题 —— 正好用原题主干搜索，再由
-    // hongguoSeriesEntries 从结果里精确挑出系列兄弟（提取逻辑见 _fetch）。
-    if (base.isNotEmpty) {
-      attempts.add(RelatedAttempt('同系列', query: base, seriesExtract: true));
-    }
-  } else if (base.isNotEmpty && base != drama.title.trim()) {
-    attempts.add(RelatedAttempt('同系列', query: base));
+  // 同系列尝试对所有站源发起（2026-10-30 用户定调「其他源也要这样」）。
+  // 锚点是系列第一部时标题没有「第N部/季」后缀，seriesBaseTitle 会原样
+  // 返回标题 —— 正好用原题主干搜索，再由 hongguoSeriesEntries 从结果里
+  // 精确挑出同源系列兄弟（提取逻辑见 _fetch）。
+  if (base.isNotEmpty) {
+    attempts.add(RelatedAttempt('同系列', query: base, seriesExtract: true));
   }
   String actor = '';
   for (final candidate in drama.actors) {
@@ -196,10 +194,10 @@ class _RelatedDramaRailState extends State<RelatedDramaRail> {
         category: attempt.category,
       );
       if (attempt.seriesExtract) {
-        // 红果同系列：hongguoSeriesEntries 按「剥后缀后的主干精确相等」
-        // 分组，能处理锚点本身没有后缀（系列第一部）的场景，并杜绝
-        // 「之」类同前缀衍生剧混入。提取不出（如「XX2」裸数字续集）时
-        // 回落到主干搜索结果。
+        // 同系列：hongguoSeriesEntries 按「与锚点同源 + 剥后缀后的主干
+        // 精确相等」分组，能处理锚点本身没有后缀（系列第一部）与
+        // 「第N部/第N季」混用的场景，并杜绝「之」类同前缀衍生剧混入。
+        // 提取不出时回落到主干搜索结果（同源、排除自己）。
         final entries = hongguoSeriesEntries(widget.drama, page.items);
         final series = [
           for (final entry in entries)

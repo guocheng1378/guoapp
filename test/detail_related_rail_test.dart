@@ -12,7 +12,12 @@ import 'fixtures.dart';
 
 // 简介页的「相关推荐」（2026-10-25 用户问「简介页没有推荐的剧吗」）：
 // 仓库里唯一的推荐接口 repository.recommendations(genre) 是红果专用且与本剧
-// 无关，所以这里按 catalog 分级降级取同类内容。运行需带 ALL_SOURCES=true。
+// 无关，所以这里按 catalog 分级降级取同类内容。
+//
+// 必须带 ALL_SOURCES=true 运行：fixture 锚点全是 dongpiandi 源，默认变体
+// 源集合只有 hongguo，DetailScreen 的 store.allowsSource 门控（源不可用面板）
+// 会拦掉简介页主体，整条 rail 不挂载 —— 默认变体下仅 hongguo 锚点与纯函数
+// 用例可过，dongpiandi 端到端用例必红（存量基线，非回归）。
 
 const _self = Drama(
   id: 'dongpiandi:9001',
@@ -157,9 +162,10 @@ void main() {
     expect(find.byKey(const ValueKey('related-card-dongpiandi:9003')), findsOneWidget);
     expect(find.text('同类剧乙'), findsOneWidget);
     expect(find.text('同类剧丙'), findsOneWidget);
-    // 第一条就走站点 content_kind，不是拿中文去搜索。
-    expect(repository.kindRequests, <String>['short_drama']);
-    expect(repository.queries, isEmpty);
+    // 第一条是同系列（全源统一）：无后缀锚点拿原题搜索，提取不出
+    // 系列兄弟时回落到同源搜索结果（排除自己与别的站的剧）。
+    expect(repository.queries, <String>['合成短剧甲']);
+    expect(repository.kindRequests, <String>['']);
   });
 
   testWidgets('点推荐卡推它自己的简介页', (tester) async {
@@ -189,12 +195,14 @@ void main() {
   testWidgets('站点 kind 拉不到时降级到关键词', (tester) async {
     final repository = await pumpDetail(
       tester,
-      RailRepository(_neighbours, failing: <String>{'short_drama'}),
+      // 同系列查询也一并置失败，让链条走到 kind → 分类关键词。
+      RailRepository(_neighbours, failing: <String>{'合成短剧甲', 'short_drama'}),
     );
 
     expect(find.text('同类剧乙'), findsOneWidget);
-    expect(repository.kindRequests, <String>['short_drama', '']);
-    expect(repository.queries, <String>['短剧']);
+    // 同系列与 kind 都失败后，落回分类关键词。
+    expect(repository.kindRequests, <String>['', 'short_drama', '']);
+    expect(repository.queries, <String>['合成短剧甲', '短剧']);
   });
 
   testWidgets('卡片把对应的剧回传给调用方', (tester) async {
@@ -223,9 +231,10 @@ void main() {
   });
 
   testWidgets('首轮候选全空时兜底重试一次再显示', (tester) async {
-    // 四级候选（kind / 分类 / 两个标签）四次请求全空，第五次是 800ms 后的
-    // 兜底重试 —— 真机上被并发读取排队或 cancelCatalog 掐掉时就是这条路径。
-    await pumpDetail(tester, RailRepository(_neighbours, emptyRounds: 4));
+    // 六级候选（同系列 / kind / 分类 / 两个标签 / 「全部」）六次请求全空，
+    // 第七次是 800ms 后的兜底重试 —— 真机上被并发读取排队或
+    // cancelCatalog 掐掉时就是这条路径。
+    await pumpDetail(tester, RailRepository(_neighbours, emptyRounds: 6));
 
     expect(find.byKey(const ValueKey('related-card-dongpiandi:9002')), findsOneWidget);
     expect(find.text('相关推荐'), findsOneWidget);
@@ -235,8 +244,8 @@ void main() {
     final repository = await pumpDetail(tester, RailRepository(const <Drama>[]));
 
     expect(find.text('相关推荐'), findsNothing);
-    // 四级候选全试过：kind / 分类 / 两个标签（「全部」兜底也在这条链上）。
-    expect(repository.requests.length, greaterThanOrEqualTo(4));
+    // 六级候选全试过：同系列 / kind / 分类 / 两个标签（「全部」兜底也在这条链上）。
+    expect(repository.requests.length, greaterThanOrEqualTo(6));
     expect(find.byType(RelatedDramaRail), findsOneWidget);
   });
 
@@ -259,10 +268,11 @@ void main() {
     expect(repository.kindRequests.contains('short_drama'), isFalse);
   });
 
-  testWidgets('同主演：首个主演当搜索词，排在分类链之前', (tester) async {
+  testWidgets('同主演：同系列查询失败后首个主演顶上，仍排在分类链之前', (tester) async {
     final repository = await pumpDetail(
       tester,
-      RailRepository(_neighbours),
+      // 同系列（原题搜索）置失败，验证主演尝试接棒。
+      RailRepository(_neighbours, failing: <String>{'合成短剧甲'}),
       self: const Drama(
         id: 'dongpiandi:9001',
         source: 'dongpiandi',
@@ -274,11 +284,11 @@ void main() {
     );
 
     expect(find.byKey(const ValueKey('related-card-dongpiandi:9002')), findsOneWidget);
-    expect(repository.queries, <String>['陆之屿']);
+    expect(repository.queries, <String>['合成短剧甲', '陆之屿']);
     expect(repository.kindRequests.contains('short_drama'), isFalse);
   });
 
-  test('红果源同系列：锚点无后缀（系列第一部）也发起，交给精确提取', () {
+  test('同系列（全源）：锚点无后缀（系列第一部）也发起，交给精确提取', () {
     final attempts = relatedAttemptsFor(
       const Drama(
         id: 'hongguo:3001',
@@ -294,7 +304,7 @@ void main() {
     expect(attempts.first.query, '长公主驾到');
   });
 
-  test('非红果源锚点无后缀时维持现状：不发起同系列尝试', () {
+  test('非红果源锚点无后缀（系列第一部）同样发起同系列尝试', () {
     final attempts = relatedAttemptsFor(
       const Drama(
         id: 'yingshi:1',
@@ -304,7 +314,9 @@ void main() {
         category: '短剧',
       ),
     );
-    expect(attempts.map((a) => a.label), isNot(contains('同系列')));
+    expect(attempts.first.label, '同系列');
+    expect(attempts.first.seriesExtract, isTrue);
+    expect(attempts.first.query, '神医高手');
   });
 
   testWidgets('红果同系列：从主干搜索结果里精确挑出系列兄弟（锚点无后缀）', (tester) async {
@@ -312,14 +324,14 @@ void main() {
       tester,
       RailRepository(const <Drama>[
         _self,
-        const Drama(
+        Drama(
           id: 'hongguo:3002',
           source: 'hongguo',
           title: '长公主驾到 第二部',
           episodes: 88,
           category: '短剧',
         ),
-        const Drama(
+        Drama(
           id: 'hongguo:3003',
           source: 'hongguo',
           title: '长公主驾到 第三季',
@@ -327,14 +339,14 @@ void main() {
           category: '短剧',
         ),
         // 同前缀衍生剧：主干相同但不是同一系列，不能混进「同系列」。
-        const Drama(
+        Drama(
           id: 'hongguo:3004',
           source: 'hongguo',
           title: '长公主驾到之凤临天下',
           episodes: 70,
           category: '短剧',
         ),
-        const Drama(
+        Drama(
           id: 'hongguo:3005',
           source: 'hongguo',
           title: '完全无关剧',
@@ -358,12 +370,64 @@ void main() {
     expect(repository.queries, <String>['长公主驾到']);
   });
 
+  testWidgets('非红果同系列：混用部/季都保留，别的源同名剧与衍生剧排除', (tester) async {
+    final repository = await pumpDetail(
+      tester,
+      RailRepository(const <Drama>[
+        _self,
+        Drama(
+          id: 'dongpiandi:5002',
+          source: 'dongpiandi',
+          title: '长公主驾到 第二部',
+          episodes: 88,
+          category: '短剧',
+        ),
+        Drama(
+          id: 'dongpiandi:5003',
+          source: 'dongpiandi',
+          title: '长公主驾到 第三季',
+          episodes: 96,
+          category: '短剧',
+        ),
+        // 别的源的同名系列：不是同一系列，不能混进条。
+        Drama(
+          id: 'hongguo:5004',
+          source: 'hongguo',
+          title: '长公主驾到 第四部',
+          episodes: 70,
+          category: '短剧',
+        ),
+        // 同前缀衍生剧：主干相同但不是同一系列。
+        Drama(
+          id: 'dongpiandi:5005',
+          source: 'dongpiandi',
+          title: '长公主驾到之凤临天下',
+          episodes: 70,
+          category: '短剧',
+        ),
+      ]),
+      self: const Drama(
+        id: 'dongpiandi:5001',
+        source: 'dongpiandi',
+        title: '长公主驾到',
+        episodes: 80,
+        category: '短剧',
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('related-card-dongpiandi:5002')), findsOneWidget);
+    expect(find.byKey(const ValueKey('related-card-dongpiandi:5003')), findsOneWidget);
+    expect(find.byKey(const ValueKey('related-card-hongguo:5004')), findsNothing);
+    expect(find.byKey(const ValueKey('related-card-dongpiandi:5005')), findsNothing);
+    expect(repository.queries, <String>['长公主驾到']);
+  });
+
   testWidgets('红果同系列：提取不出精确系列时回落主干搜索结果（裸数字续集）', (tester) async {
     await pumpDetail(
       tester,
       RailRepository(const <Drama>[
         _self,
-        const Drama(
+        Drama(
           id: 'hongguo:4002',
           source: 'hongguo',
           title: '神医高手2',
@@ -389,7 +453,7 @@ void main() {
       tester,
       RailRepository(const <Drama>[
         _self,
-        const Drama(
+        Drama(
           id: 'hongguo:3002',
           source: 'hongguo',
           title: '长公主驾到 第二部',
