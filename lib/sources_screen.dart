@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
+import 'custom_sources.dart';
+import 'error_text.dart';
 import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
@@ -245,6 +247,117 @@ class _SourcesScreenState extends State<SourcesScreen> {
     }
   }
 
+  /// 弹出添加自定义站源表单；成功后注册进站源菜单并全量下发 Go 核心。
+  Future<void> _showAddCustomDialog() async {
+    final nameController = TextEditingController();
+    final urlController = TextEditingController();
+    final typeIdController = TextEditingController();
+    var category = 'shortDrama';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => GlassDialogShell(
+          child: AlertDialog(
+            title: const Text('添加自定义站源'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const ValueKey('custom-source-name'),
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: '站源名称',
+                    hintText: '例如：我的影视站',
+                  ),
+                ),
+                TextField(
+                  key: const ValueKey('custom-source-url'),
+                  controller: urlController,
+                  decoration: const InputDecoration(
+                    labelText: '接口地址（http/https）',
+                    hintText: 'https://example.com/api.php/provide/vod',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SegmentedButton<String>(
+                  segments: [
+                    for (final item in CustomSourceSpec.categories)
+                      ButtonSegment(
+                        value: item,
+                        label: Text(CustomSourceSpec.categoryLabel(item)),
+                      ),
+                  ],
+                  selected: {category},
+                  onSelectionChanged: (value) =>
+                      setDialogState(() => category = value.first),
+                ),
+                TextField(
+                  key: const ValueKey('custom-source-type-id'),
+                  controller: typeIdController,
+                  decoration: const InputDecoration(
+                    labelText: '分类 ID（可选，源站 type_id）',
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                key: const ValueKey('custom-source-submit'),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('添加'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final name = nameController.text;
+    final url = urlController.text;
+    final typeId = typeIdController.text;
+    nameController.dispose();
+    urlController.dispose();
+    typeIdController.dispose();
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.store.addCustomSource(
+        name: name,
+        url: url,
+        category: category,
+        typeId: typeId,
+      );
+    } catch (error) {
+      _showMessage(friendlyError(error));
+      return;
+    }
+    // store 已注册进 SourceSite（站源菜单即时可见），这里全量下发 Go 核心。
+    await widget.repository.setCustomSources(widget.store.customSources);
+    _showMessage('自定义站源已添加');
+  }
+
+  /// 删除自定义站源：本地落盘 + 全量下发 Go 核心 + 清理本页轮询状态。
+  Future<void> _removeCustom(SourceSite source) async {
+    try {
+      await widget.store.removeCustomSource(source.id);
+    } catch (error) {
+      _showMessage(friendlyError(error));
+      return;
+    }
+    await widget.repository.setCustomSources(widget.store.customSources);
+    if (mounted) {
+      setState(() {
+        _statuses.remove(source.id);
+        _errors.remove(source.id);
+        _revisions.remove(source.id);
+      });
+    }
+    _showMessage('已删除自定义站源');
+  }
+
   Future<void> _copy(SourceSite source, SourceStatus status) async {
     final text = StringBuffer('${source.name}\n');
     text.writeln(
@@ -299,6 +412,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
           flexibleSpace: const TopFog(),
           title: const Text('站源管理'),
           actions: [
+            if (widget.store.profile.admin)
+              IconButton(
+                key: const ValueKey('sources-add-custom'),
+                tooltip: '添加自定义站源',
+                onPressed: _showAddCustomDialog,
+                icon: AppIcon(AppIcons.add),
+              ),
             if (widget.store.profile.admin && sources.isNotEmpty) ...[
               IconButton(
                 key: const ValueKey('sources-enable-all'),
@@ -511,6 +631,14 @@ class _SourcesScreenState extends State<SourcesScreen> {
           ),
         ),
         if (switchedOn) Text('${status?.count ?? 0} 部'),
+        // 自定义站源专属：删除入口（设备级配置，管理员即可，无需密码）。
+        if (admin && source.id.startsWith('custom-'))
+          IconButton(
+            key: ValueKey('delete-${source.id}'),
+            tooltip: '删除自定义站源',
+            onPressed: () => _removeCustom(source),
+            icon: AppIcon(AppIcons.delete),
+          ),
         const SizedBox(width: 8),
         Switch(
           key: ValueKey('switch-${source.id}'),

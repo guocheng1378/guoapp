@@ -186,3 +186,28 @@ func Available(source string) bool {
 	}
 	return !p.Spec().RequiresAllSources || activeConfig.AllSources
 }
+
+// CustomIDPrefix 是用户自定义站源的 ID 前缀。自定义源经 config.source
+// 的 customSources 段动态注册（maccms 点播源），卸载/清空走 UnregisterCustom，
+// 该函数只允许移除带此前缀的 ID，防止误卸内置 provider。
+const CustomIDPrefix = "custom-"
+
+func IsCustomSourceID(id string) bool {
+	return strings.HasPrefix(strings.TrimSpace(id), CustomIDPrefix)
+}
+
+// UnregisterCustom 移除一个动态注册的自定义站源。只接受 custom- 前缀的
+// ID（内置源一律拒绝），返回是否确有移除。已不存在的 ID 幂等返回 false。
+func UnregisterCustom(id string) bool {
+	if !IsCustomSourceID(id) {
+		return false
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, found := registry[id]; !found {
+		return false
+	}
+	delete(registry, id)
+	delete(implemented, id)
+	return true
+}

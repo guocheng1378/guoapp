@@ -70,6 +70,7 @@ class LocalSnapshot {
     'dongpiandiOfficialOnly',
     'sourceSwitches',
     'liveSources',
+    'customSources',
   };
   final SharedPreferences preferences;
   final SnapshotFiles files;

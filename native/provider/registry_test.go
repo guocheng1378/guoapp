@@ -53,12 +53,16 @@ func TestForHostResolvesExactAndSuffixRules(t *testing.T) {
 }
 
 func TestEveryRegisteredSourceOwnsIdentity(t *testing.T) {
-	if got := len(All()); got != len(sourceEntries) {
-		t.Fatalf("registry holds %d providers, want %d", got, len(sourceEntries))
-	}
+	// 动态注册的自定义源（custom- 前缀，core 包经 config.source 注册）不参与
+	// 静态断言：数量与身份校验只针对内置 sourceEntries。
+	builtin := 0
 	seen := map[string]bool{}
 	for _, p := range All() {
 		spec := p.Spec()
+		if IsCustomSourceID(spec.ID) {
+			continue
+		}
+		builtin++
 		if spec.ID == "" || seen[spec.ID] {
 			t.Fatalf("duplicate or empty source id %q", spec.ID)
 		}
@@ -75,6 +79,9 @@ func TestEveryRegisteredSourceOwnsIdentity(t *testing.T) {
 		if spec.Family != FamilyDuanju && spec.Family != FamilyHuangguo {
 			t.Fatalf("source %q has no family", spec.ID)
 		}
+	}
+	if builtin != len(sourceEntries) {
+		t.Fatalf("registry holds %d builtin providers, want %d", builtin, len(sourceEntries))
 	}
 }
 

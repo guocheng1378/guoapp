@@ -172,6 +172,8 @@ class _AppBootstrapState extends State<AppBootstrap>
               store!.dongpiandiOfficialOnly,
             ),
           );
+          // 本机自定义站源（设备级）启动时全量下发 Go 核心。
+          unawaited(repository.setCustomSources(store!.customSources));
           MediaLibrary.attach(repository, store!);
           LanController.current?.dispose();
           final link = LanController(

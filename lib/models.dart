@@ -9,11 +9,15 @@ enum SourceCategory {
 }
 
 class SourceSite {
-  const SourceSite(this.id, this.name, this.description);
+  const SourceSite(this.id, this.name, this.description, {this.categoryOverride});
   final String id;
   final String name;
   final String description;
-  SourceCategory get category => _categories[id] ?? SourceCategory.shortDrama;
+
+  /// 自定义站源（`custom-<hash>`）的运行时分类覆盖；官方源恒为 null。
+  final SourceCategory? categoryOverride;
+  SourceCategory get category =>
+      categoryOverride ?? _categories[id] ?? SourceCategory.shortDrama;
   bool get isShortDrama => category == SourceCategory.shortDrama;
   bool get isVideoSource => category == SourceCategory.video;
   bool get isAdultSource => category == SourceCategory.adult;
@@ -141,7 +145,11 @@ class SourceSite {
     ...engineValues,
     ...adultValues,
   ];
-  static const allValues = [
+  static List<SourceSite> get allValues => [
+    ..._officialAllValues,
+    ..._customSites,
+  ];
+  static const _officialAllValues = [
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '剧果', '热门 · 最新 · 分类短剧'),
@@ -154,7 +162,23 @@ class SourceSite {
     ...engineValues,
     ...adultValues,
   ];
-  static const values = allSourcesEnabled ? knownValues : [hongguo];
+  static List<SourceSite> get values => [
+    ...allSourcesEnabled ? knownValues : const [hongguo],
+    ..._customSites,
+  ];
+
+  /// 本机注册的自定义站源（`custom-<hash>`），由 LocalStore 全量同步
+  /// （启动加载 + 每次增删后）。并入 [values]/[allValues] 后，
+  /// isAvailable/isKnown/byId、站源菜单、管理页、用户档案授权等
+  /// 所有消费方自动感知，无需逐点改造。
+  static final List<SourceSite> _customSites = <SourceSite>[];
+  static List<SourceSite> get customSites => List.unmodifiable(_customSites);
+  static void registerCustomSites(Iterable<SourceSite> sites) {
+    _customSites
+      ..clear()
+      ..addAll(sites);
+  }
+
   static bool isAvailable(String id) => values.any((site) => site.id == id);
   static bool isKnown(String id) => allValues.any((site) => site.id == id);
   /// 榜单专用源：不注册 provider、不进站源菜单（values/isAvailable 口径
@@ -168,8 +192,13 @@ class SourceSite {
   static bool authorized(String id) => isRankingOnly(id) || isAvailable(id);
   // 受限站源 = 黄果类成员（黄果系入口 + 黄豆/野果/剧果）与成人类源，
   // 默认关闭，开启需管理员密码；其余分类的站源一律默认开放。
+  // 自定义站源按用户选择的分类跟随：分类为成人类时同样受限。
   static bool isRestricted(String id) =>
-      huangguoCategoryIds.contains(id) || adultCategoryIds.contains(id);
+      huangguoCategoryIds.contains(id) ||
+      adultCategoryIds.contains(id) ||
+      _customSites.any(
+        (site) => site.id == id && site.category == SourceCategory.adult,
+      );
 
   /// 需登录站源：站点侧加了账号墙——登录 + 滑块验证码才能播放、无试看，
   /// App 无账号体系，播放必然失败（2026-10-30 真网取证：青空 play 接口

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'custom_sources.dart';
 import 'local_profiles.dart';
 import 'local_snapshot.dart';
 import 'local_snapshot_files.dart';
@@ -45,6 +46,7 @@ class LocalStore extends ChangeNotifier {
   final Map<String, Drama> _seriesCandidates = {};
   final Map<String, bool> _sourceSwitches = {};
   final List<String> _liveSources = [];
+  final List<CustomSourceSpec> _customSources = [];
   Future<void> _writes = Future<void>.value();
   List<LocalProfile> _profiles = [];
   String _current = 'default';
@@ -74,6 +76,7 @@ class LocalStore extends ChangeNotifier {
       // 重启后用户显式设置的开/关状态会全部回落到默认值。
       _loadSourceSwitches();
       _loadLiveSources();
+      _loadCustomSources();
       final raw = _snapshot!.getString('profiles');
       if (raw == null &&
           (_snapshot!.getString('activeProfile') != null ||
@@ -224,6 +227,103 @@ class LocalStore extends ChangeNotifier {
       _liveSources
         ..clear()
         ..addAll(clean);
+      _notify();
+    });
+  }
+
+  void _loadCustomSources() {
+    try {
+      final raw = _string('customSources');
+      if (raw != null) {
+        final decoded = jsonDecode(raw) as List;
+        final specs = <CustomSourceSpec>[];
+        for (final row in decoded) {
+          final spec = CustomSourceSpec.fromJson(row);
+          if (spec != null) specs.add(spec);
+        }
+        _customSources
+          ..clear()
+          ..addAll(specs);
+      }
+    } catch (_) {
+      _customSources.clear();
+    }
+    _syncCustomSites();
+  }
+
+  void _syncCustomSites() {
+    SourceSite.registerCustomSites([
+      for (final source in _customSources) source.toSourceSite(),
+    ]);
+  }
+
+  /// 自定义站源列表（设备级，上限 16，管理员维护）。
+  List<CustomSourceSpec> get customSources => List.unmodifiable(_customSources);
+
+  /// 新增自定义站源：本地校验（与 Go 端同规则）→ 管理员门控 → 提交落盘 →
+  /// 注册进 SourceSite（站源菜单/管理页即时可见）。调用方随后应调用
+  /// repository.setCustomSources 全量下发 Go 核心。
+  Future<void> addCustomSource({
+    required String name,
+    required String url,
+    String category = 'shortDrama',
+    String typeId = '',
+  }) {
+    final error = CustomSourceSpec.validate(
+      name: name,
+      url: url,
+      category: category,
+      typeId: typeId,
+    );
+    if (error != null) {
+      return Future.error(StateError(error));
+    }
+    final cleanName = name.trim();
+    final cleanUrl = url.trim();
+    if (_customSources.any((source) => source.url == cleanUrl)) {
+      return Future.error(StateError('该站源地址已添加'));
+    }
+    if (_customSources.length >= CustomSourceSpec.maxSources) {
+      return Future.error(
+        StateError('自定义站源最多 ${CustomSourceSpec.maxSources} 个'),
+      );
+    }
+    final next = [
+      ..._customSources,
+      CustomSourceSpec(
+        id: CustomSourceSpec.idFor(cleanUrl),
+        name: cleanName,
+        url: cleanUrl,
+        category: category,
+        typeId: typeId.trim(),
+      ),
+    ];
+    return _commitCustomSources(next);
+  }
+
+  /// 删除自定义站源（未找到时静默成功，保持幂等）。
+  Future<void> removeCustomSource(String id) {
+    final next = [
+      for (final source in _customSources)
+        if (source.id != id) source,
+    ];
+    return _commitCustomSources(next);
+  }
+
+  Future<void> _commitCustomSources(List<CustomSourceSpec> next) {
+    final epoch = _epoch;
+    return _queue(() async {
+      _requireAdmin();
+      if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
+      await _commit({
+        'customSources': jsonEncode([
+          for (final source in next) source.toJson(),
+        ]),
+      });
+      _customSources
+        ..clear()
+        ..addAll(next);
+      _syncCustomSites();
       _notify();
     });
   }

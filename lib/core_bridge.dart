@@ -9,6 +9,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
+import 'custom_sources.dart';
 import 'danmaku_models.dart';
 import 'search_suggestion.dart';
 import 'background_downloads.dart';
@@ -455,6 +456,9 @@ abstract class AppRepository {
   /// 真果·鉴「仅官方线路」策略下发（见 LocalStore.dongpiandiOfficialOnly）。
   Future<void> setDongpiandiOfficialOnly(bool value) async {}
 
+  /// 全量下发本机自定义站源到 Go 核心（config.source 的 customSources 段）。
+  Future<void> setCustomSources(List<CustomSourceSpec> sources) async {}
+
   Future<SourceStatus> sourceStatus(String source) async =>
       SourceStatus.fromJson({'source': source});
   Future<SourceStatus> startSourceJob(
@@ -861,6 +865,13 @@ class NativeRepository extends AppRepository {
   @override
   Future<void> setDongpiandiOfficialOnly(bool value) async {
     await _call({'action': 'dongpiandi.officialOnly', 'officialOnly': value});
+  }
+
+  @override
+  Future<void> setCustomSources(List<CustomSourceSpec> sources) async {
+    await applyNativeSourceConfig({
+      'customSources': [for (final source in sources) source.toPayload()],
+    });
   }
 
   @override
