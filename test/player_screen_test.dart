@@ -1,3 +1,4 @@
+import 'package:duanju_app/app_icons.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/playback_preferences.dart';
@@ -298,7 +299,7 @@ void main() {
     }
   });
 
-  testWidgets('控制层分成上下两条栏：进度在上、按钮行在下、状态钮贴右', (
+  testWidgets('半屏控制层合并单行：进度条与两颗全屏键同行、状态钮贴右', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -343,8 +344,10 @@ void main() {
       expect(display.center.dy, closeTo(quality.center.dy, 14));
       expect(pip.right, greaterThan(330));
 
-      // 进度条在按钮行上方（本次改版的核心版式诉求）。
-      expect(progress.bottom, lessThanOrEqualTo(toggle.top + 1));
+      // 半屏单行（本次改版定调：单行更矮更干净，两栏版式只保留在全屏态）：
+      // 进度条与两颗全屏键合并成一条 44 高的行，垂直居中对齐。
+      expect(progress.center.dy, closeTo(toggle.center.dy, 10));
+      expect(progress.bottom, greaterThanOrEqualTo(toggle.top));
 
       // 两颗全屏键并排贴右下：竖屏全屏 ⇄ 横屏全屏（相邻，不留空隙）。
       expect(landscapeToggle.left, greaterThanOrEqualTo(toggle.right));
@@ -448,16 +451,27 @@ void main() {
     await mount(tester, repository, player);
     await tester.tap(find.byKey(const ValueKey('player-quality')));
     await tester.pumpAndSettle();
-    // 菜单标题与段标题都叫「清晰度」，命中两处属正常。
+    // 移动端面板已是侧栏形态（showPlayerSidePanel + SideChoiceList）：
+    // 面板标题「清晰度」+ 每档一行（side-quality-*）。
     expect(find.text('清晰度'), findsWidgets);
-    expect(find.byKey(const ValueKey('menu-quality-1080')), findsOneWidget);
-    expect(find.byKey(const ValueKey('menu-quality-720')), findsOneWidget);
-    // 没存过画质偏好时，高亮的是本集实际播放的档（fixture 实际 1080P），
-    // 而不是整排胶囊全是未选中态。
-    final current = tester.widget<ChoiceChip>(
-      find.byKey(const ValueKey('menu-quality-1080')),
+    expect(find.byKey(const ValueKey('side-quality-1080')), findsOneWidget);
+    expect(find.byKey(const ValueKey('side-quality-720')), findsOneWidget);
+    // 没存过画质偏好时，勾选落在本集实际播放的档（fixture 实际 1080P），
+    // 而不是整排全未选中：选中行带 check 图标，未选行没有。
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('side-quality-1080')),
+        matching: find.byType(AppIcon),
+      ),
+      findsOneWidget,
     );
-    expect(current.selected, isTrue);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('side-quality-720')),
+        matching: find.byType(AppIcon),
+      ),
+      findsNothing,
+    );
     // 面板里同样不存在「自动」档。
     expect(find.text('自动'), findsNothing);
     await tester.tap(find.byTooltip('关闭菜单'));
