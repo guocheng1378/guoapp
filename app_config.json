@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "version": "0.2.96",
-    "build": 2250,
-    "notes": "本次更新（v0.2.96+2250）：\n· 新增 Android 7.0/7.1 设备支持（此前要求 8.0+）\n· 应用图标适配旧系统，各分辨率清晰显示\n· 包含 2249 版半屏简介选集合并、官方线路修复等全部改进",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2250/zhenguojian-0.2.96+2250-arm64-v8a.apk"
+    "build": 2251,
+    "version": "v0.2.96-2251",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2251/zhenguojian-0.2.96+2251-arm64-v8a.apk",
+    "notes": "真果·鉴新增社区跳过片头片尾：其他源同名剧集自动借用社区标定，整剧生效\n修复真果·鉴官方线路偶发缺失、有时选源入口不出现、不默认进官方源的问题\n官方线路按剧集全量兑换，线路列表缓存加速二次起播"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
