@@ -11,9 +11,9 @@
   "update": {
     "enabled": true,
     "version": "0.2.96",
-    "build": 2249,
-    "notes": "本次更新（v0.2.96+2249）：\n· 播放页半屏模式：简介与选集合并为一页，切集更顺手\n· 真果·鉴官方线路修复：线路更全、起播更稳\n· 下载增强：新增下载汇总与自定义下载目录\n· 新增云备份与自定义站源\n· 多项性能与稳定性优化",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2249/zhenguojian-0.2.96+2249-arm64-v8a.apk"
+    "build": 2250,
+    "notes": "本次更新（v0.2.96+2250）：\n· 新增 Android 7.0/7.1 设备支持（此前要求 8.0+）\n· 应用图标适配旧系统，各分辨率清晰显示\n· 包含 2249 版半屏简介选集合并、官方线路修复等全部改进",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2250/zhenguojian-0.2.96+2250-arm64-v8a.apk"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
