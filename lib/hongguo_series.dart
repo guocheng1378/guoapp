@@ -155,15 +155,19 @@ List<HongguoSeriesEntry> hongguoSeriesEntries(
     anchorSeason = anchorInfo.season;
   }
   if (anchorInfo == null) return const [];
+  // 收集阶段只认「剥后缀后的主干精确相等」，不按 unit 过滤：站点系列
+  // 混用「第N部/第N季」是常态（长公主驾到 第二部 + 第三季），按单位
+  // 收会把一半兄弟滤光；「之」类衍生剧没有后缀、key 是全名，靠精确
+  // 相等天然排除。unit 只作无后缀条目（系列第一部语义）的占位。
   final byId = <String, HongguoSeriesEntry>{};
   for (final drama in [anchor, ...candidates]) {
     if (drama.source != SourceSite.hongguo.id) continue;
     final info = hongguoSeriesInfo(drama, unit: unit);
-    if (info == null || info.key != key || info.unit != unit) continue;
+    if (info == null || info.key != key) continue;
     byId[drama.id] = HongguoSeriesEntry(
       drama: drama,
       season: drama.id == anchor.id ? anchorSeason : info.season,
-      unit: unit,
+      unit: info.explicit ? info.unit : unit,
     );
   }
   final entries = byId.values.toList()

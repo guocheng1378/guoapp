@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'hongguo_series.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'related_catalog_screen.dart';
@@ -8,10 +9,19 @@ import 'widgets.dart';
 
 /// 一次候选查询：拿到内容就停，拿不到就降级到下一级。
 class RelatedAttempt {
-  const RelatedAttempt(this.label, {this.query = '', this.category = ''});
+  const RelatedAttempt(
+    this.label, {
+    this.query = '',
+    this.category = '',
+    this.seriesExtract = false,
+  });
   final String label;
   final String query;
   final String category;
+
+  /// 红果源同系列：结果先经 [hongguoSeriesEntries] 精确提取（含锚点是
+  /// 系列第一部、自身无「第N部/季」后缀的场景），提取不出再回落主干搜索。
+  final bool seriesExtract;
 }
 
 /// 剧名主干：剥掉尾部的系列后缀（「第N部/第N季/番外/1~2位续集数字」），
@@ -38,7 +48,14 @@ String seriesBaseTitle(String title) {
 List<RelatedAttempt> relatedAttemptsFor(Drama drama) {
   final attempts = <RelatedAttempt>[];
   final base = seriesBaseTitle(drama.title);
-  if (base.isNotEmpty && base != drama.title.trim()) {
+  if (drama.source == SourceSite.hongguo.id) {
+    // 红果源：同系列尝试总是发起。锚点是系列第一部时标题没有「第N部/季」
+    // 后缀，seriesBaseTitle 会原样返回标题 —— 正好用原题主干搜索，再由
+    // hongguoSeriesEntries 从结果里精确挑出系列兄弟（提取逻辑见 _fetch）。
+    if (base.isNotEmpty) {
+      attempts.add(RelatedAttempt('同系列', query: base, seriesExtract: true));
+    }
+  } else if (base.isNotEmpty && base != drama.title.trim()) {
     attempts.add(RelatedAttempt('同系列', query: base));
   }
   String actor = '';
@@ -178,6 +195,18 @@ class _RelatedDramaRailState extends State<RelatedDramaRail> {
         query: attempt.query,
         category: attempt.category,
       );
+      if (attempt.seriesExtract) {
+        // 红果同系列：hongguoSeriesEntries 按「剥后缀后的主干精确相等」
+        // 分组，能处理锚点本身没有后缀（系列第一部）的场景，并杜绝
+        // 「之」类同前缀衍生剧混入。提取不出（如「XX2」裸数字续集）时
+        // 回落到主干搜索结果。
+        final entries = hongguoSeriesEntries(widget.drama, page.items);
+        final series = [
+          for (final entry in entries)
+            if (entry.drama.id != widget.drama.id) entry.drama,
+        ];
+        if (series.isNotEmpty) return series;
+      }
       return page.items
           .where(
             (item) =>
@@ -216,6 +245,7 @@ class _RelatedDramaRailState extends State<RelatedDramaRail> {
                 store: widget.store,
                 drama: widget.drama,
                 label: _hit.label,
+                query: _hit.query,
               ),
               child: const Text('查看全部'),
             ),

@@ -277,4 +277,147 @@ void main() {
     expect(repository.queries, <String>['陆之屿']);
     expect(repository.kindRequests.contains('short_drama'), isFalse);
   });
+
+  test('红果源同系列：锚点无后缀（系列第一部）也发起，交给精确提取', () {
+    final attempts = relatedAttemptsFor(
+      const Drama(
+        id: 'hongguo:3001',
+        source: 'hongguo',
+        title: '长公主驾到',
+        episodes: 80,
+        category: '短剧',
+      ),
+    );
+    expect(attempts.first.label, '同系列');
+    expect(attempts.first.seriesExtract, isTrue);
+    // 无后缀锚点用原题当主干搜索词。
+    expect(attempts.first.query, '长公主驾到');
+  });
+
+  test('非红果源锚点无后缀时维持现状：不发起同系列尝试', () {
+    final attempts = relatedAttemptsFor(
+      const Drama(
+        id: 'yingshi:1',
+        source: 'yingshi',
+        title: '神医高手',
+        episodes: 40,
+        category: '短剧',
+      ),
+    );
+    expect(attempts.map((a) => a.label), isNot(contains('同系列')));
+  });
+
+  testWidgets('红果同系列：从主干搜索结果里精确挑出系列兄弟（锚点无后缀）', (tester) async {
+    final repository = await pumpDetail(
+      tester,
+      RailRepository(const <Drama>[
+        _self,
+        const Drama(
+          id: 'hongguo:3002',
+          source: 'hongguo',
+          title: '长公主驾到 第二部',
+          episodes: 88,
+          category: '短剧',
+        ),
+        const Drama(
+          id: 'hongguo:3003',
+          source: 'hongguo',
+          title: '长公主驾到 第三季',
+          episodes: 96,
+          category: '短剧',
+        ),
+        // 同前缀衍生剧：主干相同但不是同一系列，不能混进「同系列」。
+        const Drama(
+          id: 'hongguo:3004',
+          source: 'hongguo',
+          title: '长公主驾到之凤临天下',
+          episodes: 70,
+          category: '短剧',
+        ),
+        const Drama(
+          id: 'hongguo:3005',
+          source: 'hongguo',
+          title: '完全无关剧',
+          episodes: 20,
+          category: '短剧',
+        ),
+      ]),
+      self: const Drama(
+        id: 'hongguo:3001',
+        source: 'hongguo',
+        title: '长公主驾到',
+        episodes: 80,
+        category: '短剧',
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('related-card-hongguo:3002')), findsOneWidget);
+    expect(find.byKey(const ValueKey('related-card-hongguo:3003')), findsOneWidget);
+    expect(find.byKey(const ValueKey('related-card-hongguo:3004')), findsNothing);
+    expect(find.byKey(const ValueKey('related-card-hongguo:3005')), findsNothing);
+    expect(repository.queries, <String>['长公主驾到']);
+  });
+
+  testWidgets('红果同系列：提取不出精确系列时回落主干搜索结果（裸数字续集）', (tester) async {
+    await pumpDetail(
+      tester,
+      RailRepository(const <Drama>[
+        _self,
+        const Drama(
+          id: 'hongguo:4002',
+          source: 'hongguo',
+          title: '神医高手2',
+          episodes: 60,
+          category: '短剧',
+        ),
+      ]),
+      self: const Drama(
+        id: 'hongguo:4001',
+        source: 'hongguo',
+        title: '神医高手',
+        episodes: 55,
+        category: '短剧',
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('related-card-hongguo:4002')), findsOneWidget);
+  });
+
+  testWidgets('红果同系列「查看全部」沿用主干搜索词', (tester) async {
+    final spy = _NavSpy();
+    final repository = await pumpDetail(
+      tester,
+      RailRepository(const <Drama>[
+        _self,
+        const Drama(
+          id: 'hongguo:3002',
+          source: 'hongguo',
+          title: '长公主驾到 第二部',
+          episodes: 88,
+          category: '短剧',
+        ),
+      ]),
+      spy: spy,
+      self: const Drama(
+        id: 'hongguo:3001',
+        source: 'hongguo',
+        title: '长公主驾到',
+        episodes: 80,
+        category: '短剧',
+      ),
+    );
+
+    final more = find.text('查看全部');
+    expect(more, findsOneWidget);
+    await tester.ensureVisible(more);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(more);
+    await frames(tester);
+
+    // rail 搜一次主干，落地页再用同一主干查一遍（而不是拿「同系列」
+    // 三个字当搜索词）。
+    expect(repository.queries, <String>['长公主驾到', '长公主驾到']);
+    expect(spy.pushed, isNotEmpty);
+    expect(find.text('长公主驾到 第二部'), findsOneWidget);
+  });
 }

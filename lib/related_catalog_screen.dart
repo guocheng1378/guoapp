@@ -25,12 +25,15 @@ String kindIdForCategory(String source, String category) {
 /// 打开「某部剧的分类/标签」相关结果页。
 ///
 /// 详情页（detail_screen）与播放器简介 tab（player_screen）共用同一套跳转。
+/// [query] 由「相关推荐」rail 传入命中级别的真实查询词（同系列主干/
+/// 主演/标签），不传时按 label 反查 kind，kind 拿不到再用 label 搜索。
 Future<void> openRelatedCatalog(
   BuildContext context, {
   required AppRepository repository,
   required LocalStore store,
   required Drama drama,
   required String label,
+  String query = '',
 }) async {
   final kind = kindIdForCategory(drama.source, label);
   await Navigator.of(context).push(
@@ -41,7 +44,7 @@ Future<void> openRelatedCatalog(
         source: drama.source,
         label: label,
         sourceName: SourceSite.byId(drama.source)?.name ?? '',
-        query: kind.isEmpty ? label : '',
+        query: query.isNotEmpty ? query : (kind.isEmpty ? label : ''),
         category: kind,
       ),
     ),
