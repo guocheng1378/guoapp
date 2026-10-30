@@ -106,7 +106,7 @@ void main() {
   });
 
   testWidgets('结果页里点条目进它的简介页', (tester) async {
-    final repository = await pumpDetail(tester);
+    await pumpDetail(tester);
     await tester.tap(find.text('都市'));
     await frames(tester);
     expect(find.byType(RelatedCatalogScreen), findsOneWidget);
@@ -116,5 +116,22 @@ void main() {
     await tester.tap(target.first);
     await frames(tester);
     expect(find.byType(DetailScreen), findsWidgets);
+  });
+
+  // 简介+选集合并（2026-10-30）：详情页去掉选集折叠条，选集网格紧跟
+  // 简介直出；摘要行降级为纯信息行，不再有「展开/收起」交互。
+  testWidgets('选集不折叠，紧跟简介直出', (tester) async {
+    await pumpDetail(tester);
+
+    // 摘要行 = 纯信息行（fixture detail 固定返回 2 集）。
+    expect(find.text('选集 · 2 集'), findsOneWidget);
+    expect(find.text('展开选集'), findsNothing);
+    expect(find.text('收起选集'), findsNothing);
+    expect(find.byIcon(Icons.expand_more), findsNothing);
+    expect(find.byIcon(Icons.expand_less), findsNothing);
+
+    // 选集网格直接可见（此前 >3 集要先把折叠条展开）。
+    expect(find.byKey(const ValueKey('episode-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('episode-2')), findsOneWidget);
   });
 }

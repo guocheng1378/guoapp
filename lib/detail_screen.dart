@@ -49,7 +49,6 @@ class _DetailScreenState extends State<DetailScreen> {
   int _generation = 0;
   int _episodePage = 0;
   bool _expandedDescription = false;
-  bool _episodesExpanded = false;
   final _episodeAnchor = GlobalKey();
   final _detailScroll = ScrollController();
   final _playFocus = FocusNode(debugLabel: 'tv-detail-play');
@@ -455,8 +454,6 @@ class _DetailScreenState extends State<DetailScreen> {
                       .skip(start)
                       .take(episodePageSize)
                       .toList();
-                  final showEpisodes =
-                      _episodesExpanded || episodes.length <= 3;
                   return CustomScrollView(
                     controller: _detailScroll,
                     slivers: [
@@ -477,13 +474,12 @@ class _DetailScreenState extends State<DetailScreen> {
                           child: _episodeSummary(
                             episodes,
                             currentNumber: watched?.episode,
-                            expanded: showEpisodes,
                           ),
                         ),
-                        if (showEpisodes) ...[
-                          SliverToBoxAdapter(
-                            child: EpisodeRangeBar(
-                              key: _episodeAnchor,
+                        // 简介+选集合并：选集不再折叠，紧跟简介直出。
+                        SliverToBoxAdapter(
+                          child: EpisodeRangeBar(
+                            key: _episodeAnchor,
                               episodes: episodes,
                               page: _episodePage,
                               title: '分组',
@@ -527,7 +523,6 @@ class _DetailScreenState extends State<DetailScreen> {
                               }, childCount: visible.length),
                             ),
                           ),
-                        ],
                         const SliverToBoxAdapter(
                           child: SizedBox(height: 96),
                         ),
@@ -608,7 +603,6 @@ class _DetailScreenState extends State<DetailScreen> {
   Widget _episodeSummary(
     List<Episode> episodes, {
     required int? currentNumber,
-    required bool expanded,
   }) {
     final colors = Theme.of(context).colorScheme;
     final current = currentNumber == null ? '' : ' · 当前第 $currentNumber 集';
@@ -617,32 +611,23 @@ class _DetailScreenState extends State<DetailScreen> {
       child: Material(
         color: colors.surfaceContainer,
         borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => setState(() => _episodesExpanded = !expanded),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                AppIcon(AppIcons.gridView, color: colors.onSurfaceVariant),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '选集 · ${episodes.length} 集$current',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              AppIcon(AppIcons.gridView, color: colors.onSurfaceVariant),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '选集 · ${episodes.length} 集$current',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                Text(expanded ? '收起' : '展开'),
-                const SizedBox(width: 2),
-                expanded
-                    ? AppIcon(AppIcons.expandLess)
-                    : AppIcon(AppIcons.expandMore),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

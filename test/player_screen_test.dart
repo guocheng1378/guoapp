@@ -190,9 +190,9 @@ void main() {
         find.byKey(const ValueKey('player-picture-in-picture')),
         findsOneWidget,
       );
-      // 下行工具行有一枚「选集」文字钮，下方详情面板还有一个选集 tab，
-      // 所以这里是多个而不是一个（PiP 隐藏后应全部消失，见下方断言）。
-      expect(find.text('选集'), findsWidgets);
+      // 简介+选集已合并为一个 tab（2026-10-30）：半屏不再有独立选集 tab
+      // （「选集」文字钮只在全屏加载态顶栏出现，PiP 后应消失见下方断言）。
+      expect(find.text('选集'), findsNothing);
       expect(find.text('简介'), findsOneWidget);
       expect(find.text('下载'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('player-picture-in-picture')));
@@ -539,6 +539,55 @@ void main() {
     } finally {
       debugDefaultTargetPlatformOverride = null;
       tester.view.resetPadding();
+    }
+  });
+
+  // 简介+选集合并（2026-10-30）：半屏面板从「选集/简介/下载」三 tab 收敛为
+  // 「简介（含选集）/下载」两 tab，合并页顶部是简介信息流、底部直出选集网格。
+  testWidgets('mobile pane merges synopsis and episodes into one tab', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(tester, repository, player, size: const Size(390, 844));
+
+      // tab 只剩两枚：简介（合并选集）+ 下载；半屏没有独立选集 tab。
+      expect(find.text('简介'), findsOneWidget);
+      expect(find.text('下载'), findsOneWidget);
+      expect(find.text('选集'), findsNothing);
+
+      // 合并页同页直出：简介信息流与选集网格一起渲染（网格在 ListView
+      // 底部，窄机身下先滚过去再断言；滚动宿主=mobile-combined-list）。
+      final combined = find.byKey(const ValueKey('mobile-combined-list'));
+      expect(combined, findsOneWidget);
+      await tester.dragUntilVisible(
+        find.byKey(const ValueKey('play-episode-1')),
+        combined,
+        const Offset(0, -120),
+      );
+      await settleOperations(tester);
+      expect(find.byKey(const ValueKey('play-episode-1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('play-episode-2')), findsOneWidget);
+
+      // 「下载」tab 仍可到达：切走后选集网格不再挂载；切回合并页恢复
+      // （切 tab 重建 widget、滚动位置回顶，需再滚一次网格才进视口）。
+      await tester.tap(find.text('下载'));
+      await settleOperations(tester);
+      expect(find.byKey(const ValueKey('play-episode-1')), findsNothing);
+      await tester.tap(find.text('简介'));
+      await settleOperations(tester);
+      await tester.dragUntilVisible(
+        find.byKey(const ValueKey('play-episode-1')),
+        combined,
+        const Offset(0, -120),
+      );
+      await settleOperations(tester);
+      expect(find.byKey(const ValueKey('play-episode-1')), findsOneWidget);
+      await unmount(tester, player);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
     }
   });
 }

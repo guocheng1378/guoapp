@@ -3170,9 +3170,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: _mobileTab == 0
-                      ? _episodePanel(compact: true)
-                      : _mobileTab == 1
-                      ? _mobileSynopsis()
+                      ? _mobileCombined()
                       : _mobileDownload(),
                 ),
               ),
@@ -3189,9 +3187,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       height: 42,
       child: Row(
         children: [
-          _mobileTabButton(0, '选集'),
-          _mobileTabButton(1, '简介'),
-          _mobileTabButton(2, '下载'),
+          _mobileTabButton(0, '简介'),
+          _mobileTabButton(1, '下载'),
         ],
       ),
     ),
@@ -3235,7 +3232,33 @@ class _PlayerScreenState extends State<PlayerScreen>
     label: label,
   );
 
-  Widget _mobileSynopsis() {
+  /// 合并 Tab「简介」：上部简介信息流，底部嵌入选集连续网格，一页直出。
+  Widget _mobileCombined() {
+    final colors = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: colors.surface,
+      child: ListView(
+        // 供回归测试把合并页滚到选集区（dragUntilVisible 的滚动宿主）。
+        key: const ValueKey('mobile-combined-list'),
+        padding: const EdgeInsets.all(12),
+        children: [
+          ..._mobileSynopsisChildren(),
+          const SizedBox(height: 12),
+          // 选集连续网格内部自滚动（compact 模式），固定高度容器不影响
+          // 当前集定位；嵌套滚动内层优先吃手势，符合分区块预期。
+          SizedBox(
+            height: 240,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: _episodePanel(compact: true),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _mobileSynopsisChildren() {
     final drama = widget.detail.drama;
     final colors = Theme.of(context).colorScheme;
     final sourceName = SourceSite.byId(drama.source)?.name ?? '未知源';
@@ -3243,11 +3266,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final body = drama.description.trim().isEmpty
         ? '暂无简介'
         : drama.description;
-    return ColoredBox(
-      color: colors.surface,
-      child: ListView(
-        padding: const EdgeInsets.all(12),
-        children: [
+    return [
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -3353,9 +3372,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             drama: drama,
             onOpen: _openRelatedDrama,
           ),
-        ],
-      ),
-    );
+    ];
   }
 
   /// 点推荐卡：推那部剧自己的简介页。
