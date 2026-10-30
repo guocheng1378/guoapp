@@ -328,6 +328,14 @@ abstract class AppRepository {
     String command,
     Map<String, dynamic> payload,
   ) async => throw AppFailure('当前环境不支持设备互联');
+
+  /// WebDAV 云备份动作（test/upload/download）。HTTP 请求与备份体解密
+  /// 全部在原生核心内完成，payload 平铺 url/username/password/backupPassword/data。
+  Future<Map<String, dynamic>> webdav(
+    String action,
+    Map<String, dynamic> payload,
+  ) async => throw AppFailure('当前环境不支持云备份');
+
   Future<PlaybackPlan?> prepareHandoff(
     Drama drama,
     Episode episode, {
@@ -633,6 +641,12 @@ class NativeRepository extends AppRepository {
     String command,
     Map<String, dynamic> payload,
   ) => _call({'action': 'lan', 'command': command, 'lan': payload});
+
+  @override
+  Future<Map<String, dynamic>> webdav(
+    String action,
+    Map<String, dynamic> payload,
+  ) => _call({'action': 'webdav', 'command': action, 'webdav': payload});
 
   @override
   Future<PlaybackPlan?> prepareHandoff(

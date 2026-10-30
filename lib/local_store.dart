@@ -1418,6 +1418,13 @@ class LocalStore extends ChangeNotifier {
 
   String exportRecoveryData() {
     if (_configurationError == null) throw StateError('请从设置中导出备份');
+    // 损坏恢复时重键多半已迁出 blob（prefs 里没有），必须从文件层并回。
+    Map<String, String> fileValues = const {};
+    if (files.isReady) {
+      try {
+        fileValues = files.loadAll();
+      } catch (_) {}
+    }
     return jsonEncode({
       'app': 'zhenguojian',
       'recovery': true,
@@ -1425,6 +1432,11 @@ class LocalStore extends ChangeNotifier {
         for (final key in preferences.getKeys())
           if (LocalSnapshot.owns(key) || key == LocalSnapshot.storageKey)
             key: preferences.get(key),
+        // 文件层是重键的权威存储：后置展开覆盖 blob 中的陈旧残留。
+        for (final entry in fileValues.entries)
+          if (LocalSnapshot.owns(entry.key) &&
+              LocalSnapshot.isHeavyKey(entry.key))
+            entry.key: entry.value,
       },
     });
   }
@@ -1447,9 +1459,14 @@ class LocalStore extends ChangeNotifier {
     _notify();
   });
 
-  Future<void> _queue(Future<void> Function() action) {
-    _writes = _writes.catchError((Object _) {}).then((_) => action());
-    return _writes;
+  /// 泛型化：允许队列中的动作携带返回值（如 mergeCloudRecords 的变更计数）。
+  /// 错误不阻塞后续动作：链上先 catchError 吞掉旧错误再执行下一个动作。
+  Future<T> _queue<T>(Future<T> Function() action) {
+    final result = _writes.catchError((Object _) {}).then((_) => action());
+    // 写链副本必须当场吞错（onError），否则写失败时该 Future 无人监听，
+    // 在测试 zone 下成为 unhandled async error 误伤「期望抛错」的用例。
+    _writes = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
   }
 
   @override

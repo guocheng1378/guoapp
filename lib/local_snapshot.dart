@@ -175,6 +175,11 @@ class LocalSnapshot {
     if (ready) {
       for (final entry in values.entries) {
         if (!isHeavyKey(entry.key)) continue;
+        if (entry.value is! String) {
+          // 非 String 重键一旦落文件会把后续提交全部炸成 cast 异常，
+          // 必须在触碰任何存储前拒绝。
+          throw StateError('重键记录类型无效：${entry.key}');
+        }
         if (_values[entry.key] == entry.value) continue;
         fileWrites[entry.key] = entry.value as String;
       }

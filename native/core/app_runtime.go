@@ -129,6 +129,7 @@ type nativeInput struct {
 	Sequence         int64                   `json:"sequence"`
 	Force            bool                    `json:"force"`
 	OfficialOnly     bool                    `json:"officialOnly"`
+	WebDAV           json.RawMessage         `json:"webdav"`
 }
 
 type nativeCatalogResult struct {
@@ -554,6 +555,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 		duration = 10 * time.Second
 	} else if input.Action == "preload" {
 		duration = 15 * time.Second
+	} else if input.Action == "webdav" {
+		duration = 3 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
@@ -568,6 +571,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 	switch input.Action {
 	case "lan":
 		return engine.nativeLAN(ctx, input.Command, input.LAN)
+	case "webdav":
+		return nativeWebDAV(ctx, input.Command, input.WebDAV)
 	case "updateSystemProxy":
 		return true, engine.updateSystemProxy(input.SystemProxy)
 	case "resourceSettings":
@@ -756,6 +761,18 @@ func applySourceConfig(config map[string]any) (any, error) {
 			return map[string]any{"applied": false, "reason": "providerHosts 含非法条目"}, nil
 		}
 		setProviderHosts(hosts)
+		applied++
+	}
+	// 自定义 maccms 点播源：用户本机添加，Dart 持久化并每次全量重发；
+	// 空列表语义为清空。校验/注册见 custom_sources.go。
+	if raw, ok := config["customSources"]; ok {
+		list, ok := raw.([]any)
+		if !ok {
+			return map[string]any{"applied": false, "reason": "customSources 类型无效"}, nil
+		}
+		if _, err := applyCustomSources(list); err != nil {
+			return map[string]any{"applied": false, "reason": err.Error()}, nil
+		}
 		applied++
 	}
 	if applied == 0 {

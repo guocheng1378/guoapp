@@ -86,14 +86,30 @@ class DirectorySnapshotFiles extends SnapshotFiles {
     if (dir == null) return const {};
     if (!dir.existsSync()) return const {};
     final result = <String, String>{};
+    // 残留 tmp 清扫：只回收超过 10 分钟的陈旧 tmp（活跃写存活毫秒级，
+    // 崩溃残留按陈旧垃圾回收；正在写的其他进程 tmp 不受影响）。
+    final staleBefore =
+        DateTime.now().subtract(const Duration(minutes: 10));
     for (final entity in dir.listSync()) {
       if (entity is! File) continue;
       final name = entity.uri.pathSegments.last;
+      if (name.endsWith('.tmp')) {
+        try {
+          if (entity.statSync().modified.isBefore(staleBefore)) {
+            entity.deleteSync();
+          }
+        } catch (_) {}
+        continue;
+      }
       if (!name.endsWith(kSnapshotFileSuffix)) continue;
       final key = name.substring(0, name.length - kSnapshotFileSuffix.length);
       if (key.isEmpty) continue;
       try {
-        result[key] = decodeSnapshotFileBytes(entity.readAsBytesSync());
+        final text = decodeSnapshotFileBytes(entity.readAsBytesSync());
+        // 语义校验：合法 gzip 但内容不是 JSON 的文件视为损坏，
+        // 不让坏内容在「文件优先」语义下永久遮蔽 blob 旧值。
+        jsonDecode(text);
+        result[key] = text;
       } catch (_) {
         // 单个文件损坏：跳过，不让一个文件拖垮整个应用。
       }
@@ -105,8 +121,18 @@ class DirectorySnapshotFiles extends SnapshotFiles {
   Future<void> write(String key, String json) async {
     final dir = await _ensureDirectory();
     final file = File('${dir.path}${Platform.pathSeparator}${snapshotFileName(key)}');
-    final tmp = File('${file.path}.tmp');
-    await tmp.writeAsBytes(gzip.encode(utf8.encode(json)), flush: true);
+    // 唯一命名 tmp：桌面端双开时两个进程并发写同键，固定 tmp 名会交错
+    // 截断同一文件产出损坏 gzip 包，进而导致重键静默回落空值。
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final tmp = File('${file.path}.$pid.$stamp.tmp');
+    try {
+      await tmp.writeAsBytes(gzip.encode(utf8.encode(json)), flush: true);
+    } catch (_) {
+      try {
+        await tmp.delete();
+      } catch (_) {}
+      rethrow;
+    }
     try {
       await tmp.rename(file.path);
     } catch (_) {

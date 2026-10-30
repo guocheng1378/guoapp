@@ -26,6 +26,7 @@ import 'lan_screen.dart';
 import 'live_sources_screen.dart';
 import 'app_icons.dart';
 import 'bug_report.dart';
+import 'cloud_backup_screen.dart';
 
 String storageSize(int bytes) {
   if (bytes < 0) return '暂不可用';
@@ -85,9 +86,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// 用户管理入口：未激活设备先弹激活页，激活成功（或本已激活）才放行。
   Future<void> _openUserManagement() async {
-    final activated =
-        await activationActive() || await showActivationPage(context);
-    if (!mounted || !activated) return;
+    if (!await activationActive()) {
+      if (!mounted) return;
+      final ok = await showActivationPage(context);
+      if (!mounted || !ok) return;
+    }
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute<void>(
@@ -275,6 +279,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       title: '设备互联',
       subtitle: '局域网自动同步追剧与推送播放',
       onPressed: () => openLanSync(context),
+    ),
+    (
+      id: 'cloud-backup',
+      icon: AppIcon(AppIcons.cloud),
+      title: '云备份',
+      subtitle: 'WebDAV 网盘备份，可自动恢复追剧记录',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => CloudBackupScreen(
+            repository: widget.repository,
+            store: widget.store,
+          ),
+        ),
+      ),
     ),
     if (widget.repository.supportsSourceManagement)
       (
@@ -467,6 +486,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: const Text('局域网自动同步追剧与推送播放'),
                 trailing: AppIcon(AppIcons.chevronRight),
                 onTap: () => openLanSync(context),
+              ),
+              ListTile(
+                key: const ValueKey('cloud-backup-setting'),
+                leading: AppIcon(AppIcons.cloud),
+                title: const Text('WebDAV 云备份'),
+                subtitle: const Text('备份到自己的网盘，可自动恢复追剧记录'),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => CloudBackupScreen(
+                      repository: widget.repository,
+                      store: widget.store,
+                    ),
+                  ),
+                ),
               ),
               if (widget.repository.supportsSourceManagement)
                 ListTile(

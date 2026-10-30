@@ -20,6 +20,7 @@ import 'home_screen.dart';
 import 'live_route_memory.dart';
 import 'local_snapshot_files.dart';
 import 'local_store.dart';
+import 'cloud_backup.dart';
 import 'profiles_screen.dart';
 import 'media_library.dart';
 import 'package_smoke.dart';
@@ -61,6 +62,7 @@ class _AppBootstrapState extends State<AppBootstrap>
   final repository = NativeRepository();
   final navigator = GlobalKey<NavigatorState>();
   LocalStore? store;
+  CloudBackup? _cloudBackup;
   Object? error;
   late AppDevice device = widget.device;
   Future<void>? _deviceProbe;
@@ -96,6 +98,15 @@ class _AppBootstrapState extends State<AppBootstrap>
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
       unawaited(flushNativeCatalogWrites());
+    }
+    // 云备份自动备份：切后台触发；是否到期/有变化由服务内部判定，失败静默。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      final backup = _cloudBackup;
+      final current = store;
+      if (backup != null && current != null) {
+        unawaited(backup.maybeAutoBackup(current));
+      }
     }
     if (!Platform.isIOS) return;
     final library = MediaLibrary.current;
@@ -166,6 +177,8 @@ class _AppBootstrapState extends State<AppBootstrap>
             files: DirectorySnapshotFiles(directory: libraryDirectory),
           );
           repository.access = store;
+          // 云备份服务与偏好/仓库共享实例；自动备份在切后台时触发。
+          _cloudBackup = CloudBackup(preferences, repository);
           // 核心侧默认「官方优先 + 三方兜底」，这里把设备上存的选择同步下去。
           unawaited(
             repository.setDongpiandiOfficialOnly(

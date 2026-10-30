@@ -21,8 +21,9 @@ extension LocalStoreSync on LocalStore {
     final records = <String, LanRecord>{};
     for (final row in raw) {
       final record = LanRecord.fromJson(row);
-      if (records.containsKey(record.id))
+      if (records.containsKey(record.id)) {
         throw const FormatException('备份同步记录重复');
+      }
       records[record.id] = record;
     }
     final favorites = (library['favorites'] as List)
@@ -270,6 +271,71 @@ extension LocalStoreSync on LocalStore {
       _lanUrgentRevision++;
       _loadLibrary();
       _notify();
+    });
+  }
+
+  /// 云备份「合并追剧」：把云端记录与当前用户做字段级三向合并（双向保留变更，
+  /// 不是 LAN 那样的整表替换），只合并本机允许的源，其他用户的档不受影响。
+  Future<LanChangeCount> mergeCloudRecords(Iterable<LanRecord> incoming) {
+    final epoch = _epoch;
+    return _queue(() async {
+      if (locked || epoch != _epoch) {
+        throw StateError('当前用户已变更，请重新打开云备份');
+      }
+      final allowed = <LanRecord>[];
+      for (final record in incoming) {
+        final source = record.drama.source;
+        if (source.isEmpty || !allowsSource(source)) continue;
+        allowed.add(record);
+      }
+      if (allowed.length > LanDocument.limit) {
+        throw const FormatException('云端追剧记录数量无效');
+      }
+      final document = lanDocument;
+      final previous = Map.of(document.records);
+      final favorites = Map.of(_favorites);
+      final states = Map.of(_followStates);
+      final history = Map.of(_history);
+      for (final record in allowed) {
+        final local = document.records[record.id];
+        final checked = local == null ? record : local.merge(record);
+        document.records[checked.id] = checked;
+        if (checked.followed) {
+          favorites[checked.id] = checked.drama;
+          states[checked.id] = checked.following.copyWith(
+            seriesSeasons: states[checked.id]?.seriesSeasons ?? const {},
+          );
+          if (checked.watch case final watch?) {
+            history[checked.id] = watch;
+          } else {
+            history.remove(checked.id);
+          }
+        } else {
+          favorites.remove(checked.id);
+          states.remove(checked.id);
+        }
+      }
+      if (favorites.length > 20000 ||
+          document.records.length > LanDocument.limit) {
+        throw StateError('合并后的追剧记录超过本机上限，原记录已保留');
+      }
+      final sorted = history.values.toList()
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      await _commit({
+        _key('favorites'): jsonEncode(
+          favorites.values.map((drama) => drama.toJson()).toList(),
+        ),
+        _key('followStates'): _encodeFollowStates(states),
+        _key('history'): jsonEncode(
+          sorted.take(300).map((entry) => entry.toJson()).toList(),
+        ),
+        _key('lanRecords'): jsonEncode(document.toJson()),
+      }, trackSync: false);
+      _lanRevision++;
+      _lanUrgentRevision++;
+      _loadLibrary();
+      _notify();
+      return LanChangeCount.between(previous, document.records);
     });
   }
 }
