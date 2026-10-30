@@ -1,0 +1,66 @@
+# iOS 打包 workflow：仅构建真果鉴全源变体（定调：iOS 不做双变体矩阵）。
+# 产物为「未签名 .ipa」（Payload/Runner.app 结构，无 _CodeSignature），
+# 供 AltStore / Sideloadly / TrollStore 用个人 Apple ID 自签侧载
+# （免费账号 7 天有效期、仅前台安装）；持开发者账号的正式签名走本地
+# `python scripts/build_ios.py --export-options <ExportOptions.plist>`。
+#
+# PUB_HOSTED_URL 必须显式对齐 pub.flutter-io.cn：pubspec.lock 记录的
+# hosted url 全部是镜像源，pub 对 lockfile 的 URL 敏感（构建脚本内部
+# `flutter pub get --enforce-lockfile`），不设置时 CI 默认 pub.dev，
+# 会报 "Would change N dependencies" 失败。
+name: build-ios
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  ios:
+    # 发版流（gh release create v0.2.96.N ...）会自动创建 tag 并触发本
+    # workflow；构建完成后把 .ipa 追加上传到同名 Release（可与已有
+    # Android 资产共存，--clobber 允许重跑覆盖）。手动触发只产出 artifact。
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 版本与本地工具链一致（go1.27.2），见 test.yml 同款注释。
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.2
+          cache-dependency-path: native/go.sum
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+      # 未签名链路：Go 核心 c-archive → DuanjuCore.xcframework →
+      # flutter build ios --no-codesign → FFI 符号校验
+      # （_DuanjuRequest/_DuanjuFree）→ 标准 .ipa 打包。
+      - name: Build unsigned ipa (zhenguojian)
+        run: python3 scripts/build_ios.py --all-sources
+        shell: bash
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: dist/ios/*
+          retention-days: 14
+      - name: Attach ipa to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --notes "iOS 未签名包：用 AltStore / Sideloadly / TrollStore 自签安装。"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/ios/*.ipa
+        shell: bash
