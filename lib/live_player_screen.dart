@@ -23,6 +23,22 @@ import 'live_route_memory.dart';
 ///   噪声丢弃；确认期出画则取消；防打开失败被一票忽略后黑屏+转圈卡死）；
 /// ③12s 无画面兜底强制切下一线路（连 error 都不发的死链），加载期显示
 ///   频道名与线路号。
+/// 2026-10-31（修「换线路太快把真连接跳过去」）：加载期切线过于激进——
+/// 旧实现只要收到 error 就开固定 1.2s 确认窗，1.2s 内没出画立即切走，
+/// 而直播源（尤其跨网 HLS、需要先重定向的分发域名）拉首帧常要 3-6 秒，
+/// 于是「明明能播的线路被当成死链跳过」；而且旧实现给线路打的一次性
+/// attempted 标记一旦落下就不再回头，被误杀的这条好线路本轮再也回不来。
+/// 修法三条：
+/// ①每条线路给足最短观察窗 [routeGrace]，此窗内的 error 只算怀疑，
+///   确认时刻不早于该窗结束（窗内出画照旧立即取消）；
+/// ②播放途中出现的抖动同样走确认窗，窗内恢复即丢弃，不再当场切线；
+/// ③全部线路走完一轮后，对「没有明确报错、只是 12s 无画面被兜底切掉」
+///   的线路回头再给一次机会（明确报错的不重复等，避免失败反馈变慢）。
+/// 2026-10-31 四轮（修「看着看着卡住不动没人管」）：出画后的中途卡流原本
+/// 没有任何兜底——12s 无画面兜底与打开确认窗都只在 _loading 期生效，
+/// _checkFrame 出画一次就把它们取消，之后直播源卡在 buffering 会永久转圈。
+/// 补一条中途卡流 watchdog：出过画后 buffering 持续 _stallTimeout 未恢复
+/// 即切下一线路（卡流线路不算「明确报错」，走完一轮后仍能回头重试）。
 class LivePlayerScreen extends StatefulWidget {
   const LivePlayerScreen({
     super.key,
@@ -32,6 +48,12 @@ class LivePlayerScreen extends StatefulWidget {
     this.playerFactory,
     this.videoBuilder,
   });
+  /// 单条线路的最短观察窗：即使收到 error，确认切线的时刻也不早于此窗
+  /// 结束（2026-10-31）——直播源拉首帧常要 3-6 秒，短于此窗口=把能看的
+  /// 线路误判为死链切走。窗内出画照旧立即取消切线。
+  @visibleForTesting
+  static const routeGrace = Duration(seconds: 5);
+
   final List<LiveChannel> channels;
   final int initialIndex;
   /// 线路记忆的列表键：进台优先用上次手动选中的线路（见 LiveRouteMemory）。
@@ -51,6 +73,11 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
   static const _frameTimeout = Duration(seconds: 12);
   /// 打开阶段 error 的延迟确认窗：窗口内出画 = stop→open 竞态旧噪声，丢弃。
   static const _failureConfirm = Duration(milliseconds: 1200);
+  /// 中途卡流兜底（2026-10-31）：出过画后 buffering 持续超过此值仍未恢复出画
+  /// 即视为这条线路卡死，切下一线路——播放途中卡住同样需要兜底。
+  static const _stallTimeout = Duration(seconds: 12);
+  /// 每条线路最多尝试次数：第二轮只回头重试「没有明确报错」的线路。
+  static const _maxRouteAttempts = 2;
 
   late final Player _player;
   /// 注入 videoBuilder（测试桩替代整个 Video 面）时不构造真 VideoController。
@@ -60,11 +87,24 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
   int _urlIndex = 0;
   bool _loading = true;
   bool _failed = false;
-  final Set<int> _attempted = {};
+  /// 每条线路已尝试次数（第二轮回头重试依赖它判定的预算）。
+  final Map<int, int> _attempts = <int, int>{};
+  /// 确认窗内确认失败的线路：这些线路报错明确，不再重复排队等待。
+  final Set<int> _errored = <int>{};
   int _generation = 0;
   bool _closed = false;
   Timer? _frameTimer;
   Timer? _failureTimer;
+  /// 中途卡流 watchdog：仅在本条线路曾出过画（[_sawFrame]）后 arm。
+  Timer? _stallTimer;
+  /// 本条线路是否已出过画：中途卡流兜底只对付「看着看着卡住」，
+  /// 首帧期仍交给无画面兜底与确认窗，避免两条 watchdog 互相打架。
+  bool _sawFrame = false;
+  /// 最短观察窗倒计时：每条线路打开即启动，到点前收到的 error 只标记怀疑。
+  Timer? _graceTimer;
+  bool _graceElapsed = false;
+  /// 观察窗内是否收到过 error（含上一条线路 stop→open 竞态带来的旧噪声）。
+  bool _suspicious = false;
 
   bool _controlsVisible = true;
   bool _panelOpen = false;
@@ -94,9 +134,13 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     _subscriptions.add(
       _player.stream.buffering.listen((buffering) {
         if (_closed || !mounted) return;
-        if (buffering && !_loading && !_failed) {
-          // 出画后中途缓冲：恢复加载提示，避免卡顿期无反馈。
-          setState(() => _loading = true);
+        if (buffering) {
+          if (!_loading && !_failed) {
+            // 出画后中途缓冲：恢复加载提示，避免卡顿期无反馈。
+            setState(() => _loading = true);
+          }
+          // 中途卡流兜底：已出过画的线路卡在缓冲，超时无恢复即切线。
+          _armStallWatchdog();
         }
         _checkFrame();
       }),
@@ -114,7 +158,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     _hideTimer?.cancel();
     _osdTimer?.cancel();
     _frameTimer?.cancel();
+    _graceTimer?.cancel();
     _failureTimer?.cancel();
+    _stallTimer?.cancel();
     for (final sub in _subscriptions) {
       sub.cancel();
     }
@@ -146,11 +192,22 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
       return;
     }
     _urlIndex = urlIdx;
-    _attempted.add(urlIdx);
+    _attempts[urlIdx] = (_attempts[urlIdx] ?? 0) + 1;
     final ticket = ++_generation;
     _failureTimer?.cancel();
     _failureTimer = null;
     _frameTimer?.cancel();
+    // 换线路即作废上一条的中途卡流 watchdog 与出画标记：新线路首帧期
+    // 仍交给无画面兜底与确认窗，不与中途兜底打架。
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    _sawFrame = false;
+    // 最短观察窗：此窗内的 error 只标记为怀疑，到点仍在拉流才真正确认
+    // 失败——给慢速但可用的直播源留足首帧时间。出画立即取消该倒计时。
+    _graceTimer?.cancel();
+    _graceElapsed = false;
+    _suspicious = false;
+    _graceTimer = Timer(LivePlayerScreen.routeGrace, _onGraceElapsed);
     // 12s 无画面兜底：有的死链连 error 都不发，watchdog 强制切线
     //（若此时已有 error 进确认窗则让确认窗处理）。
     _frameTimer = Timer(_frameTimeout, () {
@@ -174,12 +231,40 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     }
   }
 
+  /// 中途卡流兜底：本条线路已出过画（[_sawFrame]）且当前仍在缓冲时，
+  /// 启动 [_stallTimeout] 倒计时；到点仍卡在缓冲即视为线路卡死，切下一线路。
+  /// 已出画的线路不再受 12s 无画面兜底保护，缺了这条会永久转圈。
+  /// 反复调用是幂等的：已有倒计时在跑就不再重启（只认「首次进入缓冲」）。
+  void _armStallWatchdog() {
+    if (_closed || !mounted || !_sawFrame) return;
+    if (_stallTimer != null) return;
+    final ticket = _generation;
+    _stallTimer = Timer(_stallTimeout, () {
+      _stallTimer = null;
+      if (_closed || !mounted || ticket != _generation) return;
+      // 期间已恢复出画（_checkFrame 会取消倒计时）或已停播，不动作。
+      if (!_player.state.playing || !_player.state.buffering) return;
+      _switchOrFail();
+    });
+  }
+
   /// 出画判定：正在播放且不在缓冲 = 有画面。
   /// 清掉加载/失败提示，并撤销打开阶段的失败确认与 12s 兜底。
   void _checkFrame() {
     if (_closed || !mounted) return;
     if (!_player.state.playing || _player.state.buffering) return;
     _frameTimer?.cancel();
+    // 出画即撤销中途卡流 watchdog：缓冲期已结束，避免残留的倒计时误切。
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    // 本条线路已出过画：此后若卡在缓冲，由中途 watchdog 兜底。
+    _sawFrame = true;
+    _graceTimer?.cancel();
+    _graceTimer = null;
+    // 已经出过画的线路视为观察窗已用尽：之后再次报错（播放途中抖动）
+    // 回到 1.2s 竞态确认窗，不再白等一个最短观察窗。
+    _graceElapsed = true;
+    _suspicious = false;
     if (_failureTimer != null) {
       _failureTimer!.cancel();
       _failureTimer = null;
@@ -192,31 +277,57 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     }
   }
 
-  /// 出错自动切下一线路；全部线路都试过才落失败态。
-  /// 打开阶段（仍在转圈）的 error 进入 1.2s 延迟确认——播放器启动链路里
+  /// 出错走确认窗再切下一线路；全部线路都试过才落失败态。
+  /// 打开阶段（仍在转圈）的 error 进入延迟确认——播放器启动链路里
   /// stop→open 竞态会带来上一条线路的旧 error，立即切线会误杀刚打开的
   /// 正常线路；确认窗内出画则丢弃。确认期内转圈保持，不黑屏。
+  /// 观察窗 [routeGrace] 内收到的 error 一律标记怀疑、不立刻排队确认，
+  /// 等到 [_onGraceElapsed] 到点仍在拉流才确认真失败——慢速但可用的直播源
+  /// 因此不会被提前判死；观察窗已用尽（出过画或窗自然到期）的线路回到
+  /// 1.2s 竞态窗，播放途中的瞬时抖动同样不再当场切线。
   void _handleFailure() {
     if (_closed || !mounted) return;
     if (_failureTimer != null) return;
-    if (_loading) {
-      _failureTimer = Timer(_failureConfirm, _confirmFailure);
-      return;
-    }
-    _switchOrFail();
+    _suspicious = true;
+    // 观察窗未结束：先不动，等 [_onGraceElapsed] 到点再判。若这条线路
+    // 只是慢（窗内拉完首帧出画），出画路径会先一步把等待撤销。
+    if (!_graceElapsed) return;
+    _failureTimer = Timer(_failureConfirm, _confirmFailure);
+  }
+
+  /// 最短观察窗到点：这条线路拿到过完整首帧时间窗仍未出画，若期间收到过
+  /// error 则确认真失败。
+  void _onGraceElapsed() {
+    _graceTimer = null;
+    _graceElapsed = true;
+    if (_closed || !mounted) return;
+    if (!_suspicious) return;
+    _confirmFailure();
   }
 
   void _confirmFailure() {
     _failureTimer = null;
     if (_closed || !mounted) return;
     if (_player.state.playing && !_player.state.buffering) return;
+    _errored.add(_urlIndex);
     _switchOrFail();
   }
 
   void _switchOrFail() {
     final urls = _channel.urls;
     for (var i = 0; i < urls.length; i++) {
-      if (!_attempted.contains(i)) {
+      if (!_attempts.containsKey(i)) {
+        _open(i);
+        return;
+      }
+    }
+    // 第二轮：只回头重试「没有明确报错、疑似被 12s 无画面兜底误杀」的
+    // 线路。直播源的慢连接最常死在这条路径上，值得再给一次机会；已确认
+    // 报错的线路不重复排队，避免把失败反馈拖成两轮全等待。
+    for (var i = 0; i < urls.length; i++) {
+      if (i != _urlIndex &&
+          !_errored.contains(i) &&
+          (_attempts[i] ?? 0) < _maxRouteAttempts) {
         _open(i);
         return;
       }
@@ -227,8 +338,12 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
   void _setFailed() {
     if (_closed || !mounted) return;
     _frameTimer?.cancel();
+    _graceTimer?.cancel();
+    _graceTimer = null;
     _failureTimer?.cancel();
     _failureTimer = null;
+    _stallTimer?.cancel();
+    _stallTimer = null;
     setState(() {
       _loading = false;
       _failed = true;
@@ -236,7 +351,10 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
   }
 
   void _retry() {
-    setState(() => _attempted.clear());
+    setState(() {
+      _attempts.clear();
+      _errored.clear();
+    });
     _open(_urlIndex);
   }
 
@@ -244,7 +362,10 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     if (index == _urlIndex || index < 0 || index >= _channel.urls.length) {
       return;
     }
-    setState(() => _attempted.clear());
+    setState(() {
+      _attempts.clear();
+      _errored.clear();
+    });
     // 手动选线才写记忆：这条线路用户亲测能看，下次进台直接用它。
     unawaited(
       LiveRouteMemory.remember(
@@ -264,7 +385,8 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     }
     setState(() {
       _index = index;
-      _attempted.clear();
+      _attempts.clear();
+      _errored.clear();
       _urlIndex = 0;
     });
     _showOsd('${index + 1}  ${_channel.name}');
@@ -589,14 +711,14 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
                               PopupMenuItem(
                                 value: i,
                                 child: Text(
-                                  '线路 ${i + 1}' +
-                                      (LiveRouteMemory.recall(
-                                                      widget.listId,
-                                                      _channel.name) ==
-                                                  _channel.urls[i] &&
-                                              i != _urlIndex
-                                          ? ' · 已记住'
-                                          : ''),
+                                  '线路 ${i + 1}${LiveRouteMemory.recall(
+                                            widget.listId,
+                                            _channel.name,
+                                          ) ==
+                                              _channel.urls[i] &&
+                                          i != _urlIndex
+                                      ? ' · 已记住'
+                                      : ''}',
                                   style: TextStyle(
                                     color: i == _urlIndex
                                         ? Colors.white

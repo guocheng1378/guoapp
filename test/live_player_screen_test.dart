@@ -29,10 +29,12 @@ Future<ScriptedPlayer> _pump(
   return player;
 }
 
-/// 打开阶段错误走 1.2s 延迟确认窗：一帧处理后推进窗口再处理切线。
+/// 打开阶段错误要等最短观察窗（5s）到点才确认切线：一帧处理后推进窗口
+/// 再处理切线。
 Future<void> _settleFailure(WidgetTester tester) async {
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 1300));
+  await tester.pump(LivePlayerScreen.routeGrace);
+  await tester.pump(const Duration(milliseconds: 100));
   await tester.pump();
 }
 
@@ -232,7 +234,7 @@ void main() {
     // 拉流黑屏期不再是一片黑：转圈 + 频道名 + 当前线路号。
     expect(find.text('正在加载「CCTV1」 · 线路 1'), findsOneWidget);
 
-    await tester.pump(const Duration(milliseconds: 1300));
+    await tester.pump(LivePlayerScreen.routeGrace);
     await tester.pump();
     // 线路 1 确认失败切到线路 2，仍在加载并显示新线路号。
     expect(find.text('正在加载「CCTV1」 · 线路 2'), findsOneWidget);
@@ -263,6 +265,126 @@ void main() {
     expect(player.opened.length, 1);
     expect(find.byKey(const Key('live-player-retry')), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('slow but healthy route is not skipped by an early error',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final player = await _pump(tester, [
+      _ch('CCTV1', ['http://slow/1.m3u8', 'http://good/2.m3u8']),
+    ]);
+    await tester.pump();
+    // 上一条线路的迟到 error（stop→open 竞态）：旧实现 1.2s 就切走。
+    player.fail();
+    await tester.pump();
+    // 越过旧的 1.2s 窗口，但未到最短观察窗：仍在等线路 1。
+    await tester.pump(const Duration(milliseconds: 1500));
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri), ['http://slow/1.m3u8']);
+    expect(find.text('正在加载「CCTV1」 · 线路 1'), findsOneWidget);
+
+    // 3 秒出画——真连接在观察窗内自证，切线被撤销。
+    await tester.pump(const Duration(seconds: 2));
+    player.injectBuffering(false);
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri), ['http://slow/1.m3u8']);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    // 出画后连 12s watchdog 也已撤销，不再打扰。
+    await tester.pump(const Duration(seconds: 13));
+    await tester.pump();
+    expect(player.opened.length, 1);
+    expect(find.byKey(const Key('live-player-retry')), findsNothing);
+  });
+
+  testWidgets('transient error while playing recovers without switching',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final player = await _pump(tester, [
+      _ch('CCTV1', ['http://good/1.m3u8', 'http://good/2.m3u8']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(player.opened.length, 1);
+
+    // 播放途中一次瞬时抖动：旧实现当场切线，把还活着的连接丢掉。
+    player.fail();
+    await tester.pump();
+    expect(player.opened.length, 1);
+
+    // 确认窗内恢复出画 → 丢弃，继续播原线路。
+    player.injectBuffering(false);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1300));
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri), ['http://good/1.m3u8']);
+    expect(find.byKey(const Key('live-player-retry')), findsNothing);
+  });
+
+  testWidgets('stalled route after a frame switches route after watchdog',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final player = await _pump(tester, [
+      _ch('CCTV1', ['http://good/1.m3u8', 'http://good/2.m3u8']),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    // 首帧出画：线路 1 自证可用（12s 无画面兜底随之撤销）。
+    expect(player.opened.map((m) => m.uri), ['http://good/1.m3u8']);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    // 播放途中卡流：出画后再次进入缓冲且长时间不恢复——旧实现永久转圈，
+    // 没有任何兜底会切走这条已卡死的线路。
+    player.injectBuffering(true);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // 未到卡流超时前仍在原线路等待（12s 无画面兜底已撤销，不再出手）。
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri), ['http://good/1.m3u8']);
+
+    // 超过卡流超时 → 切下一线路。
+    await tester.pump(const Duration(seconds: 7));
+    await tester.pump();
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri).last, 'http://good/2.m3u8');
+  });
+
+  testWidgets('timed-out route gets a second chance before failure card',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final player = await _pump(tester, [
+      _ch('CCTV1', ['http://dead/1.m3u8', 'http://broken/2.m3u8']),
+    ]);
+    await tester.pump();
+    // 线路 1：连 error 都不发的挂起链 → 12s watchdog 切走（无明确报错）。
+    await tester.pump(const Duration(seconds: 13));
+    await tester.pump();
+    expect(player.opened.map((m) => m.uri).last, 'http://broken/2.m3u8');
+
+    // 线路 2：明确报错 → 确认失败后先回头重试线路 1，而不是直接落失败卡。
+    await _settleFailure(tester);
+    expect(player.opened.map((m) => m.uri).last, 'http://dead/1.m3u8');
+    expect(find.byKey(const Key('live-player-retry')), findsNothing);
+
+    // 线路 1 仍未出画：再次 watchdog 后所有线路均已用尽配额 → 失败卡。
+    await tester.pump(const Duration(seconds: 13));
+    await tester.pump();
+    expect(find.byKey(const Key('live-player-retry')), findsOneWidget);
   });
 
   testWidgets('dead link without any events switches route after watchdog',
