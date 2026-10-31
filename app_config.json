@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2253,
-    "version": "v0.2.96-2253",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2253/zhenguojian-0.2.96+2253-arm64-v8a.apk",
-    "notes": "修复电视直播切换线路过快，把本来能看的线路当成死链跳过的问题\n每条线路给足最短观察时间，慢线路不再被误判；播放途中的瞬时抖动不再立刻切线\n超时未出画面的线路在提示失败前会再给一次机会\n加载期间继续显示频道名与线路号，等待有明确反馈"
+    "build": 2254,
+    "version": "v0.2.96-2254",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2254/zhenguojian-0.2.96+2254-arm64-v8a.apk",
+    "notes": "修复电视直播看一会儿卡住不动、一直转圈没人管的问题\n出画后若长时间卡在缓冲，会自动换线路；一轮线路都走完仍不行才提示失败\n卡住的线路不算死链，后面还有机会再试"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
