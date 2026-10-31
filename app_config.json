@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2251,
-    "version": "v0.2.96-2251",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2251/zhenguojian-0.2.96+2251-arm64-v8a.apk",
-    "notes": "真果·鉴新增社区跳过片头片尾：其他源同名剧集自动借用社区标定，整剧生效\n修复真果·鉴官方线路偶发缺失、有时选源入口不出现、不默认进官方源的问题\n官方线路按剧集全量兑换，线路列表缓存加速二次起播"
+    "build": 2252,
+    "version": "v0.2.96-2252",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2252/zhenguojian-0.2.96+2252-arm64-v8a.apk",
+    "notes": "新增按单集记忆续播进度：同一部剧换集、回头重看各自记住进度，互不覆盖\n修复部分站源列表/详情因演员字段格式变更而打不开或条目消失的问题\n修复长时间播放或边看边下载时，正在播放的会话被错误挤出导致的卡断\n下载、设置、直播等页面细节优化"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
