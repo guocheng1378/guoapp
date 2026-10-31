@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2252,
-    "version": "v0.2.96-2252",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2252/zhenguojian-0.2.96+2252-arm64-v8a.apk",
-    "notes": "新增按单集记忆续播进度：同一部剧换集、回头重看各自记住进度，互不覆盖\n修复部分站源列表/详情因演员字段格式变更而打不开或条目消失的问题\n修复长时间播放或边看边下载时，正在播放的会话被错误挤出导致的卡断\n下载、设置、直播等页面细节优化"
+    "build": 2253,
+    "version": "v0.2.96-2253",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2253/zhenguojian-0.2.96+2253-arm64-v8a.apk",
+    "notes": "修复电视直播切换线路过快，把本来能看的线路当成死链跳过的问题\n每条线路给足最短观察时间，慢线路不再被误判；播放途中的瞬时抖动不再立刻切线\n超时未出画面的线路在提示失败前会再给一次机会\n加载期间继续显示频道名与线路号，等待有明确反馈"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
