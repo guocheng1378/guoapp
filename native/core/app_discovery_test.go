@@ -145,4 +145,27 @@ func TestNativeCoverMetadataRejectsOtherDramaAndKeepsCurrentHost(t *testing.T) {
 	if got := nativeCoverReferer(&Downloader{}, "", "https://img3.doubanio.com/view/photo/p1.jpg"); got != doubanReferer {
 		t.Fatal("doubanio host referer fallback lost", got)
 	}
+	// 百度图片中转（真果·鉴）判带 Referer 的请求为盗链 400，必须空 Referer。
+	if got := nativeCoverReferer(&Downloader{}, sourceDongpiandi, "https://gimg0.baidu.com/image/src=img.baipiaozhe.com/p.jpg"); got != "" {
+		t.Fatal("baidu proxy cover referer should be omitted", got)
+	}
+}
+
+// 真果·鉴封面走百度图片中转，空 Referer 时不允许发出 Referer 头。
+func TestNativeCoverDownloadOmitsEmptyReferer(t *testing.T) {
+	var gotReferer string
+	var sawHeader bool
+	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
+		value, present := request.Header["Referer"]
+		sawHeader = present
+		gotReferer = strings.Join(value, ",")
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte{0xff, 0xd8, 0xff, 0xe0})), Request: request}, nil
+	})
+	cache := newNativeCoverCache(engine.directory, engine.downloader)
+	if _, err := cache.download(context.Background(), "https://gimg0.baidu.com/image/src=img.baipiaozhe.com/p.jpg", ""); err != nil {
+		t.Fatal(err)
+	}
+	if sawHeader {
+		t.Fatal("baidu proxy cover must not carry a Referer header", gotReferer)
+	}
 }

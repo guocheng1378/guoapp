@@ -92,6 +92,13 @@ func nativeCoverReferer(downloader *Downloader, source, address string) string {
 		strings.HasSuffix(strings.ToLower(parsed.Hostname()), "doubanio.com") {
 		return doubanReferer
 	}
+	// 百度图片中转（真果·鉴 poster_url 走 gimg*.baidu.com?src=源站地址）
+	// 把携带 Referer 的请求判为盗链直接 400，无 Referer 反而放行——
+	// 这类中转域名一律不发 Referer。
+	if parsed, err := url.Parse(address); err == nil &&
+		strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".baidu.com") {
+		return ""
+	}
 	if source == sourceCloudFront {
 		if parsed, err := url.Parse(address); err == nil && (strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".zdmhyg.cn") || strings.EqualFold(parsed.Hostname(), "pic.tuafjz.cn")) {
 			return downloader.providerBaseURL(sourceHuangguoAI) + "/"
@@ -216,7 +223,9 @@ func (cache *nativeCoverCache) download(ctx context.Context, address, referer st
 		return nil, err
 	}
 	request.Header.Set("User-Agent", userAgent)
-	request.Header.Set("Referer", referer)
+	if referer != "" {
+		request.Header.Set("Referer", referer)
+	}
 	request.Header.Set("Accept", "image/webp,image/jpeg,image/png,image/gif,*/*;q=0.5")
 	request.Header.Set("Sec-Fetch-Mode", "no-cors")
 	request.Header.Set("Sec-Fetch-Dest", "image")
@@ -225,7 +234,9 @@ func (cache *nativeCoverCache) download(ctx context.Context, address, referer st
 		if len(via) >= 5 || !validNativeCoverURL(request.URL) {
 			return errors.New("海报重定向地址无效")
 		}
-		request.Header.Set("Referer", referer)
+		if referer != "" {
+			request.Header.Set("Referer", referer)
+		}
 		return nil
 	}
 	response, err := client.Do(request)
