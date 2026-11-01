@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2255,
-    "version": "v0.2.96-2255",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2255/zhenguojian-0.2.96+2255-arm64-v8a.apk",
-    "notes": "真果·鉴封面修复：部分剧集封面（百度图床中转）不再因防盗链被拒，恢复显示、加载更快\n播放更稳：长时间边看边下时，正在播放的线路不再被后台任务挤掉\n界面与列表若干细节优化与稳定性改进"
+    "build": 2256,
+    "version": "v0.2.96-2256",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2256/zhenguojian-0.2.96+2256-arm64-v8a.apk",
+    "notes": "搜索后进入播放器不再误弹输入法\n真果·鉴切集修复：优先官方线路并自动补兑，避免大概率落到第三方源或失败\n若干稳定性与细节改进"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
