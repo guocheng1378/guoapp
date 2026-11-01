@@ -2,11 +2,31 @@ package provider
 
 import (
 	"encoding/json"
+	"html"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// sanitizeHTMLTags 匹配任何 HTML 标签，用于剥掉简介里的 <p>/<br> 等片段。
+var sanitizeHTMLTags = regexp.MustCompile(`<[^>]+>`)
+
+// SanitizeText 清洗简介/演员/标签等文本：剥 HTML 标签 + 解 HTML 实体
+// （&nbsp;/&amp;/&#39; 等）+ 不换行空格 U+00A0 归一 + 折叠多余空白。
+// 各源简介偶带站点 HTML 片段或直接塞实体，不清洗会在播放器里显示成
+// 「&nbsp;, &nbsp;」之类的乱码（真机实拍多源复现，含黄果类）。
+func SanitizeText(s string) string {
+	if s == "" {
+		return s
+	}
+	s = sanitizeHTMLTags.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	s = strings.ReplaceAll(s, "\u00a0", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	return s
+}
 
 type SortMetadataState struct {
 	VIPChecked   bool      `json:"vipChecked,omitempty"`
@@ -70,6 +90,55 @@ type Drama struct {
 	Actors            []string           `json:"actors,omitempty"`
 	ReleaseStatus     string             `json:"releaseStatus,omitempty"`
 	SortMetadata      *SortMetadataState `json:"sortMetadata,omitempty"`
+}
+
+// UnmarshalJSON 兼容 actors 字段的两种形态：
+// 旧接口返回字符串数组（["张三","李四"]），站点升级后部分源改为对象数组
+// （[{"name":"张三","id":"..."}]）。对象数组只取名字字段，避免整个 listResponse
+// 因无法把对象解析进 []string 而整体失败（表现为「json: cannot unmarshal object into ...actors.0」）。
+func (d *Drama) UnmarshalJSON(data []byte) error {
+	type alias Drama
+	aux := &struct {
+		Actors json.RawMessage `json:"actors"`
+		*alias
+	}{alias: (*alias)(d)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(aux.Actors) > 0 && strings.TrimSpace(string(aux.Actors)) != "null" {
+		var strs []string
+		if err := json.Unmarshal(aux.Actors, &strs); err == nil {
+			d.Actors = strs
+		} else {
+			var objs []map[string]any
+			if err := json.Unmarshal(aux.Actors, &objs); err == nil {
+				for _, o := range objs {
+					if name, ok := firstStringField(o, "name", "actor", "actorName", "nickName", "nickname", "title"); ok && name != "" {
+						d.Actors = append(d.Actors, name)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func firstStringField(m map[string]any, keys ...string) (string, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s, true
+			}
+		}
+	}
+	// 兜底：已知 key 都未命中时，取对象里第一个非空字符串值（最坏情况落到 id 之类，
+	// 但保证不空、不崩——总比整条目录因解析失败而消失好）。
+	for _, v := range m {
+		if s, ok := v.(string); ok && s != "" {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 func (d Drama) DisplayTitle() string {

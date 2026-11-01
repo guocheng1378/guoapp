@@ -11,11 +11,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core_bridge.dart';
 import 'activation/activation_flow.dart';
 import 'activation/license.dart';
-import 'glass.dart';
-import 'glass_preferences.dart';
 import 'app_theme.dart';
 import 'app_layout.dart';
 import 'background_downloads.dart';
+import 'floating_card.dart';
+import 'glass.dart';
+import 'glass_preferences.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
 import 'remote_widgets.dart';
@@ -134,31 +135,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       return;
     }
-    final selected = await showDialog<String>(
+    final selected = await showFloatingDialog<String>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: SimpleDialog(
-          title: const Text('外观主题'),
-          children: [
-            RadioGroup<String>(
-              groupValue: widget.store.themeMode,
-              onChanged: (value) => Navigator.pop(context, value),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final mode in ['light', 'dark', 'system'])
-                    RadioListTile<String>(
-                      value: mode,
-                      title: Text(AppTheme.label(mode)),
-                      subtitle: mode == 'system'
-                          ? const Text('随设备的深色模式自动切换')
-                          : null,
-                    ),
-                ],
-              ),
+      barrierLabel: '外观主题',
+      title: const Text('外观主题'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final mode in ['light', 'dark', 'system'])
+            FloatingOptionRow(
+              label: AppTheme.label(mode),
+              subtitle: mode == 'system' ? '随设备的深色模式自动切换' : null,
+              selected: widget.store.themeMode == mode,
+              onTap: () => Navigator.pop(context, mode),
             ),
-          ],
-        ),
+        ],
       ),
     );
     if (selected != null && mounted) {
@@ -216,24 +207,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'restore';
         } else {
           accepted =
-              await showDialog<bool>(
+              await showFloatingDialog<bool>(
                 context: context,
-                builder: (context) => GlassDialogShell(
-                  child: AlertDialog(
-                    title: const Text('恢复备份？'),
-                    content: Text(summary),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('恢复'),
-                      ),
-                    ],
+                barrierLabel: '恢复备份',
+                title: const Text('恢复备份？'),
+                content: Text(summary),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('取消'),
                   ),
-                ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('恢复'),
+                  ),
+                ],
               ) ??
               false;
         }
@@ -763,45 +751,42 @@ class _StorageScreenState extends State<StorageScreen> {
                 ],
               ),
             )
-          : await showDialog<String>(
+          : await showFloatingDialog<String>(
               context: context,
-              builder: (context) => GlassDialogShell(
-                child: SimpleDialog(
-                  title: const Text('选择下载位置'),
-                  children: [
-                    for (final entry in directories.entries)
-                      SimpleDialogOption(
-                        onPressed: () => Navigator.pop(context, entry.key),
-                        child: Text(entry.value),
-                      ),
-                  ],
-                ),
+              barrierLabel: '选择下载位置',
+              title: const Text('选择下载位置'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final entry in directories.entries)
+                    FloatingOptionRow(
+                      label: entry.value,
+                      onTap: () => Navigator.pop(context, entry.key),
+                    ),
+                ],
               ),
             );
     } else {
       parent = await FilePicker.getDirectoryPath(dialogTitle: '选择下载保存位置');
     }
     if (parent == null || !mounted) return;
-    final yes = await showDialog<bool>(
+    final yes = await showFloatingDialog<bool>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('迁移已下载内容？'),
-          content: Text(
-            '将视频、合并成品及导出内容迁移到：\n$parent\n\n下载会先暂停，复制成功后清理旧目录。请保证目标有足够空间，并在完成后继续下载。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('迁移'),
-            ),
-          ],
-        ),
+      barrierLabel: '迁移已下载内容',
+      title: const Text('迁移已下载内容？'),
+      content: Text(
+        '将视频、合并成品及导出内容迁移到：\n$parent\n\n下载会先暂停，复制成功后清理旧目录。请保证目标有足够空间，并在完成后继续下载。',
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('迁移'),
+        ),
+      ],
     );
     if (yes != true || !mounted) return;
     setState(() {

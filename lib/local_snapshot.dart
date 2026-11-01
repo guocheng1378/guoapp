@@ -42,6 +42,7 @@ class LocalSnapshot {
     'lanSettings',
     'lanReceipts',
     'skipMarks',
+    'episodeProgress',
   };
 
   /// 迁出为本地文件的大块剧库键（默认档为顶层键，其余档为
@@ -56,6 +57,7 @@ class LocalSnapshot {
     'lanRecords',
     'lanReceipts',
     'skipMarks',
+    'episodeProgress',
   };
 
   static const globalKeys = {
@@ -83,7 +85,7 @@ class LocalSnapshot {
       globalKeys.contains(key) ||
       libraryKeys.contains(key) ||
       RegExp(
-        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks)$',
+        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks|episodeProgress)$',
       ).hasMatch(key);
 
   /// 是否为需要落文件的重键（默认档顶层键或 profile 档键）。

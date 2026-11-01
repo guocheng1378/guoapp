@@ -10,6 +10,7 @@ import 'core_bridge.dart';
 import 'download_picker.dart';
 import 'download_summary.dart';
 import 'downloads_screen.dart';
+import 'floating_card.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -148,7 +149,7 @@ class _DetailScreenState extends State<DetailScreen> {
         return;
       }
       setState(() {
-        _error = error.toString();
+        _error = friendlyError(error);
         _loading = false;
       });
       widget.repository.catalogUpdates.publish(
@@ -231,7 +232,7 @@ class _DetailScreenState extends State<DetailScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ).showSnackBar(SnackBar(content: Text(friendlyError(error))));
       }
     }
   }
@@ -246,37 +247,33 @@ class _DetailScreenState extends State<DetailScreen> {
       return;
     }
     if (detail.episodes[index].vip) {
-      final accepted = await showDialog<bool>(
+      final accepted = await showFloatingDialog<bool>(
         context: context,
-        builder: (context) => GlassDialogShell(
-          child: AlertDialog(
-            title: const Text('这是一集 VIP 内容'),
-            content: const Text('站源可能只提供试看或限制播放。'),
-            actions: [
-              TextButton(
-                autofocus: AppLayout.isTelevision(context),
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('尝试播放'),
-              ),
-            ],
+        barrierLabel: 'VIP 内容',
+        title: const Text('这是一集 VIP 内容'),
+        content: const Text('站源可能只提供试看或限制播放。'),
+        actions: [
+          TextButton(
+            autofocus: AppLayout.isTelevision(context),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
           ),
-        ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('尝试播放'),
+          ),
+        ],
       );
       if (accepted != true || !mounted) {
         return;
       }
     }
-    final saved = widget.store.watched(detail.drama.id);
-    final position =
-        resume &&
-            saved?.episode == detail.episodes[index].number &&
-            !saved!.finished
-        ? saved.position
-        : 0.0;
+    // 续播进度按（剧, 集）读取：回头重看/换集互不覆盖（episodeWatched
+    // 内含旧版单条记录的迁移兜底）。
+    final saved = resume
+        ? widget.store.episodeWatched(detail.drama.id, detail.episodes[index].number)
+        : null;
+    final position = saved != null && !saved.finished ? saved.position : 0.0;
     if (!mounted || _profileEpoch != widget.store.profileEpoch) {
       return;
     }

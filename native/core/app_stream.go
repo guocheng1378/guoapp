@@ -36,6 +36,10 @@ type nativeStreamSession struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	lastUsed    time.Time
+	// seq 是会话的单调使用序号（打开与每次请求都推进），逐出时按它排序。
+	// lastUsed 只分辨到毫秒，短时间内批量打开的多集会同毫秒打平，用它排序
+	// 会把正在播的会话随机逐出。
+	seq         uint64
 	refresher   func(context.Context) (providerMedia, error)
 	renewMu     sync.Mutex
 	renewedAt   time.Time
@@ -56,7 +60,15 @@ type nativeStreamServer struct {
 	downloader *Downloader
 	address    string
 	sessions   map[string]*nativeStreamSession
-	server     *http.Server
+	// seqNext 是会话使用序号的发号器，只在 mu 保护下自增。
+	seqNext uint64
+	server  *http.Server
+}
+
+// nativeTouch 推进会话的最近使用序号（调用方需持有 stream.mu）。
+func (stream *nativeStreamServer) nativeTouch(session *nativeStreamSession) {
+	stream.seqNext++
+	session.seq = stream.seqNext
 }
 
 func (stream *nativeStreamServer) nativeRequest(request *http.Request) (*http.Response, error) {
@@ -283,6 +295,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 		session.refresher = refresher[0]
 	}
 	stream.mu.Lock()
+	stream.nativeTouch(session)
 	for id, old := range stream.sessions {
 		if time.Since(old.lastUsed) > 10*time.Minute {
 			old.cancel()
@@ -293,7 +306,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 	if len(stream.sessions) >= 8 {
 		oldest := ""
 		for id, old := range stream.sessions {
-			if oldest == "" || old.lastUsed.Before(stream.sessions[oldest].lastUsed) {
+			if oldest == "" || old.seq < stream.sessions[oldest].seq {
 				oldest = id
 			}
 		}
@@ -539,15 +552,16 @@ func (session *nativeStreamSession) nativeRenewAssetAsync(ctx context.Context, i
 	return results
 }
 
-// nativeLastUsed 返回流会话最近一次被播放器读取的时间；会话已不存在时
-// 返回零值（视为完全空闲），供播放会话逐出时优先清理。
-func (stream *nativeStreamServer) nativeLastUsed(token string) time.Time {
+// nativeSequence 返回流会话的最近使用序号；会话已不存在时返回 0（视为
+// 完全空闲），供播放会话逐出时优先清理。序号单调递增，毫秒内批量打开
+// 的会话也能分出先后，逐出结果确定。
+func (stream *nativeStreamServer) nativeSequence(token string) uint64 {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if session := stream.sessions[token]; session != nil {
-		return session.lastUsed
+		return session.seq
 	}
-	return time.Time{}
+	return 0
 }
 
 // nativeForward 将播放器对资产代理地址的请求转发到真实媒体地址。红果等
@@ -640,6 +654,7 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	session := stream.sessions[parts[0]]
 	if session != nil {
 		session.lastUsed = time.Now()
+		stream.nativeTouch(session)
 	}
 	stream.mu.Unlock()
 	if session == nil {

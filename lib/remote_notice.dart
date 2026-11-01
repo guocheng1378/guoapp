@@ -23,12 +23,20 @@ import 'core_bridge.dart';
 import 'folme.dart';
 import 'glass.dart';
 
-/// 回退拉取地址：raw.githubusercontent 改文件即时生效，优先；
-/// jsdelivr 双域名仅在国内 raw 不可达时兜底。
+/// 回退拉取地址（顺序即回退优先级）：
+/// 1) raw.githubusercontent：改文件即时生效，但国内常被墙（约 3s 超时后跳下一源）；
+/// 2) 国内 GitHub 文件代理 / 镜像（ghproxy 系、kkgithub）：即时、绕墙；
+/// 3) jsdelivr 多域名兜底：国内一般可达，但分支引用最长约 12h 缓存延迟。
+/// 任一源返回非 200 / 非 JSON 都会自动跳下一个，全失败才静默。
 const List<String> remoteNoticeUrls = <String>[
   'https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
+  'https://ghproxy.net/https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
+  'https://mirror.ghproxy.com/https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
+  'https://raw.kkgithub.com/guocheng1378/guoapp/main/app_config.json',
   'https://fastly.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
   'https://cdn.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
+  'https://gcore.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
+  'https://testingcf.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
 ];
 
 /// 配置未提供 update.url 时的默认下载页。

@@ -180,11 +180,6 @@ func TestNativePlaybackEvictionKeepsActiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := newNativeStreamServer(engine.downloader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.server.Close()
 	open := func() (string, string) {
 		choice := nativePlaybackChoices(providerMedia{URL: "https://media.test/episode.mp4"}, 0)
 		plan, err := engine.nativeOpenPlayback(context.Background(), choice)
@@ -197,13 +192,25 @@ func TestNativePlaybackEvictionKeepsActiveSession(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		open()
 	}
-	// 播放器持续读取活跃会话：直接推进 lastUsed（真实请求受环境时序干
-	// 扰，不可作为确定性断言依据），之后新建会话时不得把它挤出。
-	stream.mu.Lock()
-	if session := stream.sessions[activeToken]; session != nil {
-		session.lastUsed = time.Now()
+	// 播放器持续读取活跃会话：直接推进使用序号（真实请求受环境时序干扰，
+	// 毫秒级 lastUsed 在同批打开时会打平），之后新建会话时不得把它挤出。
+	// plan.Session 是播放会话令牌，对应的流令牌要经 playbacks 反查；且必
+	// 须写在引擎自己的流服务上——另起一个 nativeStreamServer 是空表。
+	engine.mu.Lock()
+	activeStream := engine.playbacks[activeToken].streamSession
+	engine.mu.Unlock()
+	if activeStream == "" {
+		t.Fatal("active playback missing before eviction")
 	}
-	stream.mu.Unlock()
+	engine.stream.mu.Lock()
+	session := engine.stream.sessions[activeStream]
+	if session == nil {
+		engine.stream.mu.Unlock()
+		t.Fatal("active stream session missing before eviction")
+	}
+	session.lastUsed = time.Now()
+	engine.stream.nativeTouch(session)
+	engine.stream.mu.Unlock()
 	if status, _ := readRenewBody(t, active); status == http.StatusGone {
 		t.Fatal("active session gone before eviction")
 	}
@@ -214,13 +221,11 @@ func TestNativePlaybackEvictionKeepsActiveSession(t *testing.T) {
 			t.Logf("playback %s.. stream=%s.. created=%v", token[:8], pb.streamSession[:8], pb.created.Format("15:04:05.000"))
 		}
 		engine.mu.Unlock()
-		stream.mu.Lock()
-		for id, s := range stream.sessions {
-			s.mu.Lock()
-			t.Logf("stream %s.. lastUsed=%v", id[:8], s.lastUsed.Format("15:04:05.000"))
-			s.mu.Unlock()
+		engine.stream.mu.Lock()
+		for id, s := range engine.stream.sessions {
+			t.Logf("stream %s.. seq=%d lastUsed=%v", id[:8], s.seq, s.lastUsed.Format("15:04:05.000"))
 		}
-		stream.mu.Unlock()
+		engine.stream.mu.Unlock()
 		t.Fatal("active session was evicted while newer idle sessions existed")
 	}
 }

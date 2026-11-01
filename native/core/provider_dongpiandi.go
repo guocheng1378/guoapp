@@ -307,12 +307,22 @@ func dongpiandiThrottled(err error) bool {
 // 重试，但重试次数按场景给：单集播放期可以等（2 次），详情页几十集批量
 // 预兑换不能等（0 次，撞限流立刻熔断），否则累计退避会把详情页拖成分钟级
 // 转圈。兑换残缺的结果由调用方决定不写缓存，播放期自然会补。
+// 返回值 throttled 报告本轮是否撞过站点限流（429）——调用方据此把重兑冷却
+// 升到 30s 档，别让每 15s 一次的重兑循环持续撞限流。
 func dongpiandiRedeemTickets(ctx context.Context, client *dongpiandiClient, tickets []dongpiandiLine) []dongpiandiLine {
-	return dongpiandiRedeemTicketsRetry(ctx, client, tickets, 2)
+	redeemed, _ := dongpiandiRedeemTicketsRetry(ctx, client, tickets, 2)
+	return redeemed
 }
 
-func dongpiandiRedeemTicketsRetry(ctx context.Context, client *dongpiandiClient, tickets []dongpiandiLine, retries int) []dongpiandiLine {
+func dongpiandiRedeemTicketsRetry(ctx context.Context, client *dongpiandiClient, tickets []dongpiandiLine, retries int) ([]dongpiandiLine, bool) {
 	out := make([]dongpiandiLine, len(tickets))
+	var throttledMu sync.Mutex
+	throttled := false
+	markThrottled := func() {
+		throttledMu.Lock()
+		throttled = true
+		throttledMu.Unlock()
+	}
 	sem := client.redeemSlots()
 	var wg sync.WaitGroup
 	for i, t := range tickets {
@@ -323,6 +333,9 @@ func dongpiandiRedeemTicketsRetry(ctx context.Context, client *dongpiandiClient,
 			defer func() { <-sem }()
 			var err error
 			out[i], err = dongpiandiRedeemTicketLineErr(ctx, client, t)
+			if dongpiandiThrottled(err) {
+				markThrottled()
+			}
 			if dongpiandiDirectMediaLine(out[i]) || ctx.Err() != nil {
 				return
 			}
@@ -344,6 +357,9 @@ func dongpiandiRedeemTicketsRetry(ctx context.Context, client *dongpiandiClient,
 					return
 				}
 				out[i], err = dongpiandiRedeemTicketLineErr(ctx, client, t)
+				if dongpiandiThrottled(err) {
+					markThrottled()
+				}
 				if dongpiandiDirectMediaLine(out[i]) {
 					return
 				}
@@ -360,7 +376,7 @@ func dongpiandiRedeemTicketsRetry(ctx context.Context, client *dongpiandiClient,
 			kept = append(kept, l)
 		}
 	}
-	return kept
+	return kept, throttled
 }
 
 // dongpiandiCatalogCard 对应 /v1/browse/catalog 的单条记录。
@@ -1336,7 +1352,7 @@ func dongpiandiResolveLinesSet(ctx context.Context, client *dongpiandiClient, ep
 		}
 		if len(redeem) > 0 {
 			set.TicketLines = redeem
-			redeemed := dongpiandiRedeemTicketsRetry(ctx, client, redeem, retries)
+			redeemed, _ := dongpiandiRedeemTicketsRetry(ctx, client, redeem, retries)
 			set.Tickets = len(redeem)
 			set.Redeemed = len(redeemed)
 			lines = append(lines, redeemed...)
@@ -2138,21 +2154,48 @@ func dongpiandiOnlyActive(ctx context.Context) bool {
 //
 //	免掉重拉详情 + resolve token 两次站点往返。
 //
+// 兑换结果回写线路缓存并同步冷却档（限流 30s / 无票 60s，对齐
+// dongpiandiRouteLinesFresh 的口径，防止 429 之后每 15s 空转一轮）。
+// 「仅官方线路」下缓存里只剩三方线时不硬凑：返回 ok=false 让调用方走全链
+// 重解析（那边的错误文案才能说清是站点没票还是资源暂不可用），别拿三方直
+// 连把「仅官方」悄悄放倒。
 // 凑不出来返回 ok=false，调用方继续走全链解析。
 func (d *Downloader) dongpiandiMediaFromCachedLines(ctx context.Context, task Task, sourceID string) (providerMedia, bool) {
 	lines := dongpiandiCachedLines(sourceID)
 	if dongpiandiOfficialTryDue(sourceID) {
 		if tickets := dongpiandiCachedTickets(sourceID); len(tickets) > 0 {
 			dongpiandiMarkOfficialTried(sourceID)
-			redeemed := dongpiandiRedeemTicketsRetry(ctx, newDongpiandiClient(), tickets, 1)
+			redeemed, throttled := dongpiandiRedeemTicketsRetry(ctx, newDongpiandiClient(), tickets, 2)
 			if len(redeemed) > 0 {
 				dongpiandiCacheLines(sourceID, redeemed, len(redeemed) == len(tickets))
 				lines = append(lines, redeemed...)
+			}
+			if len(redeemed) < len(tickets) {
+				// 没全兑出来：按撞没撞限流定冷却档，别让 15s 一轮的重兑
+				// 循环持续撞 429（对齐 dongpiandiRouteLinesFresh 口径）。
+				if throttled {
+					dongpiandiMarkOfficialRetry(sourceID, dongpiandiOfficialRetryGapThrottl)
+				} else {
+					dongpiandiMarkOfficialExhausted(sourceID)
+				}
 			}
 		}
 	}
 	if len(lines) == 0 {
 		return providerMedia{}, false
+	}
+	if dongpiandiOnlyActive(ctx) {
+		hasOfficial := false
+		for _, line := range lines {
+			if line.Official {
+				hasOfficial = true
+				break
+			}
+		}
+		if !hasOfficial {
+			// 缓存里只剩三方：进全链重新解析拿官方线/给出准确报错。
+			return providerMedia{}, false
+		}
 	}
 	curated := dongpiandiCurateLines(ctx, lines, 1200*time.Millisecond)
 	if len(curated) == 0 {

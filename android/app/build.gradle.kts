@@ -32,11 +32,11 @@ android {
 
     defaultConfig {
         applicationId = "com.duanju.duanju_app"
-        // minSdk 26：adaptive-icon 三件套要求 API 26+（drawable/app_icon.xml
-        // 无 legacy PNG 兜底）。降到 24 的前置=先补 mipmap 五密度 PNG
-        // （对标 Xanerix/guoapp 的 mipmap-*/ic_launcher 模式），见 2172 周期
-        // 报备，勿单独改此值。
-        minSdk = 26
+        // minSdk 24（Android 7.0）：工具链硬下限 23，依赖链下限 ffmpeg_kit=24，
+        // 24 即可达的最低档。adaptive-icon 三件套迁至 res/mipmap-anydpi-v26/，
+        // API 24/25 设备由 scripts/gen_legacy_icons.py 生成的 res/mipmap-*/
+        // app_icon.png（mdpi..xxxhdpi 五密度）兜底。改图标时同步重跑该脚本。
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         // versionName 附带 pubspec 构建号（flutter.versionCode 在此无 split-per-abi

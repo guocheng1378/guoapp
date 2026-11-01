@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/url"
 	"regexp"
 	"sort"
@@ -567,7 +568,12 @@ func vodIDString(value any) string {
 var stripTags = regexp.MustCompile(`<[^>]+>`)
 
 func stripHTMLTags(s string) string {
-	return stripTags.ReplaceAllString(s, "")
+	// vod_content 是 CMS 的 HTML 片段：先剥标签，再解 HTML 实体——
+	// 不然 &nbsp;/&amp;/&#39; 这类字面量原样进简介，播放器里就是一串
+	// 「&nbsp;, &nbsp;」乱码。&nbsp; 解出的是 U+00A0，归一成普通空格。
+	s = stripTags.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	return strings.ReplaceAll(s, "\u00a0", " ")
 }
 
 func firstMediaURL(play string) string {

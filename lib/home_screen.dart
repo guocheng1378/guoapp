@@ -52,6 +52,9 @@ const _floatingNavInset = 96.0;
 /// 站源长按菜单与 TV 站源菜单中「电视直播」条目的哨兵值。
 const _liveEntryChoice = '__live_tv__';
 
+/// 站源菜单「切换分类…」条目的哨兵值（显性跨类入口，见 _showSourceMenu）。
+const _switchCategoryChoice = '__switch_category__';
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
@@ -363,7 +366,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// 手机端站源切换玻璃菜单（TV 端走 PopupMenuButton 实底保焦点导航）。
-  /// 只列当前源所在分类下的源（想换类用长按站源岛弹三分类菜单，见 _pickSourceCategory）。
+  /// 只列当前源所在分类下的源；末尾附「切换分类…」显性入口——
+  /// 长按换类的手势很多人发现不了，菜单里给一条明确路径。
   Future<void> _showSourceMenu() async {
     final categories = _sourceCategories;
     if (categories.expand((category) => category.sources).length <= 1) return;
@@ -371,17 +375,29 @@ class _HomeScreenState extends State<HomeScreen> {
       (category) => category.sources.any((source) => source.id == _source.id),
       orElse: () => categories.first,
     );
-    final entries = <GlassMenuEntry<SourceSite>>[
-      GlassMenuEntry(current.sources.first, current.name, header: true),
-      for (final source in current.sources)
-        GlassMenuEntry(source, source.name, checked: source.id == _source.id),
-    ];
-    final picked = await showGlassMenu<SourceSite>(
+    final picked = await showGlassMenu<Object>(
       context: context,
       anchorKey: _sourceMenuKey,
-      entries: entries,
+      entries: [
+        GlassMenuEntry<Object>(
+          current.sources.first,
+          current.name,
+          header: true,
+        ),
+        for (final source in current.sources)
+          GlassMenuEntry<Object>(
+            source,
+            source.name,
+            checked: source.id == _source.id,
+          ),
+        GlassMenuEntry<Object>(_switchCategoryChoice, '切换分类…'),
+      ],
     );
-    if (picked != null) _changeSource(picked);
+    if (picked == _switchCategoryChoice) {
+      await _pickSourceCategory();
+      return;
+    }
+    if (picked is SourceSite) _changeSource(picked);
   }
 
   void _onMoreSelected(String value) {
@@ -1123,7 +1139,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _loading = false;
         _loadingMore = false;
         if (!more) _items = [];
-        _error = error.toString();
+        _error = friendlyError(error);
       });
     }
   }
@@ -2346,6 +2362,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           // 内容上缘即视口顶，小间隙即可。
                           displacement: 6,
                           child: CustomScrollView(
+                            // PageStorageKey：切走再切回时恢复滚动位置
+                            // （同 saved-library 的做法）。
+                            key: const PageStorageKey('home-catalog'),
                             controller: _scroll,
                             physics: const AlwaysScrollableScrollPhysics(),
                             slivers: [
@@ -2486,6 +2505,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     constraints.maxWidth - 2 * padding,
                   );
                   return CustomScrollView(
+                    // 同 classic 分支：切走再切回时恢复滚动位置。
+                    key: const PageStorageKey('home-catalog'),
                     controller: _scroll,
                     // 必须是 clamping 系物理：RefreshIndicator 依赖
                     // OverscrollNotification 触发，bouncing 物理不发该通知

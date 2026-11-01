@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
 import 'app_scaffold.dart';
-import 'glass.dart';
+import 'floating_card.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'models.dart';
@@ -73,74 +73,71 @@ class _MergeQueueScreenState extends State<MergeQueueScreen> {
       }
       final selected = <String>{};
       var cleanup = false;
-      final accepted = await showDialog<bool>(
+      final accepted = await showFloatingDialog<bool>(
         context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, change) => GlassDialogShell(
-            child: AlertDialog(
-            title: const Text('选择要合并的剧'),
-            content: SizedBox(
-              width: 520,
-              height: MediaQuery.sizeOf(context).height * .6,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('按已有的连续集数合并，每次最多加入 50 部。中断后可从保存的步骤继续。'),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: rows.isEmpty
-                        ? const Center(child: Text('请先下载至少两集连续视频'))
-                        : ListView.builder(
-                            itemCount: rows.length,
-                            itemBuilder: (_, index) {
-                              final row = rows[index];
-                              return CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                value: selected.contains(row.key),
-                                title: Text(row.value.first.drama.title),
-                                subtitle: Text(
-                                  errors[row.key] ??
-                                      '已下载 ${row.value.length} 集 · 第 ${row.value.map((job) => job.episode.number).reduce((a, b) => a < b ? a : b)}–${row.value.map((job) => job.episode.number).reduce((a, b) => a > b ? a : b)} 集',
-                                ),
-                                onChanged: errors.containsKey(row.key)
-                                    ? null
-                                    : (value) => change(() {
-                                        if (value == true &&
-                                            selected.length < 50) {
-                                          selected.add(row.key);
-                                        } else {
-                                          selected.remove(row.key);
-                                        }
-                                      }),
-                              );
-                            },
-                          ),
-                  ),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: cleanup,
-                    title: const Text('完成后删除原分集'),
-                    subtitle: const Text('仅在成品通过完整解码并保存后删除；默认保留原视频。'),
-                    onChanged: (value) => change(() => cleanup = value == true),
-                  ),
-                ],
-              ),
+        barrierLabel: '选择要合并的剧',
+        width: 520,
+        title: const Text('选择要合并的剧'),
+        content: StatefulBuilder(
+          builder: (context, change) => SizedBox(
+            height: MediaQuery.sizeOf(context).height * .6,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('按已有的连续集数合并，每次最多加入 50 部。中断后可从保存的步骤继续。'),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: rows.isEmpty
+                      ? const Center(child: Text('请先下载至少两集连续视频'))
+                      : ListView.builder(
+                          itemCount: rows.length,
+                          itemBuilder: (_, index) {
+                            final row = rows[index];
+                            return CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              value: selected.contains(row.key),
+                              title: Text(row.value.first.drama.title),
+                              subtitle: Text(
+                                errors[row.key] ??
+                                    '已下载 ${row.value.length} 集 · 第 ${row.value.map((job) => job.episode.number).reduce((a, b) => a < b ? a : b)}–${row.value.map((job) => job.episode.number).reduce((a, b) => a > b ? a : b)} 集',
+                              ),
+                              onChanged: errors.containsKey(row.key)
+                                  ? null
+                                  : (value) => change(() {
+                                      if (value == true &&
+                                          selected.length < 50) {
+                                        selected.add(row.key);
+                                      } else {
+                                        selected.remove(row.key);
+                                      }
+                                    }),
+                            );
+                          },
+                        ),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: cleanup,
+                  title: const Text('完成后删除原分集'),
+                  subtitle: const Text('仅在成品通过完整解码并保存后删除；默认保留原视频。'),
+                  onChanged: (value) => change(() => cleanup = value == true),
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: selected.isEmpty
-                    ? null
-                    : () => Navigator.pop(context, true),
-                child: Text('加入 ${selected.length} 部'),
-              ),
-            ],
-          ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: selected.isEmpty
+                ? null
+                : () => Navigator.pop(context, true),
+            child: Text('加入 ${selected.length} 部'),
+          ),
+        ],
       );
       if (accepted != true || !mounted || !_allowed) return;
       final count = await widget.library.merges.enqueue([

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
-import 'glass.dart';
+import 'floating_card.dart';
 import 'models.dart';
 import 'remote_widgets.dart';
 import 'app_icons.dart';
@@ -32,47 +32,46 @@ class EpisodeRangeBar extends StatelessWidget {
   Future<void> _jump(BuildContext context) async {
     final controller = TextEditingController();
     String? error;
-    final index = await showDialog<int>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) {
-          void submit() {
-            final number = int.tryParse(controller.text.trim());
-            final found = episodes.indexWhere(
-              (episode) => episode.number == number,
-            );
-            if (found < 0) {
-              setState(() => error = '没有找到这一集，请输入已有集数');
-            } else {
-              Navigator.pop(context, found);
-            }
-          }
+    void Function(VoidCallback)? setStateDialog;
+    void submit() {
+      final number = int.tryParse(controller.text.trim());
+      final found = episodes.indexWhere(
+        (episode) => episode.number == number,
+      );
+      if (found < 0) {
+        setStateDialog?.call(() => error = '没有找到这一集，请输入已有集数');
+      } else {
+        Navigator.of(context, rootNavigator: true).pop(found);
+      }
+    }
 
-          return GlassDialogShell(
-            child: AlertDialog(
-              title: const Text('跳转到指定集数'),
-              content: TextField(
-                controller: controller,
-                autofocus: true,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: InputDecoration(
-                  labelText: '集数',
-                  errorText: error,
-                ),
-                onSubmitted: (_) => submit(),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('取消'),
-                ),
-                FilledButton(onPressed: submit, child: const Text('定位')),
-              ],
+    final index = await showFloatingDialog<int>(
+      context: context,
+      barrierLabel: '跳转集数',
+      title: const Text('跳转到指定集数'),
+      content: StatefulBuilder(
+        builder: (innerContext, setState) {
+          setStateDialog = setState;
+          return TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: InputDecoration(
+              labelText: '集数',
+              errorText: error,
             ),
+            onSubmitted: (_) => submit(),
           );
         },
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: submit, child: const Text('定位')),
+      ],
     );
     controller.dispose();
     if (index != null && context.mounted) onLocate(index);

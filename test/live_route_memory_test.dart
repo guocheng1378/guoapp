@@ -62,10 +62,11 @@ Future<SharedPreferences> _relaunch(SharedPreferencesStorePlatform platform) asy
   return prefs;
 }
 
-/// 打开阶段错误走 1.2s 延迟确认窗：一帧处理后推进窗口再处理切线。
+/// 打开阶段错误要等最短观察窗到点才确认切线：一帧处理后推进窗口再处理。
 Future<void> _settleFailure(WidgetTester tester) async {
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 1300));
+  await tester.pump(LivePlayerScreen.routeGrace);
+  await tester.pump(const Duration(milliseconds: 100));
   await tester.pump();
 }
 
@@ -209,6 +210,9 @@ void main() {
     // 自动兜底不写记忆。
     expect(LiveRouteMemory.recall('xingwei', 'CCTV1'), 'http://broken/2.m3u8');
 
+    // 观察窗长于控制层自动隐藏（3.5s），此刻控制层已收起：先点画面唤回。
+    await tester.tap(find.byKey(const Key('live-player-gesture')));
+    await tester.pump();
     // 记忆线路（2）不是当前线路（1）：菜单里标「已记住」。
     await tester.tap(find.byKey(const Key('live-player-routes')));
     await tester.pumpAndSettle();

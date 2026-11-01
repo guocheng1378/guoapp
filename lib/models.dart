@@ -692,6 +692,39 @@ class WatchEntry {
   );
 }
 
+/// 单集续播进度：按（剧, 集）粒度存储，换集/回头重看互不覆盖。
+///
+/// 序列化为紧凑列表 `[position, duration, updatedAtISO]`——每集一条、
+/// 整部剧可能上百条，列表形态比对象键值省一半体积。
+class EpisodeProgress {
+  const EpisodeProgress({
+    required this.position,
+    required this.duration,
+    required this.updatedAt,
+  });
+  final double position;
+  final double duration;
+  final DateTime updatedAt;
+  bool get finished => duration > 1 && position >= duration - 1;
+  List<dynamic> toJson() => [position, duration, updatedAt.toIso8601String()];
+
+  /// 防御解析：形态不符返回 null，单条损坏不影响整表。
+  static EpisodeProgress? fromJson(Object? row) {
+    if (row is! List || row.length < 3) return null;
+    final position = (row[0] as num?)?.toDouble();
+    final duration = (row[1] as num?)?.toDouble();
+    final updatedAt = DateTime.tryParse(row[2]?.toString() ?? '');
+    if (position == null || duration == null || updatedAt == null) {
+      return null;
+    }
+    return EpisodeProgress(
+      position: position,
+      duration: duration,
+      updatedAt: updatedAt,
+    );
+  }
+}
+
 class DownloadJob {
   const DownloadJob({
     required this.id,

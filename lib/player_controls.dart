@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'danmaku_controller.dart';
@@ -48,6 +49,8 @@ class PlayerControls extends StatefulWidget {
     this.enhancement,
     this.onNext,
     this.hasNext = false,
+    this.onPrevious,
+    this.hasPrevious = false,
     this.compact = false,
     this.landscapeChrome = false,
     this.showQuality = true,
@@ -100,6 +103,10 @@ class PlayerControls extends StatefulWidget {
   final VoidCallback? onNext;
   final bool hasNext;
 
+  /// 上一集（下一集左侧「|◀」）；hasPrevious=false 时置灰。
+  final VoidCallback? onPrevious;
+  final bool hasPrevious;
+
   /// 非全屏竖屏：视频区只有 200 来 dp，套两行会吃掉半屏画面，
   /// 降级为单行紧凑栏。
   final bool compact;
@@ -134,6 +141,11 @@ class _PlayerControlsState extends State<PlayerControls> {
 
   /// 横屏锁定：控制栏收起且点击画面不再唤出，只留左中锁钮可解锁。
   bool _locked = false;
+
+  /// 锁定态点击画面的解锁提示（约 1.6s 自动消失）：
+  /// 静默无响应会让用户以为画面坏了、不知道怎么解锁。
+  bool _lockHint = false;
+  Timer? _lockHintTimer;
 
   /// 控制栏子树是否在树上：淡出 180ms 窗口内保持，结束后下线停绘。
   bool _fading = true;
@@ -282,7 +294,17 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   void _tap() {
-    if (widget.interactions.suppressTap || _locked) return;
+    if (widget.interactions.suppressTap) return;
+    if (_locked) {
+      // 锁定态点击不再静默：轻触感 + 短暂提示解锁入口在哪。
+      HapticFeedback.selectionClick();
+      setState(() => _lockHint = true);
+      _lockHintTimer?.cancel();
+      _lockHintTimer = Timer(const Duration(milliseconds: 1600), () {
+        if (mounted) setState(() => _lockHint = false);
+      });
+      return;
+    }
     widget.onFocusSurface();
     // 单击切换控制条显隐；控制栏收起后子树会下线，必须走 _setVisible
     // 才会重新上线。
@@ -382,6 +404,7 @@ class _PlayerControlsState extends State<PlayerControls> {
   void dispose() {
     _hideTimer?.cancel();
     _fadeTimer?.cancel();
+    _lockHintTimer?.cancel();
     widget.interactions.removeListener(_interactionChanged);
     for (final subscription in _subscriptions) {
       subscription.cancel();
@@ -501,6 +524,26 @@ class _PlayerControlsState extends State<PlayerControls> {
                 // 再也解不开锁、只能退出页面。
                 if (widget.landscapeChrome && (widget.enabled || _locked))
                   _lockButton(visible || _locked),
+                if (_lockHint)
+                  IgnorePointer(
+                    child: Align(
+                      alignment: const Alignment(0, .22),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: .62),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          '已锁定 · 点左侧锁钮解锁',
+                          style: TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  ),
                 _gestureFeedback(),
               ],
             ),
@@ -836,6 +879,19 @@ class _PlayerControlsState extends State<PlayerControls> {
           child: Row(
             children: [
               _playPauseButton(playing: playing),
+              // 上一集在播放键旁（next 的左侧）；无上一集时整颗隐藏。
+              if (widget.onPrevious != null) ...[
+                const SizedBox(width: 4),
+                _toolIcon(
+                  key: const ValueKey('player-previous-episode'),
+                  tooltip: '上一集',
+                  icon: AppIcon(AppIcons.skipPrevious, size: 22),
+                  onPressed:
+                      widget.enabled && widget.hasPrevious
+                      ? widget.onPrevious
+                      : null,
+                ),
+              ],
               // 下一集在左侧播放键旁（用户定调：放回左侧）。
               _toolIcon(
                 key: const ValueKey('player-next-episode'),

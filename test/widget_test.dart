@@ -212,7 +212,7 @@ void main() {
       ),
     );
     await local.toggleFavorite(FixtureRepository.free);
-    final restored = LocalStore(local.preferences);
+    final restored = LocalStore(local.preferences, files: local.files);
     expect(restored.watched(FixtureRepository.free.id)?.position, 18.5);
     expect(restored.watched(FixtureRepository.free.id)?.episode, 2);
     expect(restored.isFavorite(FixtureRepository.free.id), isTrue);

@@ -13,8 +13,9 @@ class ScriptedPlayer extends PlatformPlayer {
   final rates = <double>[];
   int stops = 0;
   int pauses = 0;
-  /// 模拟死链：url 含 'dead' 时 open 后只发 START_FILE（playing+buffering），
-  /// 之后无任何事件（不缓冲完成、不出画、不报错）——用于 12s watchdog 用例。
+  /// 模拟慢线路：url 含 'slow' 时同样只发 START_FILE 并保持 buffering=true，
+  /// 但它是「活」的——等待用例用 injectBuffering(false) 手动出画（2026-10-31
+  /// 用于验证慢连接不会被切线逻辑提前判死）。
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     final media = playable as Media;
@@ -23,7 +24,8 @@ class ScriptedPlayer extends PlatformPlayer {
     // 模拟 MPV_EVENT_START_FILE：拉流前先发 playing=true + buffering=true，
     // 直到真正解码出画（core-idle=0）才落 buffering=false。
     final hang = media.uri.contains('dead');
-    final failed = !hang && media.uri.contains('broken');
+    final slow = media.uri.contains('slow');
+    final failed = !hang && !slow && media.uri.contains('broken');
     state = state.copyWith(
       position: failed ? Duration.zero : media.start ?? Duration.zero,
       duration: failed ? Duration.zero : const Duration(minutes: 2),
@@ -37,7 +39,7 @@ class ScriptedPlayer extends PlatformPlayer {
     durationController.add(state.duration);
     playingController.add(play);
     bufferingController.add(true);
-    if (hang) {
+    if (hang || slow) {
       return;
     }
     if (failed) {

@@ -844,7 +844,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && !_closed) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ).showSnackBar(SnackBar(content: Text(friendlyError(error))));
       }
     } finally {
       if (mounted && !_closed) setState(() => _panelOpen = false);
@@ -2750,6 +2750,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ? () => _play(_index + 1)
                   : null,
               hasNext: _index + 1 < widget.detail.episodes.length,
+              onPrevious: _index > 0 ? () => _play(_index - 1) : null,
+              hasPrevious: _index > 0,
               speed: _speed,
               qualityLabel: _qualityLabel,
               showQuality: true,
@@ -3256,6 +3258,101 @@ class _PlayerScreenState extends State<PlayerScreen>
     label: label,
   );
 
+  /// 简介页「更新至 N 集」直达选集弹窗：半屏合并页底部嵌的是 240 高小窗，
+  /// 这里另开底部弹窗给完整网格，点选即切集。
+  Future<void> _showEpisodePickerDialog() async {
+    if (_closed) return;
+    if (widget.detail.episodes.isEmpty) {
+      _notice('暂无可选集数');
+      return;
+    }
+    _cancelAdvanceCountdown();
+    final picked = await showGeneralDialog<int>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '选集',
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: const Duration(milliseconds: 200),
+      transitionBuilder: (dialogContext, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.25),
+            end: Offset.zero,
+          ).animate(curved),
+          child: FadeTransition(opacity: curved, child: child),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final colors = Theme.of(dialogContext).colorScheme;
+        final size = MediaQuery.sizeOf(dialogContext);
+        final width = (size.width - 24).clamp(280.0, 560.0);
+        final height = (size.height * 0.55).clamp(220.0, 340.0);
+        return Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Material(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(12),
+              clipBehavior: Clip.antiAlias,
+              elevation: 8,
+              child: Container(
+                width: width,
+                height: height,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '选集 · 共 ${widget.detail.episodes.length} 集',
+                            style: TextStyle(
+                              color: colors.onSurface,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => Navigator.pop(dialogContext),
+                          icon: Icon(
+                            Icons.close,
+                            size: 20,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Expanded(
+                      child: PlayerEpisodeGrid(
+                        episodes: widget.detail.episodes,
+                        currentIndex: _index,
+                        keyPrefix: 'synopsis-episode',
+                        onSelected: (index) =>
+                            Navigator.pop(dialogContext, index),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (picked != null && mounted && !_closed && picked != _index) {
+      await _play(picked);
+    }
+  }
+
   /// 合并 Tab「简介」：上部简介信息流，底部嵌入选集连续网格，一页直出。
   Widget _mobileCombined() {
     final colors = Theme.of(context).colorScheme;
@@ -3328,7 +3425,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                         ),
                         if (drama.episodes > 0) ...[
                           Text(' · ', style: metaStyle),
-                          Text(drama.episodeLabel, style: metaStyle),
+                          MetaLink(
+                            label: drama.episodeLabel,
+                            tooltip: '打开选集',
+                            onTap: _showEpisodePickerDialog,
+                          ),
                         ],
                         if (drama.releaseStatus.isNotEmpty &&
                             drama.releaseStatus != 'unknown') ...[

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'error_text.dart';
 import 'folme.dart';
 import 'glass.dart';
 import 'live_models.dart';
@@ -75,7 +76,7 @@ class _LiveScreenState extends State<LiveScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = friendlyError(e);
       });
     }
   }
@@ -319,54 +320,70 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   /// 频道卡：GlassSurface 玻璃行 + FolmePress 按压，替代原 ListTile。
+  /// 不可播频道（playable=false）整卡置灰并标注「暂无线路」——
+  /// 仍可点击（给「暂无可用线路」反馈），但视觉上与可播频道区分开，
+  /// 不再是「长得一样、点了才知道不能看」。
   Widget _channelRow(
     BuildContext context,
     ColorScheme scheme,
     LiveChannel channel,
   ) {
-    return Padding(
-      key: Key('live-channel-${channel.name}'),
-      padding: const EdgeInsets.only(bottom: 8),
-      child: FolmePress(
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _openChannel(channel),
-          child: GlassSurface(
-            radius: 16,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              child: Row(
-                children: [
-                  _channelAvatar(scheme, channel),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      channel.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w500,
+    final playable = channel.playable;
+    return Opacity(
+      opacity: playable ? 1 : .45,
+      child: Padding(
+        key: Key('live-channel-${channel.name}'),
+        padding: const EdgeInsets.only(bottom: 8),
+        child: FolmePress(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => _openChannel(channel),
+            child: GlassSurface(
+              radius: 16,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                child: Row(
+                  children: [
+                    _channelAvatar(scheme, channel),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        channel.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                  ),
-                  if (channel.urls.length > 1) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      '${channel.urls.length} 条线路',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: scheme.onSurfaceVariant,
+                    if (!playable) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '暂无线路',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
+                    ] else if (channel.urls.length > 1) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '${channel.urls.length} 条线路',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 20,
+                      color: scheme.onSurface.withValues(alpha: 0.25),
                     ),
                   ],
-                  const SizedBox(width: 2),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 20,
-                    color: scheme.onSurface.withValues(alpha: 0.25),
-                  ),
-                ],
+                ),
               ),
             ),
           ),

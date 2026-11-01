@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 
 export 'app_build.dart';
 
-const appVersion = '0.2.51';
+// 版本号单一来源：构建脚本通过 --dart-define=APP_VERSION 注入 pubspec 的 version 字段。
+// defaultValue 仅为 flutter test（不带 dart-define）兜底，生产构建必带真值。
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0.2.96+2255');
 
 ThemeData televisionTheme(ThemeData theme) {
   final colors = theme.colorScheme;

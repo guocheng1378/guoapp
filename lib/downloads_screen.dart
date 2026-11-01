@@ -8,6 +8,7 @@ import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'download_collections.dart';
 import 'download_summary.dart';
+import 'floating_card.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'local_media_screen.dart';
@@ -152,27 +153,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     }
     if (command == 'remove') {
       final completed = jobs.where((job) => job.completed).length;
-      final accepted = await showDialog<bool>(
+      final accepted = await showFloatingDialog<bool>(
         context: context,
-        builder: (context) => GlassDialogShell(
-          child: AlertDialog(
-            title: Text(completed > 0 ? '删除所选视频？' : '取消所选下载？'),
-            content: Text(
-              '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择"清理任务，保留视频"。',
-            ),
-            actions: [
-              TextButton(
-                autofocus: AppLayout.isTelevision(context),
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('保留'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('确认删除'),
-              ),
-            ],
-          ),
+        barrierLabel: '删除所选',
+        title: Text(completed > 0 ? '删除所选视频？' : '取消所选下载？'),
+        content: Text(
+          '共 ${jobs.length} 项${completed > 0 ? '，包含 $completed 个已下载视频' : ''}，文件也会删除。\n需要保留视频时，请选择"清理任务，保留视频"。',
         ),
+        actions: [
+          TextButton(
+            autofocus: AppLayout.isTelevision(context),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('保留'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认删除'),
+          ),
+        ],
       );
       if (accepted != true || !mounted || !_allowed) return;
     }
@@ -264,10 +262,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       job.drama,
       completed.map((entry) => entry.episode).toList(),
     );
-    final watch = widget.store.watched(job.drama.id);
-    final position = watch?.episode == job.episode.number && !watch!.finished
-        ? watch.position
-        : 0.0;
+    final saved = widget.store.episodeWatched(job.drama.id, job.episode.number);
+    final position = saved != null && !saved.finished ? saved.position : 0.0;
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -303,77 +299,72 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   Future<void> _filters() async {
     var state = _filter, release = _release;
-    final result = await showDialog<bool>(
+    final result = await showFloatingDialog<bool>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, change) => GlassDialogShell(
-          child: AlertDialog(
-          title: const Text('筛选下载合集'),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+      barrierLabel: '筛选下载合集',
+      width: 340,
+      title: const Text('筛选下载合集'),
+      content: StatefulBuilder(
+        builder: (context, change) => SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('任务状态'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  const Text('任务状态'),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final entry in const {
-                        'all': '全部任务',
-                        'pending': '未完成',
-                        'active': '进行中',
-                        'paused': '已暂停',
-                        'failed': '失败',
-                        'completed': '已下载',
-                        'archived': '已保留视频',
-                      }.entries)
-                        ChoiceChip(
-                          label: Text(entry.value),
-                          selected: state == entry.key,
-                          onSelected: (_) => change(() => state = entry.key),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  const Text('剧集状态'),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final entry in const {
-                        '': '全部',
-                        'ongoing': '连载中',
-                        'finished': '已完结',
-                      }.entries)
-                        ChoiceChip(
-                          label: Text(entry.value),
-                          selected: release == entry.key,
-                          onSelected: (_) => change(() => release = entry.key),
-                        ),
-                    ],
-                  ),
+                  for (final entry in const {
+                    'all': '全部任务',
+                    'pending': '未完成',
+                    'active': '进行中',
+                    'paused': '已暂停',
+                    'failed': '失败',
+                    'completed': '已下载',
+                    'archived': '已保留视频',
+                  }.entries)
+                    ChoiceChip(
+                      label: Text(entry.value),
+                      selected: state == entry.key,
+                      onSelected: (_) => change(() => state = entry.key),
+                    ),
                 ],
               ),
-            ),
+              const SizedBox(height: 20),
+              const Text('剧集状态'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final entry in const {
+                    '': '全部',
+                    'ongoing': '连载中',
+                    'finished': '已完结',
+                  }.entries)
+                    ChoiceChip(
+                      label: Text(entry.value),
+                      selected: release == entry.key,
+                      onSelected: (_) => change(() => release = entry.key),
+                    ),
+                ],
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('应用'),
-            ),
-          ],
-        ),
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('应用'),
+        ),
+      ],
     );
     if (result == true && mounted) {
       setState(() {

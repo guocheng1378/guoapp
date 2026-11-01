@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
 import 'core_bridge.dart';
 import 'follow_state.dart';
+import 'floating_card.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -26,7 +28,11 @@ Future<void> openPlaybackDirectly(
   // onTapOutside，起播前统一释放文本焦点——否则键盘会跟着 opaque:false
   // 浮层一路弹进播放器。电视模式不动遥控焦点。
   if (!AppLayout.isTelevision(context)) {
+    // unfocus 只把焦点移走；MIUI 输入法在编辑连接刚 detach 时偶发不收
+    // 键盘（candidate 栏残留），随 opaque:false 浮层进播放器。硬断编辑
+    // 连接并显式 hide，双保险。
     FocusManager.instance.primaryFocus?.unfocus();
+    SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
   }
   return Navigator.of(context).push(
     PageRouteBuilder<void>(
@@ -122,24 +128,21 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
         // VIP 确认期间停掉底下的转圈：对话框盖着转圈是纯噪音，
         // 且测试环境的 pumpAndSettle 会因这个永续动画永远等不到收敛。
         setState(() => _awaitingVip = true);
-        final accepted = await showDialog<bool>(
+        final accepted = await showFloatingDialog<bool>(
           context: context,
-          builder: (context) => GlassDialogShell(
-            child: AlertDialog(
-              title: const Text('这是一集 VIP 内容'),
-              content: const Text('站源可能只提供试看或限制播放。'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('尝试播放'),
-                ),
-              ],
+          barrierLabel: 'VIP 内容',
+          title: const Text('这是一集 VIP 内容'),
+          content: const Text('站源可能只提供试看或限制播放。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
             ),
-          ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('尝试播放'),
+            ),
+          ],
         );
         if (accepted != true) {
           if (mounted) {
@@ -153,10 +156,9 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
         }
         setState(() => _awaitingVip = false);
       }
-      final position =
-          watched?.episode == episode.number && watched?.finished == false
-          ? watched!.position
-          : 0.0;
+      // 续播位置按（剧, 集）读取（watched 只用于定位默认进哪一集）。
+      final saved = widget.store.episodeWatched(drama.id, episode.number);
+      final position = saved != null && !saved.finished ? saved.position : 0.0;
       if (!mounted ||
           generation != _generation ||
           _profileEpoch != widget.store.profileEpoch) {

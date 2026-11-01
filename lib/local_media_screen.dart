@@ -6,7 +6,8 @@ import 'package:flutter/services.dart';
 
 import 'core_bridge.dart';
 import 'app_scaffold.dart';
-import 'glass.dart';
+import 'error_text.dart';
+import 'floating_card.dart';
 import 'local_store.dart';
 import 'media_library.dart';
 import 'models.dart';
@@ -59,7 +60,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -85,31 +86,31 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
     for (final job in _jobs) {
       (groups[job.drama.id] ??= []).add(job);
     }
-    final selected = await showDialog<String>(
+    final selected = await showFloatingDialog<String>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: SimpleDialog(
-          title: const Text('导出哪部剧到 Emby？'),
-          children: [
-            if (_jobs.isNotEmpty)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, '*'),
-                child: Text('全部已下载 · ${_jobs.length} 集'),
-              ),
-            for (final entry in groups.entries)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, entry.key),
-                child: Text(
+      barrierLabel: '导出到 Emby',
+      title: const Text('导出哪部剧到 Emby？'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_jobs.isNotEmpty)
+            FloatingOptionRow(
+              label: '全部已下载 · ${_jobs.length} 集',
+              onTap: () => Navigator.pop(context, '*'),
+            ),
+          for (final entry in groups.entries)
+            FloatingOptionRow(
+              label:
                   '${entry.value.first.drama.title} · 已下载 ${entry.value.length} 集',
-                ),
-              ),
-            if (groups.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(20),
-                child: Text('请先下载分集'),
-              ),
-          ],
-        ),
+              onTap: () => Navigator.pop(context, entry.key),
+            ),
+          if (groups.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+              child: Text('请先下载分集'),
+            ),
+        ],
       ),
     );
     if (selected == null || !mounted) return;
@@ -122,7 +123,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
       await library.exportJobs(jobs);
       if (mounted) await _refresh();
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     }
   }
 
@@ -157,32 +158,29 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
   }
 
   Future<void> _remove(LocalMediaItem item) async {
-    final yes = await showDialog<bool>(
+    final yes = await showFloatingDialog<bool>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('删除此媒体文件？'),
-          content: Text(
-            '将删除此成品文件。已单独保存的原分集不受影响。${item.merged || item.special ? '' : '此分集不再自动导出，需要时可手动重新导出。'}',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('保留'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除'),
-            ),
-          ],
-        ),
+      barrierLabel: '删除媒体文件',
+      title: const Text('删除此媒体文件？'),
+      content: Text(
+        '将删除此成品文件。已单独保存的原分集不受影响。${item.merged || item.special ? '' : '此分集不再自动导出，需要时可手动重新导出。'}',
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('保留'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('删除'),
+        ),
+      ],
     );
     if (yes != true || !mounted) return;
     try {
       await library.remove(item);
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     }
   }
 
@@ -196,7 +194,7 @@ class _LocalMediaScreenState extends State<LocalMediaScreen> {
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = friendlyError(error));
     }
   }
 

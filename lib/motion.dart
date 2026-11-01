@@ -203,7 +203,7 @@ class _SkeletonBoxState extends State<SkeletonBox>
   }
 }
 
-/// 全局页面转场：淡入 + 0.97→1 微缩放，时长 [MotionDurations.page]。
+/// 全局页面转场：纯淡入淡出，时长 [MotionDurations.page]。
 ///
 /// 挂到 `pageTransitionsTheme` 后所有 MaterialPageRoute 自动生效。
 class FadeScalePageTransitionsBuilder extends PageTransitionsBuilder {
@@ -222,15 +222,11 @@ class FadeScalePageTransitionsBuilder extends PageTransitionsBuilder {
       curve: MotionCurves.standard,
       reverseCurve: MotionCurves.exit,
     );
+    // 只做淡入淡出：缩放会让整页每帧重绘（矩阵连续变化时 FadeTransition 的
+    // 缓存层失效，页内玻璃面随之每帧重采样），是回退/切页卡顿的主要来源。
     return _RouteTransitionScope(
       animation: animation,
-      child: FadeTransition(
-        opacity: curved,
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
-          child: child,
-        ),
-      ),
+      child: FadeTransition(opacity: curved, child: child),
     );
   }
 }

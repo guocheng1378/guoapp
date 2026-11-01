@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_scaffold.dart';
+import 'floating_card.dart';
 import 'local_store.dart';
 
 /// 直播源管理页（2026-10-22）：增删自填 m3u/m3u8/txt 订阅 URL（设备级），
@@ -37,34 +38,33 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
 
   Future<void> _add() async {
     final controller = TextEditingController();
-    final url = await showDialog<String>(
+    final url = await showFloatingDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        key: const Key('live-source-dialog'),
-        title: const Text('添加直播源'),
-        content: TextField(
-          key: const Key('live-source-input'),
-          controller: controller,
-          autofocus: true,
-          maxLines: 3,
-          minLines: 1,
-          decoration: const InputDecoration(
-            hintText: 'https://…/live.m3u（m3u / m3u8 / txt 订阅链接）',
-          ),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
+      barrierLabel: '添加直播源',
+      width: 320,
+      title: const Text('添加直播源'),
+      content: TextField(
+        key: const Key('live-source-input'),
+        controller: controller,
+        autofocus: true,
+        maxLines: 3,
+        minLines: 1,
+        decoration: const InputDecoration(
+          hintText: 'https://…/live.m3u（m3u / m3u8 / txt 订阅链接）',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const Key('live-source-confirm'),
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('添加'),
-          ),
-        ],
+        onSubmitted: (value) => Navigator.of(context).pop(value),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const Key('live-source-confirm'),
+          onPressed: () => Navigator.of(context).pop(controller.text),
+          child: const Text('添加'),
+        ),
+      ],
     );
     controller.dispose();
     final trimmed = url?.trim() ?? '';

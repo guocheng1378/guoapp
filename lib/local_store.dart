@@ -39,6 +39,9 @@ class LocalStore extends ChangeNotifier {
   int get lanRevision => _lanRevision;
   int get lanUrgentRevision => _lanUrgentRevision;
   final Map<String, WatchEntry> _history = {};
+  // per-episode 续播进度：dramaId → (集号 → 进度)。恢复点不再只认
+  // 「最后一集」，换集/回头重看互不覆盖（见 episodeWatched）。
+  final Map<String, Map<String, EpisodeProgress>> _episodeProgress = {};
   final Map<String, Drama> _favorites = {};
   final Map<String, FollowState> _followStates = {};
   // 后台追剧检查记录（FollowUpdater 轮转/去重/退避的依据），按用户隔离。
@@ -331,6 +334,7 @@ class LocalStore extends ChangeNotifier {
   void _loadLibrary() {
     _lanDocumentCache = null;
     _history.clear();
+    _episodeProgress.clear();
     _favorites.clear();
     _followStates.clear();
     _followChecks.clear();
@@ -342,6 +346,7 @@ class LocalStore extends ChangeNotifier {
         _history[entry.drama.id] = entry;
       } catch (_) {}
     }
+    _loadEpisodeProgress(_string(_key('episodeProgress')));
     for (final row in readJsonList(_string(_key('favorites')))) {
       try {
         final drama = Drama.fromJson(row);
@@ -831,6 +836,18 @@ class LocalStore extends ChangeNotifier {
       final nextFavorite = following == null
           ? null
           : _favorites[entry.drama.id]?.merge(current.drama);
+      // per-episode 进度：顺带写入（剧, 集）粒度表，随同一次 commit 落盘。
+      final progress = _trimEpisodeProgress(
+        Map.of(_episodeProgress)
+          ..[entry.drama.id] = {
+            ...?_episodeProgress[entry.drama.id],
+            entry.episode.toString(): EpisodeProgress(
+              position: current.position,
+              duration: current.duration,
+              updatedAt: current.updatedAt,
+            ),
+          },
+      );
       await _commit({
         _key('history'): jsonEncode(
           trim
@@ -841,6 +858,7 @@ class LocalStore extends ChangeNotifier {
                   .toList()
               : entries.values.map((entry) => entry.toJson()).toList(),
         ),
+        _key('episodeProgress'): _encodeEpisodeProgress(progress),
         if (nextState != null) ...{
           _key('followStates'): _encodeFollowStates(
             Map.of(_followStates)..[entry.drama.id] = nextState,
@@ -864,9 +882,87 @@ class LocalStore extends ChangeNotifier {
       }
       if (nextState != null) _followStates[entry.drama.id] = nextState;
       if (nextFavorite != null) _favorites[entry.drama.id] = nextFavorite;
+      _episodeProgress
+        ..clear()
+        ..addEntries(progress.entries);
       _lanDocumentCache = null;
       if (notify) _notify();
     });
+  }
+
+  /// 读取某剧某集的续播进度；无记录返回 null。
+  ///
+  /// 旧版本只存 per-drama 单条（[watched]）：迁移期兜底——单条记录的集数
+  /// 与查询集一致时直接把它当该集进度，升级后首个续播点不丢。
+  EpisodeProgress? episodeWatched(String dramaId, int episodeNumber) {
+    final progress = _episodeProgress[dramaId]?[episodeNumber.toString()];
+    if (progress != null) return progress;
+    final entry = _history[dramaId];
+    if (entry == null || entry.episode != episodeNumber) return null;
+    return EpisodeProgress(
+      position: entry.position,
+      duration: entry.duration,
+      updatedAt: entry.updatedAt,
+    );
+  }
+
+  // per-episode 进度全局上限：超出按 updatedAt 淘汰最旧（本次写入的记录
+  // 必然最新，永远保留）。每集一条紧凑列表，1200 条 ≈ 60KB，可控。
+  static const int _episodeProgressLimit = 1200;
+
+  Map<String, Map<String, EpisodeProgress>> _trimEpisodeProgress(
+    Map<String, Map<String, EpisodeProgress>> table,
+  ) {
+    var total = 0;
+    for (final episodes in table.values) {
+      total += episodes.length;
+    }
+    if (total <= _episodeProgressLimit) return table;
+    final rows = <MapEntry<String, EpisodeProgress>>[
+      for (final drama in table.entries)
+        for (final episode in drama.value.entries)
+          MapEntry('${drama.key}\u0000${episode.key}', episode.value),
+    ]..sort((a, b) => b.value.updatedAt.compareTo(a.value.updatedAt));
+    final kept = rows.take(_episodeProgressLimit).map((row) => row.key).toSet();
+    table.removeWhere((dramaId, episodes) {
+      episodes.removeWhere(
+        (episode, _) => !kept.contains('$dramaId\u0000$episode'),
+      );
+      return episodes.isEmpty;
+    });
+    return table;
+  }
+
+  String _encodeEpisodeProgress(
+    Map<String, Map<String, EpisodeProgress>> table,
+  ) => jsonEncode({
+    for (final drama in table.entries)
+      drama.key: {
+        for (final episode in drama.value.entries)
+          episode.key: episode.value.toJson(),
+      },
+  });
+
+  void _loadEpisodeProgress(String? raw) {
+    if (raw == null || raw.isEmpty) return;
+    Map<String, dynamic> table;
+    try {
+      table = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return;
+    }
+    for (final drama in table.entries) {
+      final episodes = drama.value;
+      if (episodes is! Map) continue;
+      final row = <String, EpisodeProgress>{};
+      for (final episode in episodes.entries) {
+        try {
+          final progress = EpisodeProgress.fromJson(episode.value);
+          if (progress != null) row[episode.key.toString()] = progress;
+        } catch (_) {}
+      }
+      if (row.isNotEmpty) _episodeProgress[drama.key.toString()] = row;
+    }
   }
 
   WatchEntry? mediaWatched(String id) {
@@ -906,7 +1002,7 @@ class LocalStore extends ChangeNotifier {
       if (locked || epoch != _epoch) return;
       await _commit(
         {},
-        remove: [_key('history')],
+        remove: [_key('history'), _key('episodeProgress')],
         clearSyncProgress: {..._history.keys, ...lanDocument.records.keys},
       );
       _loadLibrary();
@@ -924,6 +1020,10 @@ class LocalStore extends ChangeNotifier {
           _key('history'): jsonEncode(
             entries.values.map((entry) => entry.toJson()).toList(),
           ),
+          // 从「最近观看」移除该剧：分集续播进度一并清掉（_loadLibrary
+          // 会重载，内存随落盘自动收敛）。
+          _key('episodeProgress'):
+              _encodeEpisodeProgress(Map.of(_episodeProgress)..remove(id)),
         },
         clearSyncProgress: {id},
       );
@@ -1215,6 +1315,9 @@ class LocalStore extends ChangeNotifier {
             'mediaHistory': jsonDecode(
               _string(_key('mediaHistory', profile.id)) ?? '{}',
             ),
+            'episodeProgress': jsonDecode(
+              _string(_key('episodeProgress', profile.id)) ?? '{}',
+            ),
             'source': _string(_key('source', profile.id)) ?? '',
             'hideVip': _bool(_key('hideVip', profile.id)) ?? true,
             'playback': jsonDecode(
@@ -1274,6 +1377,24 @@ class LocalStore extends ChangeNotifier {
       }
       final states = library['followStates'] as Map? ?? {};
       final seriesCandidates = library['seriesCandidates'] as List? ?? [];
+      // per-episode 续播进度：上限与运行时裁剪口径一致（1200 条），逐条
+      // 防御解析，单条损坏整份备份作废。
+      final episodeProgress = library['episodeProgress'] as Map? ?? {};
+      var episodeProgressCount = 0;
+      for (final episodes in episodeProgress.values) {
+        if (episodes is! Map) {
+          throw const FormatException('备份剧集进度无效');
+        }
+        episodeProgressCount += episodes.length;
+        for (final row in episodes.values) {
+          if (EpisodeProgress.fromJson(row) == null) {
+            throw const FormatException('备份剧集进度无效');
+          }
+        }
+      }
+      if (episodeProgressCount > _episodeProgressLimit) {
+        throw const FormatException('备份剧集进度过多');
+      }
       final favoriteIds = favorites.map((row) => (row as Map)['id']).toSet();
       _readBackupFollowSync(library);
       if (states.length > 20000 ||
@@ -1349,6 +1470,9 @@ class LocalStore extends ChangeNotifier {
         ),
         _key('mediaHistory', profile.id): jsonEncode(
           library['mediaHistory'] ?? {},
+        ),
+        _key('episodeProgress', profile.id): jsonEncode(
+          library['episodeProgress'] ?? {},
         ),
         _key('source', profile.id): library['source'] as String,
         _key('hideVip', profile.id): library['hideVip'] as bool,

@@ -130,16 +130,13 @@ func (engine *nativeEngine) nativeOpenPlayback(ctx context.Context, choice nativ
 	}
 	if len(engine.playbacks) >= 8 {
 		// 边看边下载等场景会持续新建播放会话，逐出必须优先让路给正在
-		// 播放的一条：按流会话最近被播放器读取的时间比较，会话已消失
-		// 的视为完全空闲最先逐出，避免把正在观看的会话挤出导致断链。
-		victim, victimUsed := "", time.Time{}
+		// 播放的一条：按流会话最近被读取的使用序号比较（单调递增，毫
+		// 秒内批量打开也能分先后），会话已消失的视为完全空闲最先逐出，
+		// 避免把正在观看的会话挤出导致断链。
+		victim, victimSeq := "", uint64(0)
 		for token, old := range engine.playbacks {
-			used := time.Time{}
-			if idle := engine.stream.nativeLastUsed(old.streamSession); !idle.IsZero() {
-				used = idle
-			}
-			if victim == "" || used.Before(victimUsed) {
-				victim, victimUsed = token, used
+			if seq := engine.stream.nativeSequence(old.streamSession); victim == "" || seq < victimSeq {
+				victim, victimSeq = token, seq
 			}
 		}
 		expired = append(expired, engine.playbacks[victim].streamSession)

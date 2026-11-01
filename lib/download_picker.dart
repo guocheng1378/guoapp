@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'models.dart';
 import 'download_preferences.dart';
 import 'episode_browser.dart';
+import 'error_text.dart';
 import 'glass.dart';
 import 'remote_widgets.dart';
 import 'app_icons.dart';
@@ -90,7 +91,7 @@ class _DownloadPickerState extends State<DownloadPicker> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ).showSnackBar(SnackBar(content: Text(friendlyError(error))));
       }
     } finally {
       if (mounted) setState(() => _submitting = false);

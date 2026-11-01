@@ -6,6 +6,7 @@ import 'app_icons.dart';
 import 'cloud_backup.dart';
 import 'core_bridge.dart';
 import 'error_text.dart';
+import 'floating_card.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'remote_widgets.dart';
@@ -146,34 +147,31 @@ class _CloudBackupScreenState extends State<CloudBackupScreen> {
     final meta = remote.meta;
     final from = meta.platform.isEmpty ? '未知设备' : meta.platform;
     final version = meta.version.isEmpty ? '' : ' · ${meta.version}';
-    return showDialog<_RestoreAction>(
+    return showFloatingDialog<_RestoreAction>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('恢复云端备份'),
-          content: Text(
-            '云端备份：${_timeLabel(meta.exportedAt)}\n'
-            '来自：$from$version\n'
-            '大小：${_sizeLabel(remote.size)}\n\n'
-            '「合并追剧」只把云端记录并入当前用户，不影响本机其他数据；'
-            '「覆盖恢复」会用云端备份替换本机全部用户、追剧、历史与设置。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, _RestoreAction.replace),
-              child: const Text('覆盖恢复'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, _RestoreAction.merge),
-              child: const Text('合并追剧'),
-            ),
-          ],
-        ),
+      barrierLabel: '恢复云端备份',
+      title: const Text('恢复云端备份'),
+      content: Text(
+        '云端备份：${_timeLabel(meta.exportedAt)}\n'
+        '来自：$from$version\n'
+        '大小：${_sizeLabel(remote.size)}\n\n'
+        '「合并追剧」只把云端记录并入当前用户，不影响本机其他数据；'
+        '「覆盖恢复」会用云端备份替换本机全部用户、追剧、历史与设置。',
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _RestoreAction.replace),
+          child: const Text('覆盖恢复'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _RestoreAction.merge),
+          child: const Text('合并追剧'),
+        ),
+      ],
     );
   }
 

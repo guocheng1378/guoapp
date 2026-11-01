@@ -13,8 +13,9 @@ import 'glass_preferences.dart';
 /// σ 从顶边满值连续衰减到 0（几何级数 ramp、末端精确归零，无可见台阶），
 /// 与下方 tint 层的羽化同一条 falloff。
 ///
-/// tint 层 = **零黑配方**（v2239）：只提亮、不压暗 —— 白 30% + 冷灰 20% 的
-/// `screen` 层（见 [_LegacyTopFogTintPainter]）。官方三层混色里层1/层3 都是
+/// tint 层 = **零黑配方**（v2239）：只提亮、不压暗 —— 白 + 冷灰的 `screen`
+/// 层（见 [_LegacyTopFogTintPainter]；浓度 v2241 透明档：白 14% + 冷灰 6%）。
+/// 官方三层混色里层1/层3 都是
 /// 压暗层，在**深色海报**上必然压出黑带（用户连续三轮反馈"还有一层黑"），
 /// 官方 demo 之所以不显黑是因其背景是浅色 MIUI 壁纸。
 ///
@@ -106,9 +107,12 @@ class LegacyTopFog extends StatelessWidget {
 /// 黑蒙版"。用户连续三轮反馈"还有一层黑"。
 ///
 /// ## 现在的配方：只提亮、不压暗（雾的物理 = 散射光）
-/// - 层A `#4DFFFFFF` **screen**（白 30%）：暗部提亮成雾灰，**亮部完全不变**
+/// - 层A `#24FFFFFF` **screen**（白 14%）：暗部提亮成雾灰，**亮部完全不变**
 ///   （screen 在 cb=1 时结果仍是 1）→ 浅色壁纸顶栏零变化、深色海报变灰白雾；
-/// - 层B `#336C6C6C` **screen**（冷灰 20%）：给雾一点冷灰调，并进一步提亮。
+/// - 层B `#0F6C6C6C` **screen**（冷灰 6%）：给雾一点冷灰调，并轻微提亮。
+///
+/// 浓度演进：2239=30/20 → 2240=22/12（"再透点"）→ **2241=14/6**（用户
+/// "过浓，要更透明更轻薄"：遮挡感只来自这两层 tint，σ 与雾形不动）。
 ///
 /// **顶栏从此不可能出现黑色蒙版**（没有任何压暗/纯黑层）。要还原官方原配方
 /// （含 `#1A000000` darken + `#996C6C6C` luminosity + `#99060606` softLight +
@@ -150,11 +154,12 @@ class _LegacyTopFogTintPainter extends CustomPainter {
       return p;
     }
 
-    // ① 层A：白 22% screen —— 暗部提亮成雾灰，亮部不变（雾的主层）。
-    //    v2240 由 30% 降到 22%：用户要「再透点」= 更少遮挡、更通透。
-    canvas.drawRect(rect, layer(const Color(0x38FFFFFF), BlendMode.screen));
-    // ② 层B：冷灰 12% screen —— 雾的冷灰调 + 进一步提亮（原 20% → 12%）。
-    canvas.drawRect(rect, layer(const Color(0x1F6C6C6C), BlendMode.screen));
+    // ① 层A：白 14% screen —— 暗部提亮成雾灰，亮部不变（雾的主层）。
+    //    演进：2239=30% → 2240=22% → 2241=14%（用户「过浓」→ 更透明轻薄；
+    //    遮挡感只来自这两层 tint，σ/雾形不动）。
+    canvas.drawRect(rect, layer(const Color(0x24FFFFFF), BlendMode.screen));
+    // ② 层B：冷灰 6% screen —— 雾的冷灰调 + 轻微提亮（原 12% → 6%）。
+    canvas.drawRect(rect, layer(const Color(0x0F6C6C6C), BlendMode.screen));
 
     // ③ 官方原配方（**默认不启用**，仅留档；用户要"严格照搬官方"时启用）：
     //    canvas.drawRect(rect, layer(const Color(0x1A000000), BlendMode.darken));

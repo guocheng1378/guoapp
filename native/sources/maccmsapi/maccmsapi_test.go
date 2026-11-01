@@ -216,3 +216,26 @@ func TestDetailMapsOnlineDate(t *testing.T) {
 		t.Fatalf("期望 2 章，得到 %d", len(chapters))
 	}
 }
+
+func TestDetailDecodesHTMLEntitiesInIntro(t *testing.T) {
+	detail := `{"code":1,"msg":"ok","list":[
+  {"vod_id":12,"vod_name":"实体样本","type_id":46,"type_name":"短剧","vod_pic":"p1","vod_content":"<p>&nbsp;, &nbsp;地点——Seabrook社区&nbsp;僵尸（zombie）&amp;续作&#39;s</p>","vod_remarks":"已完结","vod_play_from":"ffm3u8","vod_play_url":"第1集$https://a/1.m3u8"}
+]}`
+	host := &fakeHost{body: detail}
+	source := newTestSource()
+	drama, _, err := source.Detail(context.Background(), host, "12")
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+	// vod_content 里的 HTML 实体必须解码成可读文本：字面量 &nbsp; 直接进
+	// 简介在播放器里就是「&nbsp;, &nbsp;」乱码（真机实拍实锤）。
+	if strings.Contains(drama.Desc, "&nbsp;") || strings.Contains(drama.Desc, "&amp;") || strings.Contains(drama.Desc, "&#39;") {
+		t.Fatalf("简介残留 HTML 实体: %q", drama.Desc)
+	}
+	if strings.ContainsRune(drama.Desc, '\u00a0') {
+		t.Fatalf("简介残留不换行空格: %q", drama.Desc)
+	}
+	if want := ",  地点——Seabrook社区 僵尸（zombie）&续作's"; drama.Desc != want {
+		t.Fatalf("简介解码结果不符: got %q want %q", drama.Desc, want)
+	}
+}

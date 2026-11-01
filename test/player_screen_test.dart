@@ -590,4 +590,40 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
   });
+
+  // 「更新至 N 集」弹窗选集（2026-10-31）：简介 meta 行的集数与站源/分类
+  // 同款链接样式，点击弹出底部选集弹窗，点选即切集。
+  testWidgets('synopsis episode label opens picker dialog and switches episode', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final repository = RouteRepository();
+      final player = ScriptedPlayer();
+      await mount(tester, repository, player, size: const Size(390, 844));
+
+      // 简介 meta 行的「共 2 集」可点（带「打开选集」提示）。
+      final label = find.byTooltip('打开选集');
+      expect(label, findsOneWidget);
+      await tester.tap(label);
+      await settleOperations(tester);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // 弹窗直出完整选集网格（keyPrefix=synopsis-episode，与底部嵌入网格区分）。
+      expect(find.text('选集 · 共 2 集'), findsOneWidget);
+      expect(find.byKey(const ValueKey('synopsis-episode-1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('synopsis-episode-2')), findsOneWidget);
+
+      // 点选第 2 集：弹窗关闭并切集（resolve 流水里出现第 2 集）。
+      await tester.tap(find.byKey(const ValueKey('synopsis-episode-2')));
+      await settleOperations(tester);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.text('选集 · 共 2 集'), findsNothing);
+      expect(repository.requestedEpisodes, [1, 2]);
+      expect(player.opened, hasLength(2));
+      await unmount(tester, player);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

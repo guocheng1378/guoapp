@@ -156,12 +156,23 @@ Future<CatalogView?> chooseCatalogView(
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(context, selected),
-                  child: const Text('应用'),
-                ),
+              Row(
+                children: [
+                  // 「应用」确认制：重置只改本地选中态，仍需点应用生效。
+                  OutlinedButton(
+                    onPressed: selected == const CatalogView()
+                        ? null
+                        : () => update(() => selected = const CatalogView()),
+                    child: const Text('重置'),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context, selected),
+                      child: const Text('应用'),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -257,6 +268,34 @@ Future<void> showCatalogFilterMenu({
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // 有非默认筛选时给出「重置全部」：一键回到源站顺序+
+                        // 全部状态，省得逐节点「全部」。
+                        if (selected != const CatalogView())
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: GestureDetector(
+                              key: const ValueKey('filter-reset'),
+                              onTap: () {
+                                update(() => selected = const CatalogView());
+                                onChanged(selected);
+                              },
+                              behavior: HitTestBehavior.opaque,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                                child: Text(
+                                  '重置全部',
+                                  style: Theme.of(dialogContext)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          dialogContext,
+                                        ).colorScheme.primary,
+                                      ),
+                                ),
+                              ),
+                            ),
+                          ),
                         _sectionLabel(dialogContext, '排序'),
                         const SizedBox(height: 6),
                         Wrap(

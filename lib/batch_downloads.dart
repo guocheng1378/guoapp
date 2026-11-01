@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core_bridge.dart';
 import 'download_summary.dart';
+import 'error_text.dart';
 import 'local_store.dart';
 import 'models.dart';
 
@@ -140,7 +141,7 @@ class BatchDownloads extends ChangeNotifier {
           );
           repository.catalogUpdates.publish(drama);
         } catch (error) {
-          if (_valid) item.error = error.toString();
+          if (_valid) item.error = friendlyError(error);
         } finally {
           item.loading = false;
           _notify();
@@ -207,7 +208,7 @@ class BatchDownloads extends ChangeNotifier {
             if (count > 0) DownloadSummary.instance.poke();
             _notify();
           } catch (error) {
-            if (_valid) item.error = error.toString();
+            if (_valid) item.error = friendlyError(error);
             break;
           }
         }

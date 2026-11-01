@@ -78,7 +78,7 @@ void main() {
       await store.removeHistory('hongguo:follow');
       expect(store.history, isEmpty);
       expect(store.following('hongguo:follow')!.status, FollowStatus.watched);
-      final restarted = LocalStore(store.preferences);
+      final restarted = LocalStore(store.preferences, files: store.files);
       addTearDown(restarted.dispose);
       expect(restarted.following('hongguo:follow')!.manuallyWatched, isTrue);
       expect(restarted.history, isEmpty);
@@ -101,7 +101,7 @@ void main() {
       await store.markUpdatesRead('hongguo:follow');
       expect(store.following('hongguo:follow')!.newEpisodes, 0);
       await store.refreshDrama(drama(14));
-      final restarted = LocalStore(store.preferences);
+      final restarted = LocalStore(store.preferences, files: store.files);
       addTearDown(restarted.dispose);
       expect(restarted.following('hongguo:follow')!.readEpisodes, 12);
       expect(restarted.following('hongguo:follow')!.newEpisodes, 2);
@@ -124,7 +124,7 @@ void main() {
         seasonOne.id,
         seasonTwo.id,
       ]);
-      final restarted = LocalStore(store.preferences);
+      final restarted = LocalStore(store.preferences, files: store.files);
       addTearDown(restarted.dispose);
       expect(restarted.following(seasonOne.id)!.newSeasons, 1);
       await restarted.markSeriesSeasonRead(seasonOne.id, seasonTwo.id);
@@ -165,7 +165,7 @@ void main() {
       plainSeasonOne.id,
       plainSeasonTwo.id,
     ]);
-    final restarted = LocalStore(store.preferences);
+    final restarted = LocalStore(store.preferences, files: store.files);
     addTearDown(restarted.dispose);
     expect(restarted.seriesDramasFor(plainSeasonOne).map((drama) => drama.id), [
       plainSeasonOne.id,
@@ -296,7 +296,7 @@ void main() {
       expect(await store.exportBackup(), before);
     }
     await store.preferences.reload();
-    final restarted = LocalStore(store.preferences);
+    final restarted = LocalStore(store.preferences, files: store.files);
     addTearDown(restarted.dispose);
     expect(await restarted.exportBackup(), before);
   });

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'app_layout.dart';
+import 'floating_card.dart';
 import 'follow_state.dart';
-import 'glass.dart';
 import 'glass_menu.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -64,35 +64,31 @@ Future<void> showDramaActions(
       ],
     );
   } else {
-    // TV/无锚点（长按、右键、遥控菜单键）：保留玻璃弹窗，焦点导航可靠。
-    choice = await showDialog<String>(
+    // 无锚点（长按、右键）：居中悬浮方框；TV 由 showFloatingDialog
+    // 自动保留玻璃壳 AlertDialog（遥控焦点导航可靠）。
+    choice = await showFloatingDialog<String>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: SimpleDialog(
-          title: Text(drama.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-          children: [
-            for (final entry in choices.indexed)
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, entry.$2.$1),
-                child: Row(
-                  children: [
-                    entry.$2.$3,
-                    const SizedBox(width: 14),
-                    Expanded(child: Text(entry.$2.$2)),
-                    if (entry.$2.$1 == 'status:${following?.status.name}')
-                      AppIcon(AppIcons.check, size: 20),
-                  ],
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 10, 24, 8),
-              child: Text(
-                '手动标记已看会保留真实播放进度。',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+      barrierLabel: drama.title,
+      title: Text(drama.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final entry in choices.indexed)
+            FloatingOptionRow(
+              leading: entry.$2.$3,
+              label: entry.$2.$2,
+              selected: entry.$2.$1 == 'status:${following?.status.name}',
+              onTap: () => Navigator.pop(context, entry.$2.$1),
             ),
-          ],
-        ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 2, right: 2),
+            child: Text(
+              '手动标记已看会保留真实播放进度。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
       ),
     );
   }

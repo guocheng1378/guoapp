@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'floating_card.dart';
 import 'glass.dart';
 import 'local_profiles.dart';
 import 'local_store.dart';
@@ -60,26 +61,23 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
         final content = utf8.decode(await file.readAsBytes());
         widget.store.validateBackup(content);
         if (!mounted) return;
-        final accepted = await showDialog<bool>(
+        final accepted = await showFloatingDialog<bool>(
           context: context,
-          builder: (context) => GlassDialogShell(
-            child: AlertDialog(
-              title: const Text('从备份恢复用户与记录？'),
-              content: const Text(
-                '将使用这份备份替换损坏的用户配置、追剧、观看记录和偏好。建议先导出原始配置；已下载视频保留。',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('取消'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('继续恢复'),
-                ),
-              ],
-            ),
+          barrierLabel: '恢复备份',
+          title: const Text('从备份恢复用户与记录？'),
+          content: const Text(
+            '将使用这份备份替换损坏的用户配置、追剧、观看记录和偏好。建议先导出原始配置；已下载视频保留。',
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('继续恢复'),
+            ),
+          ],
         );
         if (accepted != true || !mounted) return;
         final pin = await _promptPassword(
@@ -483,24 +481,21 @@ class _ProfileEditorState extends State<ProfileEditor> {
   }
 
   Future<void> _delete() async {
-    final yes = await showDialog<bool>(
+    final yes = await showFloatingDialog<bool>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('删除此用户？'),
-          content: const Text('会同时删除该用户的追剧和观看记录。下载文件会保留。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除'),
-            ),
-          ],
+      barrierLabel: '删除用户',
+      title: const Text('删除此用户？'),
+      content: const Text('会同时删除该用户的追剧和观看记录。下载文件会保留。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
         ),
-      ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('删除'),
+        ),
+      ],
     );
     if (yes != true || !mounted) return;
     try {

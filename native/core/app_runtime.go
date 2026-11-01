@@ -375,13 +375,27 @@ func nativeNormalize(drama Drama) nativeDrama {
 			sourceID = strings.TrimPrefix(drama.ID, source+":")
 		}
 	}
-	return nativeDrama{MetadataSchema: nativeDramaMetadataSchema, ID: drama.ID, Source: source, SourceID: sourceID, Title: drama.DisplayTitle(),
-		Description: firstNonEmpty(drama.Desc, drama.Intro), Cover: cover, Episodes: episodes,
-		Category: nativeDramaCategory(drama), VIP: drama.VIP,
+	// 简介/标题/演员/标签等文本在各源 JSON/HTML 里偶带 HTML 片段或实体
+	// （&nbsp; 等），统一在此一处清洗，避免播放器里出现「&nbsp;, &nbsp;」乱码
+	// （真机实拍多源复现，含黄果类）。app_runtime 是唯一出 FFI 的转换点，
+	// 覆盖全部源，不必逐个 provider 改。
+	description := provider.SanitizeText(firstNonEmpty(drama.Desc, drama.Intro))
+	title := provider.SanitizeText(drama.DisplayTitle())
+	tags := make([]string, len(drama.Tags))
+	for i, t := range drama.Tags {
+		tags[i] = provider.SanitizeText(t)
+	}
+	actors := make([]string, len(drama.Actors))
+	for i, a := range drama.Actors {
+		actors[i] = provider.SanitizeText(a)
+	}
+	return nativeDrama{MetadataSchema: nativeDramaMetadataSchema, ID: drama.ID, Source: source, SourceID: sourceID, Title: title,
+		Description: description, Cover: cover, Episodes: episodes,
+		Category: provider.SanitizeText(nativeDramaCategory(drama)), VIP: drama.VIP,
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
 		Area: drama.Area, Year: drama.Year, Score: drama.Score,
 		Duration: flexDurationSeconds(drama.Duration),
-		Tags:     append([]string(nil), drama.Tags...), Actors: append([]string(nil), drama.Actors...), ReleaseStatus: drama.ReleaseStatus}
+		Tags: tags, Actors: actors, ReleaseStatus: provider.SanitizeText(drama.ReleaseStatus)}
 }
 
 // flexDurationSeconds 把 provider 层的时长松散值统一为秒（单集时长）：

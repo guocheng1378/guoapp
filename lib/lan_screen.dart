@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'floating_card.dart';
 import 'glass.dart';
 import 'lan_controller.dart';
 import 'local_store.dart';
@@ -127,30 +128,27 @@ class _LanSyncScreenState extends State<LanSyncScreen> {
   Future<void> _rename() async {
     final epoch = link.store.profileEpoch;
     final name = TextEditingController(text: link.deviceName);
-    final value = await showDialog<String>(
+    final value = await showFloatingDialog<String>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('设备名称'),
-          content: TextField(
-            controller: name,
-            maxLength: 60,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: '在其他设备上显示的名称'),
-            onSubmitted: (_) => Navigator.pop(context, name.text),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, name.text),
-              child: const Text('保存'),
-            ),
-          ],
-        ),
+      barrierLabel: '设备名称',
+      title: const Text('设备名称'),
+      content: TextField(
+        controller: name,
+        maxLength: 60,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: '在其他设备上显示的名称'),
+        onSubmitted: (_) => Navigator.pop(context, name.text),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, name.text),
+          child: const Text('保存'),
+        ),
+      ],
     );
     name.dispose();
     if (mounted &&
@@ -1103,24 +1101,21 @@ class _LanPushPanelState extends State<_LanPushPanel> {
         onAccepted: widget.onAccepted,
         confirmReplace: (title) async {
           if (!mounted) return false;
-          return await showDialog<bool>(
+          return await showFloatingDialog<bool>(
                 context: context,
-                builder: (context) => GlassDialogShell(
-                  child: AlertDialog(
-                    title: const Text('切换对方正在播放的内容？'),
-                    content: Text('对方正在播放“$title”，继续后将接续本机当前分集。'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('推送播放'),
-                      ),
-                    ],
+                barrierLabel: '推送播放',
+                title: const Text('切换对方正在播放的内容？'),
+                content: Text('对方正在播放“$title”，继续后将接续本机当前分集。'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('取消'),
                   ),
-                ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('推送播放'),
+                  ),
+                ],
               ) ??
               false;
         },

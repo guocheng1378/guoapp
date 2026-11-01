@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'core_bridge.dart';
 import 'custom_sources.dart';
 import 'error_text.dart';
+import 'floating_card.dart';
 import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
@@ -151,30 +152,27 @@ class _SourcesScreenState extends State<SourcesScreen> {
   /// 弹出一次管理员密码验证。ok 为 false 表示用户取消，error 非空表示验证失败。
   Future<({bool ok, String? error})> _askAdminPin(String title) async {
     final pinController = TextEditingController();
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showFloatingDialog<bool>(
       context: context,
-      builder: (ctx) => GlassDialogShell(
-        child: AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: pinController,
-            obscureText: true,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: '管理员密码'),
-            onSubmitted: (_) => Navigator.pop(ctx, true),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('确认'),
-            ),
-          ],
-        ),
+      barrierLabel: title,
+      title: Text(title),
+      content: TextField(
+        controller: pinController,
+        obscureText: true,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: '管理员密码'),
+        onSubmitted: (_) => Navigator.pop(context, true),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('确认'),
+        ),
+      ],
     );
     if (confirmed != true || !mounted) {
       pinController.dispose();
@@ -253,68 +251,66 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final urlController = TextEditingController();
     final typeIdController = TextEditingController();
     var category = 'shortDrama';
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showFloatingDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => GlassDialogShell(
-          child: AlertDialog(
-            title: const Text('添加自定义站源'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  key: const ValueKey('custom-source-name'),
-                  controller: nameController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: '站源名称',
-                    hintText: '例如：我的影视站',
-                  ),
-                ),
-                TextField(
-                  key: const ValueKey('custom-source-url'),
-                  controller: urlController,
-                  decoration: const InputDecoration(
-                    labelText: '接口地址（http/https）',
-                    hintText: 'https://example.com/api.php/provide/vod',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<String>(
-                  segments: [
-                    for (final item in CustomSourceSpec.categories)
-                      ButtonSegment(
-                        value: item,
-                        label: Text(CustomSourceSpec.categoryLabel(item)),
-                      ),
-                  ],
-                  selected: {category},
-                  onSelectionChanged: (value) =>
-                      setDialogState(() => category = value.first),
-                ),
-                TextField(
-                  key: const ValueKey('custom-source-type-id'),
-                  controller: typeIdController,
-                  decoration: const InputDecoration(
-                    labelText: '分类 ID（可选，源站 type_id）',
-                  ),
-                ),
-              ],
+      barrierLabel: '添加自定义站源',
+      width: 320,
+      title: const Text('添加自定义站源'),
+      content: StatefulBuilder(
+        builder: (context, setDialogState) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const ValueKey('custom-source-name'),
+              controller: nameController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '站源名称',
+                hintText: '例如：我的影视站',
+              ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消'),
+            TextField(
+              key: const ValueKey('custom-source-url'),
+              controller: urlController,
+              decoration: const InputDecoration(
+                labelText: '接口地址（http/https）',
+                hintText: 'https://example.com/api.php/provide/vod',
               ),
-              TextButton(
-                key: const ValueKey('custom-source-submit'),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('添加'),
+            ),
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              segments: [
+                for (final item in CustomSourceSpec.categories)
+                  ButtonSegment(
+                    value: item,
+                    label: Text(CustomSourceSpec.categoryLabel(item)),
+                  ),
+              ],
+              selected: {category},
+              onSelectionChanged: (value) =>
+                  setDialogState(() => category = value.first),
+            ),
+            TextField(
+              key: const ValueKey('custom-source-type-id'),
+              controller: typeIdController,
+              decoration: const InputDecoration(
+                labelText: '分类 ID（可选，源站 type_id）',
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          key: const ValueKey('custom-source-submit'),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('添加'),
+        ),
+      ],
     );
     final name = nameController.text;
     final url = urlController.text;

@@ -5,6 +5,7 @@ import 'app_layout.dart';
 import 'catalog_sort.dart';
 import 'core_bridge.dart';
 import 'drama_actions.dart';
+import 'floating_card.dart';
 import 'follow_state.dart';
 import 'glass.dart';
 import 'local_store.dart';
@@ -142,24 +143,21 @@ class _SavedLibraryState extends State<SavedLibrary> {
 
   Future<void> _clearHistory() async {
     final epoch = widget.store.profileEpoch;
-    final accepted = await showDialog<bool>(
+    final accepted = await showFloatingDialog<bool>(
       context: context,
-      builder: (context) => GlassDialogShell(
-        child: AlertDialog(
-          title: const Text('清空观看记录？'),
-          content: const Text('这会删除当前用户的观看进度，追剧状态和手动已看标记会保留。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('清空'),
-            ),
-          ],
+      barrierLabel: '清空观看记录',
+      title: const Text('清空观看记录？'),
+      content: const Text('这会删除当前用户的观看进度，追剧状态和手动已看标记会保留。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
         ),
-      ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('清空'),
+        ),
+      ],
     );
     if (accepted == true && mounted && epoch == widget.store.profileEpoch) {
       await saveUserChange(context, widget.store.clearHistory);
