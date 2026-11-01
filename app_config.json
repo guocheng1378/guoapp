@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2256,
-    "version": "v0.2.96-2256",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2256/zhenguojian-0.2.96+2256-arm64-v8a.apk",
-    "notes": "搜索后进入播放器不再误弹输入法\n真果·鉴切集修复：优先官方线路并自动补兑，避免大概率落到第三方源或失败\n若干稳定性与细节改进"
+    "build": 2257,
+    "version": "v0.2.96-2257",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2257/zhenguojian-0.2.96+2257-arm64-v8a.apk",
+    "notes": "修复播放器简介乱码：各源（含黄果类）简介里的 &nbsp; 等 HTML 实体未解码导致显示成乱码，现已统一清洗\n搜索后进入播放器不再误弹输入法\n真果·鉴切集修复：优先官方线路并自动补兑，避免大概率落到第三方源或失败\n若干稳定性与细节改进"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
