@@ -30,13 +30,16 @@ class CustomSourceSpec {
   final String typeId;
 
   static const int maxSources = 16;
-  static const List<String> categories = ['shortDrama', 'video', 'adult'];
+  // 分类清单与显示名统一由 SourceCategory / SourceSite.classLabel 提供：
+  // 旧实现手写三值清单 + 另一套 switch，默认档还与 classLabel 相反
+  // （这里默认「短剧类」、那里默认「视频类」），自定义源写错 category
+  // 时会在菜单/管理页/榜单页分属不同类。
+  static final List<String> categories = [
+    for (final category in SourceCategory.values) category.name,
+  ];
 
-  static String categoryLabel(String category) => switch (category) {
-    'video' => '视频类',
-    'adult' => '成人类',
-    _ => '短剧类',
-  };
+  static String categoryLabel(String category) =>
+      SourceSite.classLabel(category);
 
   /// 由地址生成本机唯一 ID。
   static String idFor(String url) =>

@@ -4,15 +4,22 @@ enum PlaybackRecoveryAction { reuse, alternative, refresh, route, stop }
 
 class PlaybackRecovery {
   static const maxAttempts = 4;
-  static const maxRefreshes = 2;
+  // 一次故障最多重解析一次：refresh 会重跑整条解析链（真果鉴可达十几
+  // 秒），两轮叠加就是「切集后一直转圈」。剩下的兜底交给换线路与用户
+  // 手动重试。
+  static const maxRefreshes = 1;
+  // 全局冷却跨 reset 保留：连续切集/快速故障时不让全链解析反复叠加。
+  static const refreshCooldown = Duration(seconds: 60);
   int _attempts = 0;
   int _refreshes = 0;
   bool _reused = false;
+  DateTime? _lastRefresh;
 
   void reset() {
     _attempts = 0;
     _refreshes = 0;
     _reused = false;
+    // 故意不清 _lastRefresh：换集后短时间内仍需受全局冷却约束。
   }
 
   /// 恢复顺序：原地重开 → 换线路 → 重新解析。
@@ -33,9 +40,12 @@ class PlaybackRecovery {
       _attempts++;
       return PlaybackRecoveryAction.alternative;
     }
-    if (_refreshes < maxRefreshes) {
+    if (_refreshes < maxRefreshes &&
+        (_lastRefresh == null ||
+            DateTime.now().difference(_lastRefresh!) >= refreshCooldown)) {
       _attempts++;
       _refreshes++;
+      _lastRefresh = DateTime.now();
       return PlaybackRecoveryAction.refresh;
     }
     return PlaybackRecoveryAction.stop;

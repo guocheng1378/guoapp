@@ -14,8 +14,8 @@ import 'models.dart';
 /// 想看、手动标记已看、已完结与已关闭站源；切换用户或锁定立即中止
 /// 本轮且不写回；检查记录按用户存档。
 ///
-/// 与一次性 sweep（follow_updates.dart）的关系：sweep 保留为工具函数，
-/// 首页改由本 updater 驱动持续后台检查。
+/// 首页由本 updater 驱动持续后台检查（早期的一次性 sweep 已移除，
+/// 不再存在 follow_updates.dart）。
 class FollowUpdater {
   FollowUpdater(
     this.repository,
@@ -98,16 +98,22 @@ class FollowUpdater {
   Future<int> run() async {
     if (_running || !_valid) return 0;
     _running = true;
-    var updated = 0;
     try {
       final checks = store.followChecks;
       final updates = <Drama>[];
+      // 「有更新」的判定必须与追剧页角标同源（FollowState.hasUpdates），
+      // 旧实现按「本轮集数变大」计数：详情页已刷新过档案时会漏报，
+      // 用户已读掉的累计未读又会被反复上报。
+      Set<String> unreadIds() => {
+        for (final drama in store.favorites)
+          if (store.following(drama.id)?.hasUpdates == true) drama.id,
+      };
+      final before = unreadIds();
       for (final drama in _due(checks)) {
         if (!_valid) return 0;
         try {
           final detail = await repository.detail(drama);
           updates.add(detail.drama);
-          if (detail.drama.episodes > drama.episodes) updated++;
           checks[drama.id] = FollowCheck(_clock());
         } catch (_) {
           // 受限源/豆瓣/断网：静默记失败，下一轮指数退避后重试。
@@ -120,6 +126,7 @@ class FollowUpdater {
       if (!_valid) return 0;
       if (updates.isNotEmpty) await store.refreshDramas(updates);
       await store.saveFollowChecks(checks, epoch: _epoch);
+      final updated = unreadIds().difference(before).length;
       if (updated > 0) onUpdated?.call(updated);
       return updated;
     } finally {

@@ -6,6 +6,7 @@ import 'package:duanju_app/models.dart';
 import 'package:duanju_app/playback_launch_screen.dart';
 import 'package:duanju_app/search_input.dart';
 import 'package:duanju_app/search_suggestion.dart';
+import 'package:duanju_app/text_input_dismiss.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,6 +64,45 @@ void main() {
 
     // 点在输入框之外（剧卡的等效位置）：当帧释放焦点并收起键盘。
     await tester.tap(find.text('外部区域'));
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets('播放页首帧兜底：hideTextInput 收键盘且保留焦点树', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              SearchInput(
+                controller: controller,
+                hint: '搜索',
+                autofocus: true,
+                onSearch: (_) {},
+              ),
+              TextButton(onPressed: () {}, child: const Text('外部区域')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isTrue);
+    final focused = FocusManager.instance.primaryFocus;
+
+    // 详情页/榜单/下载等入口直推 PlayerScreen 时的兜底：只 hide，
+    // 不能 unfocus，否则播放页自己的遥控/键盘焦点会一起被移走。
+    await hideTextInput();
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(FocusManager.instance.primaryFocus, same(focused));
+
+    // 起播入口的完整收口（含 unfocus）。
+    await dismissPlaybackTextInput();
     await tester.pump();
     expect(tester.testTextInput.isVisible, isFalse);
   });

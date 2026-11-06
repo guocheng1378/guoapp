@@ -16,13 +16,9 @@ import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
 
-/// 「共 N 部」，对齐云追 `text_topic_count`。
-String _episodeCountLabel(Drama drama) =>
-    drama.episodes > 0 ? '共 ${drama.episodes} 部' : '';
-
-/// 「更新至 N 集」，对齐云追 `text_update_to_episode`。
-String _updateLabel(Drama drama) =>
-    drama.episodes > 0 ? '更新至 ${drama.episodes} 集' : '';
+/// 榜单集数文案统一走 `Drama.episodeLabel`（与详情页同口径，按连载
+/// 状态在「共 N 集 / 更新至 N 集」间二选一）。旧实现自造两条 label 并
+/// 同时渲染，出现「共 N 部 · 更新至 N 集」自相矛盾的卡片。
 
 /// 分类标签 `[分类]`，对齐云追 `text_topic_tag_count`。
 String _categoryTagLabel(Drama drama) =>
@@ -408,16 +404,10 @@ class _RankingsScreenState extends State<RankingsScreen> {
               (!kindRowVisible || _kindOf(board) == _kind),
         )
         .toList();
-    final items = _items
-        .map(
-          (item) => RankingItem(
-            item.rank,
-            widget.repository.catalogUpdates.current(item.drama),
-            metric: item.metric,
-          ),
-        )
-        .where((item) => _passes(item.drama))
-        .toList();
+    // 榜单条目是本次榜单响应的只读参考数据：详情/播放页回填的
+    // catalogUpdates 快照会改写集数等字段，让卡片与本次榜单脱钩
+    // （历史上表现为「季数/集数不对」）。展示不套内存快照。
+    final items = _items.where((item) => _passes(item.drama)).toList();
     final rows = items;
     final busy = _loading || _more;
     // 主页同款雾化（手机/桌面）：沉浸顶栏 + 定高雾带（「雾面高度」
@@ -721,10 +711,9 @@ class _RankingsScreenState extends State<RankingsScreen> {
   Widget _rankMeta(RankingItem item) {
     final theme = Theme.of(context);
     final tags = _categoryTagLabel(item.drama);
-    final episodes = _episodeCountLabel(item.drama);
-    final update = _updateLabel(item.drama);
+    final episodes = item.drama.episodeLabel;
     final following = _isFollowing(item.drama);
-    if (tags.isEmpty && episodes.isEmpty && update.isEmpty && !following) {
+    if (tags.isEmpty && episodes.isEmpty && !following) {
       return const SizedBox.shrink();
     }
     final style = theme.textTheme.bodySmall?.copyWith(fontSize: 12);
@@ -734,7 +723,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
         spacing: 8,
         runSpacing: 4,
         children: [
-          for (final text in [tags, episodes, update])
+          for (final text in [tags, episodes])
             if (text.isNotEmpty)
               Text(
                 text,
@@ -762,7 +751,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
   }) {
     final theme = Theme.of(context);
     final metric = _rankingMetricLabel(item);
-    final update = _updateLabel(item.drama);
+    final update = item.drama.episodeLabel;
     final following = _isFollowing(item.drama);
     void open() {
       if (item.drama.source == SourceSite.douban.id) {

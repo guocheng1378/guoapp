@@ -97,6 +97,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _selectedDramas = <String, Drama>{};
   Timer? _cacheRefreshTimer;
   FollowUpdater? _followUpdater;
+  /// 上次弹「追剧更新」提醒时的累计未读部数：同一累计值不重复弹。
+  int _lastFollowUpdateNotice = 0;
   // 更新提醒「去看看」：给追剧页的一次性筛选请求（'updates'=有更新）。
   // 离开追剧页即清空，避免下次切回来还停在筛选态。
   final _libraryFilter = ValueNotifier<String>('');
@@ -131,6 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // 远端主页（站点 /v1/feed/home 自描述区块）：分类条与轮播的内容源。
   HomeFeed? _homeFeed;
   bool _homeFeedLoading = false;
+  int _homeFeedGeneration = 0;
   int _homeSectionPage = 1;
   final _filtersKey = GlobalKey<RemoteRowState>();
   final _gridKey = GlobalKey<RemoteGridState>();
@@ -201,15 +204,19 @@ class _HomeScreenState extends State<HomeScreen> {
   List<CatalogCategory> get _categories => _browser.categories(_group);
   String get _displayCategory =>
       _showRecommendations ? _recommendationCategory : _category;
-  List<CatalogCategory> get _displayCategories => [
-    CatalogCategory.all,
-    // 站点下发的板块紧跟在「全部」之后：远端主页优先，本地不内置清单，
-    // 站点给多少就有多少（增删/改名即刻生效）。
-    ..._remoteHomeCategories,
-    if (_group.id == 'hongguo')
-      const CatalogCategory(_recommendationCategory, '推荐'),
-    ..._categories.where((entry) => entry.id.isNotEmpty),
-  ];
+  List<CatalogCategory> get _displayCategories {
+    // 站点板块、源站上报分类、条目池分类、本地题材词表、长短剧档是
+    // 几路独立来源；板块标题截前两字后可能与源站分类同名（「电影热播」
+    // →「电影」），旧实现直接展开零去重，条上出现两个同名 chip 且内容
+    // 不同/重复。按归一化名去重，保留远端主页优先的原始顺序。
+    return dedupeCategories(<CatalogCategory>[
+      CatalogCategory.all,
+      ..._remoteHomeCategories,
+      if (_group.id == 'hongguo')
+        const CatalogCategory(_recommendationCategory, '推荐'),
+      ..._categories.where((entry) => entry.id.isNotEmpty),
+    ]);
+  }
 
   Future<void> _loadCategories({
     bool force = false,
@@ -789,22 +796,29 @@ class _HomeScreenState extends State<HomeScreen> {
       _homeFeed?.primary?.items.take(HomeCarousel.maxItems).toList();
 
   Future<void> _loadHomeFeed({bool force = false}) async {
+    final generation = ++_homeFeedGeneration;
     final source = _remoteHomeFeedSource;
+    final groupId = _group.id;
     if (source == null) {
-      if (_homeFeed != null) setState(() => _homeFeed = null);
+      if (_homeFeed != null && mounted) setState(() => _homeFeed = null);
       return;
     }
-    if (_homeFeedLoading) return;
+    // 不再用布尔守卫丢弃后续请求：快速连切时它会让第二次刷新直接
+    // 不发起，旧源板块一直留在新源首页。改用代次让旧响应作废。
     _homeFeedLoading = true;
     try {
       final feed = await widget.repository.homeFeed(source, force: force);
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _homeFeedGeneration ||
+          _group.id != groupId) {
+        return;
+      }
       setState(() => _homeFeed = feed);
     } catch (_) {
       // 远端主页拉不到就退回纯本地浏览（分类条不出现站点板块），
       // 首页主体不受影响，也不弹错。
     } finally {
-      _homeFeedLoading = false;
+      if (generation == _homeFeedGeneration) _homeFeedLoading = false;
     }
   }
 
@@ -848,18 +862,23 @@ class _HomeScreenState extends State<HomeScreen> {
         widget.repository,
         widget.store,
         onUpdated: (updated) {
-          if (!mounted) return;
-          // 文案用「累计未读部数」，与追剧页角标同源（本轮新增但已被读掉
-          // 的情况累计为 0，就不弹）。
+          if (!mounted || updated <= 0) return;
           final total = widget.store.favorites
               .where(
                 (drama) => widget.store.following(drama.id)?.hasUpdates == true,
               )
               .length;
-          if (total <= 0) return;
+          // 文案报本轮新增（旧文案报累计未读，长期不点开追剧页时每
+          // 30 分钟只要有任意一部涨集数就重弹同一条）；累计值没涨就
+          // 不重复打扰，用户读掉后基准回落，下次真新增会再提醒。
+          if (total <= 0 || total <= _lastFollowUpdateNotice) {
+            _lastFollowUpdateNotice = total;
+            return;
+          }
+          _lastFollowUpdateNotice = total;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('追剧有 $total 部更新'),
+              content: Text('追剧新增 $updated 部更新'),
               action: SnackBarAction(
                 label: '去看看',
                 onPressed: _showFollowUpdates,
@@ -1001,9 +1020,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final delta = pixels - _fabPrevPixels;
     _fabPrevPixels = pixels;
     var lit = _fabLit;
-    if (delta < -4) {
+    // 方向判定加滞回：±4px 在惯性尾段会反复翻转，每次都触发整页
+    // setState（含所有 tab、TopFog、分类条）。
+    if (delta < -8) {
       lit = true;
-    } else if (delta > 4) {
+    } else if (delta > 8) {
       lit = false;
     }
     final shown = pixels > 400;
@@ -1029,7 +1050,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 的滚动（首页/追剧/最近/下载）都驱动同一信号；横滑列表过滤掉。
   bool _onBodyScroll(ScrollNotification n) {
     if (n.metrics.axis != Axis.vertical) return false;
-    _prox.value = (n.metrics.pixels / 50).clamp(0.0, 1.0);
+    final raw = (n.metrics.pixels / 50).clamp(0.0, 1.0);
+    // 量化成 10 档：旧实现在滚动前 50px 每帧写入新值，会重建全部
+    // 顶栏岛与分类胶囊（每枚都带 backdrop + 两次大半径模糊）。
+    // 描边亮度 10 档肉眼无差，通知频率降一个数量级。
+    final next = (raw * 10).round() / 10;
+    if (_prox.value != next) _prox.value = next;
     return false;
   }
 
@@ -1135,12 +1161,25 @@ class _HomeScreenState extends State<HomeScreen> {
       accept(result);
     } catch (error) {
       if (!mounted || generation != _generation) return;
+      final message = friendlyError(error);
       setState(() {
         _loading = false;
         _loadingMore = false;
-        if (!more) _items = [];
-        _error = friendlyError(error);
+        // 刷新/加载失败时保留已在显示的缓存列表：旧实现无条件清空
+        // _items，下拉刷新一次失败就把整页内容抹掉（「缓存突然没了」）。
+        // 搜索词变化时上方已按 query 清过一次，这里不再重复清。
+        _error = message;
       });
+      // 错误面板只在空列表时占位；有缓存内容时改用轻提示，既不遮内容
+      // 也让用户知道这次刷新没成功。
+      if (_items.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -1171,6 +1210,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _hasMore = true;
       _submittedQuery = '';
       _error = null;
+      // 板块是源相关的：切源立即清掉上一个源的 home: 分类，别让它们
+      // 在新源首页残留到下一次请求返回。
+      _homeFeed = null;
+      _homeFeedGeneration++;
     });
     unawaited(
       saveUserChange(
@@ -1184,7 +1227,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_scroll.hasClients) {
       _scroll.jumpTo(0);
     }
-    _homeFeed = null;
     _load(useCache: true);
     _loadCategories();
     unawaited(_loadHomeFeed());
@@ -1231,13 +1273,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 当前目录上有效的排序项（含源站服务端排序能力）。
   Set<CatalogSort> _catalogSortSupport() {
-    final supported = catalogSortSupport(_items);
+    // 用当前浏览池（含站源开关/分类/VIP/搜索过滤）而不是未过滤的
+    // _items：全源搜索态只要有一条别的源带 heat 就宣布全池支持，
+    // 点选后其实全 null 降级，是「排序点了没反应」的 UI 根因。
+    final supported = catalogSortSupport(_browsableItems);
     // 剧果「全部」页由源站按热度序返回（sort=hot），条目本身无热度
-    // 字段，客户端排序靠 tie-break 保持该顺序——热度语义只在「全部」
-    // 分类成立；其它分类与搜索态源站既不按热度也不按日期返回（且
-    // 条目无 heat/onlineDate 字段），宣称支持会造成假排序，故收窄。
+    // 字段；搜索态 Go 的搜索分支完全忽略 sort，且当前源可能不是剧果，
+    // 故特判收窄到「当前源=剧果 + 非搜索 + 全部分类」。
     if (_category.isEmpty &&
-        _group.sources.any((source) => source.id == 'huangju')) {
+        _search.text.trim().isEmpty &&
+        _submittedQuery.isEmpty &&
+        _source.id == 'huangju') {
       supported.add(CatalogSort.heat);
     }
     return supported;
@@ -1251,7 +1297,19 @@ class _HomeScreenState extends State<HomeScreen> {
     // 分类/搜索/VIP/站源开关过滤，聚合某维度选项时跳过该维度自身、
     // 其余筛选维度照常生效——显示的每个选项选中后都不会得到空列表；
     // 无该字段数据的源（短剧类/青空等）选项为空，面板对应节整体隐藏。
-    final view = widget.store.catalogView;
+    // 切源/切档后持久化的 area/year 在新池可能已不存在：先清掉悬空
+    // 值再聚合选项，否则另一维度也被它过滤成空、面板整节消失。
+    var view = effectiveFilterView(
+      _browsableItems,
+      widget.store.catalogView,
+    );
+    if (view != widget.store.catalogView) {
+      await saveUserChange(
+        context,
+        () => widget.store.setCatalogView(view),
+      );
+      if (!mounted) return;
+    }
     final browsable = _browsableItems;
     final areaOptions = catalogFilterOptions(
       filterCatalog(browsable, view, skipArea: true),
@@ -1369,14 +1427,22 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 判定式与追剧页 continue-watching 卡一致。
   WatchEntry? get _resumeEntry {
     if (_resumeDismissed || _searchVisible) return null;
-    return widget.store.history
-        .where(
-          (entry) =>
-              !entry.finished ||
-              entry.drama.episodes <= 0 ||
-              entry.episode < entry.drama.episodes,
-        )
-        .firstOrNull;
+    return widget.store.history.where((entry) {
+      if (!entry.finished) return true;
+      // history 里的 drama 是观看当时的快照：剧后来更新了集数、但 6h
+      // 巡检还没跑/未收藏时，旧快照会让「继续观看」条凭空消失。取
+      // 详情回填与收藏档案里最新的集数判定。
+      final latest = widget.repository.catalogUpdates.current(entry.drama);
+      final favorite = widget.store.favorites
+          .where((drama) => drama.id == entry.drama.id)
+          .firstOrNull;
+      final episodes = [
+        entry.drama.episodes,
+        latest.episodes,
+        favorite?.episodes ?? 0,
+      ].fold<int>(0, (best, value) => value > best ? value : best);
+      return episodes <= 0 || entry.episode < episodes;
+    }).firstOrNull;
   }
 
   /// 追剧/最近卡片菜单「换个源找」：回发现页用剧名触发全源搜索。
@@ -1602,7 +1668,11 @@ class _HomeScreenState extends State<HomeScreen> {
       view.year,
       view.allSources,
       _hideVip,
-      for (final source in _group.sources)
+      _source.id,
+      _group.id,
+      // 多源搜索结果里每条按自身 source 过滤，站源管理页开关其它源
+      // 也要让缓存失效；旧 key 只列当前单源，禁源条目会一直残留。
+      for (final source in widget.store.sources)
         widget.store.allowsSource(source.id),
     ].join('|');
     final cached = _visibleCache;

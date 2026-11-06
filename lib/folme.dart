@@ -17,6 +17,9 @@ import 'motion.dart';
 /// 轻过冲），雾面材质统一 BackdropFilter + 白瓷叠层；滚动/手势只改目标值，
 /// 过渡全部交给弹簧——「唰」地到位，不是慢慢淡入。
 
+/// 回顶钮 σ30 模糊核：弹簧每帧重建球体时复用，避免重复分配。
+final ImageFilter fogFabBlur = ImageFilter.blur(sigmaX: 30, sigmaY: 30);
+
 /// 共用弹簧（小米 Folme 手感基准）：质量 1 / 刚度 400 / 阻尼 26。
 const SpringDescription kFolmeSpring = SpringDescription(
   mass: 1,
@@ -299,7 +302,9 @@ class FogFabState extends State<FogFab> with SingleTickerProviderStateMixin {
                       customBorder: const CircleBorder(),
                       child: ClipOval(
                         child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                          // 弹簧每帧重建整棵球；σ30 的 ImageFilter 不必
+                          // 每帧重新分配（不可变对象可安全复用）。
+                          filter: fogFabBlur,
                           child: SizedBox(
                             width: 56,
                             height: 56,

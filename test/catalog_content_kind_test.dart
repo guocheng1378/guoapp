@@ -156,12 +156,14 @@ void main() {
       );
     });
 
-    test('只有长剧内容时隐藏「短剧」档', () async {
+    test('只有长剧内容时两个内容档都不下发（长剧档与「全部」全等）', () async {
       final categories = await categoriesFor(const [
         Drama(id: 'l1', source: 'hongguo', title: '长剧样本', contentKind: 'long'),
         Drama(id: 'l2', source: 'hongguo', title: '另一部长剧', contentKind: 'long'),
       ]);
-      expect(categories.map((c) => c.name), contains('长剧·内容'));
+      // 纯长剧池里「长剧·内容」= 全部条目，属于「名字不同内容一样」的
+      // 重复分组；只有长短剧都存在时两个档才有区分意义。
+      expect(categories.map((c) => c.name), isNot(contains('长剧·内容')));
       expect(categories.map((c) => c.name), isNot(contains('短剧·内容')));
     });
 
@@ -219,8 +221,9 @@ void main() {
       );
     });
 
-    // 分类条上同一名字只能出现一次：短剧源自己就上报「短剧」，与本地定性档撞名。
-    test('源站已上报「短剧」时与本地定性档并存且名字唯一', () async {
+    // 分类条上不能出现「名字不同内容一样」：源站/条目池已有「短剧」时
+    // 本地短剧档必须让位，只保留长剧档（长短剧都存在时才有区分意义）。
+    test('已有「短剧」分组时本地短剧档按内容去重', () async {
       final categories = await categoriesFor(const [
         Drama(id: 's1', source: 'hongguo', title: '短剧样本', category: '短剧'),
         Drama(id: 'l1', source: 'hongguo', title: '长剧样本', contentKind: 'long'),
@@ -234,11 +237,11 @@ void main() {
       expect(names, contains('短剧'), reason: '源站上报的「短剧」分类保留原名');
       expect(
         names,
-        contains('短剧·内容'),
-        reason: '本地定性档恒带后缀，实际 $names',
+        isNot(contains('短剧·内容')),
+        reason: '与「短剧」内容重复的本地档必须隐藏，实际 $names',
       );
       // ID 不变：home_screen 的 local:kind: 过滤分支与选中态都按 id 走。
-      expect(categories.map((c) => c.id), contains(localShortCategory));
+      expect(categories.map((c) => c.id), isNot(contains(localShortCategory)));
       expect(categories.map((c) => c.id), contains(localLongCategory));
     });
 
@@ -253,7 +256,9 @@ void main() {
       await browser.loadCategories(group, cacheOnly: true);
       final first = browser.categories(group).map((c) => c.name).toList();
       final second = browser.categories(group).map((c) => c.name).toList();
-      expect(first, contains('短剧·内容'));
+      // 单条无分类信息的条目被兜底判长剧，本地档与「全部」全等，
+      // 按内容去重不再下发；重复读取仍必须拿到同一份结果。
+      expect(first, isNot(contains('短剧·内容')));
       expect(second, first, reason: '分类条结果必须可重复（缓存命中不重算）');
       expect(identical(browser.categories(group), browser.categories(group)), isTrue,
           reason: '命中缓存应返回同一实例，避免 build 期重复分配');

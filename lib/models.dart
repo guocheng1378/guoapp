@@ -632,6 +632,32 @@ class PlaybackPlan {
 
   /// 当前线路是否官方线。
   bool get onOfficialRoute => _isOfficial(routeIndex);
+  /// 线路面板按需补线后合并线路元数据：保留 url/session/流会话等不变，
+  /// 只替换 route* 字段（P0-3 起播零等待后首帧可能只有一条线路）。
+  PlaybackPlan withRoutes({
+    required int routeIndex,
+    required int routeCount,
+    required List<String> routeLabels,
+    required List<bool> routeOfficial,
+  }) => PlaybackPlan(
+    url: url,
+    headers: headers,
+    decryptionKey: decryptionKey,
+    quality: quality,
+    qualities: qualities,
+    session: session,
+    danmakuId: danmakuId,
+    prefetchedBytes: prefetchedBytes,
+    expiresAt: expiresAt,
+    routeIndex: routeIndex,
+    routeCount: routeCount,
+    routeLabels: routeLabels,
+    routeOfficial: routeOfficial,
+    local: local,
+    skipIntroSeconds: skipIntroSeconds,
+    skipOutroFromEndSeconds: skipOutroFromEndSeconds,
+  );
+
   factory PlaybackPlan.fromJson(Map<String, dynamic> json) => PlaybackPlan(
     url: json['url'] as String? ?? '',
     local: json['local'] == true,
@@ -674,7 +700,8 @@ class WatchEntry {
   final double position;
   final double duration;
   final DateTime updatedAt;
-  bool get finished => duration > 1 && position >= duration - 1;
+  bool get finished => duration > 1 &&
+      position >= duration - (duration * 0.05).clamp(2.0, 10.0).toDouble();
   Map<String, dynamic> toJson() => {
     'drama': drama.toJson(),
     'episode': episode,
@@ -705,7 +732,8 @@ class EpisodeProgress {
   final double position;
   final double duration;
   final DateTime updatedAt;
-  bool get finished => duration > 1 && position >= duration - 1;
+  bool get finished => duration > 1 &&
+      position >= duration - (duration * 0.05).clamp(2.0, 10.0).toDouble();
   List<dynamic> toJson() => [position, duration, updatedAt.toIso8601String()];
 
   /// 防御解析：形态不符返回 null，单条损坏不影响整表。

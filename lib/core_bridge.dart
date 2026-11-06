@@ -29,6 +29,12 @@ typedef _DartRequest = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _NativeFree = Void Function(Pointer<Utf8>);
 typedef _DartFree = void Function(Pointer<Utf8>);
 
+/// 详情解析很贵的站源（真果·鉴：按集并发 resolve + 全量兑换官方票据）。
+/// 文件级常量而非类静态成员，避免子类覆写方法里出现「继承来的静态成员
+/// 必须限定类型名」的分析器报错。
+const String _expensiveDetailSource = 'dongpiandi';
+const int _expensiveDetailPrefetchLimit = 2;
+
 String _nativeRequest(String body) {
   final DynamicLibrary library;
   if (Platform.isAndroid) {
@@ -354,9 +360,17 @@ abstract class AppRepository {
   final Map<String, DateTime> _detailCacheAt = {};
   final Map<String, Future<DramaDetail>> _detailPending = {};
   static const Duration _detailTtl = Duration(minutes: 30);
+  // 真果·鉴官方直链是 15 分钟预签名（X-Amz-Expires=900），30 分钟详情
+  // 缓存的后半段必然下发死地址：切集要先花 3s 判死、再走全链重解析。
+  // 贵源单独用短 TTL，宁可多拉一次详情，也别把过期地址塞给播放器。
+  static const Duration _detailTtlDongpiandi = Duration(minutes: 8);
   static const int _detailCacheLimit = 64;
 
   String _detailKey(Drama drama) => '${drama.source}|${drama.id}';
+
+  Duration _detailTtlFor(String key) => key.startsWith('$_expensiveDetailSource|')
+      ? _detailTtlDongpiandi
+      : _detailTtl;
 
   /// 子类用包壳方式接入缓存：命中/在途复用，否则走 [fetch] 并落缓存，
   /// 失败不缓存。测试 fake 直接覆写 detail() 即可完全绕开缓存。
@@ -367,7 +381,7 @@ abstract class AppRepository {
     final key = _detailKey(drama);
     final at = _detailCacheAt[key];
     if (at != null) {
-      if (DateTime.now().difference(at) >= _detailTtl) {
+      if (DateTime.now().difference(at) >= _detailTtlFor(key)) {
         _detailCache.remove(key);
         _detailCacheAt.remove(key);
       } else {
@@ -539,6 +553,8 @@ abstract class AppRepository {
   Future<PlaybackPlan> resolve(Drama drama, Episode episode, {int quality = 0});
   Future<PlaybackPlan> fallback(PlaybackPlan current);
   Future<PlaybackPlan> selectPlayback(PlaybackPlan current, int route);
+  /// 线路面板打开时按需补齐线路表；基类默认直通，测试 fake 无需实现。
+  Future<PlaybackPlan> playbackRoutes(PlaybackPlan current) async => current;
   Future<void> cancelPlayback();
   Future<void> release(String session);
 }
@@ -660,7 +676,7 @@ class NativeRepository extends AppRepository {
       'chapter': episode.raw,
       'index': episode.number,
       'quality': quality,
-      'force': access != null && !access!.canDownload,
+      'force': false,
     });
     return PlaybackPlan.fromJson(data);
   }
@@ -748,7 +764,7 @@ class NativeRepository extends AppRepository {
       'chapter': episode.raw,
       'index': episode.number,
       'quality': quality,
-      'force': online || access?.canDownload == false,
+      'force': online,
     }),
   );
 
@@ -1138,9 +1154,11 @@ class NativeRepository extends AppRepository {
           }.contains(action)) {
         _downloadPermission();
       }
-      if (action == 'resolve' && access != null && !access!.canDownload) {
-        input['force'] = true;
-      }
+      // 「无下载权限」不是「地址必须重解析」：旧实现把 force 注进每次
+      // resolve，绕过 Go 侧 5 分钟的解析缓存，受限用户每次切集/恢复都
+      // 重跑全链（数秒~十几秒）。下载权限已在上面的动作白名单里校验，
+      // 播放解析只按调用方显式传入的 force（用户主动刷新/换清晰度）走。
+      // 真正需要重新签发的路径由各方法显式传 force（如 online 预载）。
       final body = jsonEncode(input);
       final encoded = await _nativeCallPool.send(
         body,
@@ -1300,10 +1318,25 @@ class NativeRepository extends AppRepository {
 
   @override
   void prefetchDetails(Iterable<Drama> dramas) {
+    // 真果·鉴详情会按分集数并发 resolve + 全量兑换官方票据（13 集实测
+    // ~3s、74 集 ~15s，另有后台补兑）。一次预取 12 部会把站点限流闸门
+    // 打满，连带用户真正点开的那部剧也拿不到官方线、还要等 60s 冷却。
+    // 贵源最多排 2 部，其余靠点卡时现取。
+    var expensive =
+        _detailPending.keys
+            .where((key) => key.startsWith('$_expensiveDetailSource|'))
+            .length +
+        _prefetchQueue
+            .where((drama) => drama.source == _expensiveDetailSource)
+            .length;
     for (final drama in dramas) {
       final key = _detailKey(drama);
       if (_detailCache.containsKey(key) || _detailPending.containsKey(key)) {
         continue;
+      }
+      if (drama.source == _expensiveDetailSource) {
+        if (expensive >= _expensiveDetailPrefetchLimit) continue;
+        expensive++;
       }
       _prefetchQueue.add(drama);
     }
@@ -1391,6 +1424,26 @@ class NativeRepository extends AppRepository {
           'sequence': ++_playbackSequence,
         }),
       );
+  @override
+  Future<PlaybackPlan> playbackRoutes(PlaybackPlan current) async {
+    final data = await _call({
+      'action': 'routes',
+      'session': current.session,
+    });
+    return current.withRoutes(
+      routeIndex: intValue(data['routeIndex']),
+      routeCount: intValue(data['routeCount']) > 0
+          ? intValue(data['routeCount'])
+          : current.routeCount,
+      routeLabels: (data['routeLabels'] as List? ?? const [])
+          .map((label) => label?.toString() ?? '')
+          .toList(),
+      routeOfficial: (data['routeOfficial'] as List? ?? const [])
+          .map((flag) => flag == true)
+          .toList(),
+    );
+  }
+
   @override
   Future<void> cancelPlayback() async {
     await _call({'action': 'cancelPlayback', 'sequence': ++_playbackSequence});

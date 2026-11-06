@@ -5,6 +5,7 @@ import 'package:haze/haze.dart';
 
 import 'fog_tuning.dart';
 import 'glass_preferences.dart';
+import 'route_transition.dart';
 
 /// 顶栏雾面（现役唯一顶栏蒙版）：**MIUI 雾面带真值直译 + 渐变模糊**。
 ///
@@ -73,21 +74,45 @@ class LegacyTopFog extends StatelessWidget {
         // 结果 blur 被关进空 offscreen buffer、采样不到底下内容，雾面只剩
         // tint 白蒙，真机实锤海报文字清晰如常=雾感丢失）。羽化改由
         // _LegacyTopFogTintPainter 在 tint 层内部实现。
-        return ValueListenableBuilder<FogTuningState>(
-          valueListenable: FogTuningStore.state,
-          builder: (context, tuning, _) {
-            return ClipRect(
-              child: Haze(
-                // 渐变模糊：σ 从顶边满值连续衰减到 0（官方 haze 用法）。
-                edge: HazeEdge.top,
-                sigma: tuning.blurSigma,
+        return ValueListenableBuilder<bool>(
+          valueListenable: RouteTransitionSignal.reversing,
+          builder: (context, reversing, _) {
+            return ValueListenableBuilder<FogTuningState>(
+              valueListenable: FogTuningStore.state,
+              builder: (context, tuning, _) {
                 // 单 CustomPaint 直吃紧约束（不要包 Stack——无子级时
-                // CustomPaint 会缩到 0×0，tint 层直接消失）。Haze 的 child 画在
-                // 模糊层**之上**，且 child 的尺寸决定模糊区域的尺寸。
-                child: CustomPaint(
+                // CustomPaint 会缩到 0×0，tint 层直接消失）。
+                final tint = CustomPaint(
                   painter: _LegacyTopFogTintPainter(tuning: tuning),
-                ),
-              ),
+                );
+                // 回退转场整页每帧重绘，任何 backdrop 都会把成本放大：
+                // 动画期只留 tint，结束下一帧自动恢复。
+                if (reversing) return ClipRect(child: tint);
+                if (!ImageFilter.isShaderFilterSupported) {
+                  // haze 0.5.0 在无 shader filter 的平台会退化成最多 25
+                  // 条并列 BackdropFilter bands（每帧 25 次背景采样）。
+                  // 换成单层均匀模糊 + 同一 tint：雾感还在，采样降到 1 次。
+                  return ClipRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: tuning.blurSigma,
+                        sigmaY: tuning.blurSigma,
+                      ),
+                      child: tint,
+                    ),
+                  );
+                }
+                return ClipRect(
+                  child: Haze(
+                    // 渐变模糊：σ 从顶边满值连续衰减到 0（官方 haze 用法）。
+                    edge: HazeEdge.top,
+                    sigma: tuning.blurSigma,
+                    // Haze 的 child 画在模糊层之上，且 child 的尺寸决定
+                    // 模糊区域的尺寸。
+                    child: tint,
+                  ),
+                );
+              },
             );
           },
         );

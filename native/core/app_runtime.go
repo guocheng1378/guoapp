@@ -618,6 +618,10 @@ func nativeDispatch(input nativeInput) (any, error) {
 		if err := engine.flushCatalogDisk(); err != nil {
 			return nil, err
 		}
+		// 榜单缓存有自己的 2s 合并窗，一并冲掉。
+		if engine.downloader != nil {
+			engine.downloader.flushRankingCache()
+		}
 		return true, nil
 	case "recommendations":
 		return engine.nativeRecommendations(ctx, input)
@@ -717,6 +721,10 @@ func nativeDispatch(input nativeInput) (any, error) {
 			return engine.nativeSelectPlayback(playback, input.Session, input.Route)
 		}
 		return engine.nativeResolve(playback, input)
+	// 线路面板按需补线：不参与 playback 序列（不取消在途解析），也
+	// 不重开流会话，只读/更新当前播放会话的线路表。
+	case "routes":
+		return engine.nativePlaybackRoutes(ctx, input.Session)
 	case "cancelPlayback":
 		engine.nativeCancelPlayback(input.Sequence)
 		return true, nil
@@ -1127,6 +1135,7 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		return nativePlan{}, err
 	}
 	choice := nativePlaybackChoices(media, input.Quality)
+	choice.task = task
 	// CDN 直链多带短时效签名，播放中途过期时由本机流代理回调这里重新
 	// 解析并热替换地址，播放器无感知（见 nativeForward / nativeRenewAsset）。
 	choice.refresher = func(ctx context.Context) (providerMedia, error) {
@@ -1196,6 +1205,13 @@ func (engine *nativeEngine) nativeResolveMedia(ctx context.Context, task Task, i
 // nativeResolveCacheKey 生成解析缓存键；无法稳定标识时返回空串（不缓存）。
 func nativeResolveCacheKey(task Task, input nativeInput) string {
 	reference := task.Chapter.VideoURL
+	// 真果·鉴详情懒解析后，绝大多数分集没有 VideoURL；用分集 ID 作
+	// 稳定标识（官方直链每次重兑都会变，本来也不适合当缓存键）。
+	// 其它源保持原语义：红果 CENC 地址会变，改用 ID 会把旧地址粘住。
+	if src, _, valid := splitProviderDramaID(task.Chapter.ID); valid &&
+		src == sourceDongpiandi {
+		reference = task.Chapter.ID
+	}
 	if reference == "" {
 		return ""
 	}

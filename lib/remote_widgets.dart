@@ -1094,6 +1094,16 @@ class TelevisionSearchDialog extends StatefulWidget {
 
 class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   late final _controller = TextEditingController(text: widget.initialValue);
+
+  /// 电视端「搜索 / 清空 / 取消 / 历史 chip」都直接 pop，不经过
+  /// SearchInput._submit 的 unfocus；编辑连接残留会把输入法一路带进
+  /// 播放页。pop 前先释放文本焦点（此时焦点仍在输入框上，不会误伤
+  /// 返回后首页的遥控焦点）。
+  void _pop([Object? value]) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(context, value);
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -1121,7 +1131,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                 hint: '输入剧名',
                 suggestions: widget.suggestions,
                 onCancel: widget.onCancel,
-                onSearch: (value) => Navigator.pop(context, value),
+                onSearch: (value) => _pop(value),
               ),
               if (widget.recentSearches.isNotEmpty) ...[
                 const SizedBox(height: 16),
@@ -1133,7 +1143,7 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
                       ActionChip(
                         label: Text(query),
                         avatar: AppIcon(AppIcons.history, size: 16),
-                        onPressed: () => Navigator.pop(context, query),
+                        onPressed: () => _pop(query),
                       ),
                   ],
                 ),
@@ -1144,16 +1154,10 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
       ),
     ),
     actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('取消'),
-      ),
-      TextButton(
-        onPressed: () => Navigator.pop(context, ''),
-        child: const Text('清空'),
-      ),
+      TextButton(onPressed: () => _pop(), child: const Text('取消')),
+      TextButton(onPressed: () => _pop(''), child: const Text('清空')),
       FilledButton(
-        onPressed: () => Navigator.pop(context, _controller.text.trim()),
+        onPressed: () => _pop(_controller.text.trim()),
         child: const Text('搜索'),
       ),
     ],

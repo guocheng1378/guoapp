@@ -265,7 +265,12 @@ func (engine *nativeEngine) saveCatalogCache(source string, result *nativeCatalo
 		result.Fresh = true
 	}
 	engine.catalogStates[source] = state
-	if base, _, categorized := strings.Cut(source, "|"); categorized {
+	// 带排序的派生键（|sort:heat / |sort:date）不能回并基础目录：
+	// 排序页/「最新」页的条目混进 source 基础键后，`cached` 读到的
+	// 「源站顺序」会被永久污染，切换排序怎么切都不对。分类页仍按
+	// 原语义回并（它是同一源的正常子集）。
+	if base, _, categorized := strings.Cut(source, "|"); categorized &&
+		!strings.Contains(source, "|sort:") {
 		engine.catalogs[base] = mergeNativeCatalog(engine.catalogs[base], items)
 	}
 	err := engine.deferCatalogDiskWriteForSourceLocked(source)
@@ -462,7 +467,17 @@ func writeNativeCacheFile(path string, data []byte) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(temporary.Name(), path)
+	// Windows 上目标文件恰被读句柄占用时 os.Rename 会瞬时失败；直接放弃
+	// 会让本次写盘永远丢失，重启后目录缓存停在旧快照（「缓存有时没有」）。
+	// 短退避重试 3 次，仍失败才把错误交给上层的合并窗/隔离快照兜底。
+	var renameErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if renameErr = os.Rename(temporary.Name(), path); renameErr == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+	}
+	return renameErr
 }
 
 func (engine *nativeEngine) saveDetailMetadata(drama nativeDrama) error {

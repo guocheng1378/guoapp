@@ -170,26 +170,55 @@ double? catalogMetric(String text) {
 /// 源站顺序、名称、季号只依赖本地字段，恒可用。
 /// 服务端排序（如剧果 sort=hot/new）由调用方按源能力并入返回集合。
 Set<CatalogSort> catalogSortSupport(Iterable<Drama> items) {
-  var heat = false;
-  var views = false;
-  var score = false;
-  var dated = false;
-  for (final drama in items) {
-    heat = heat || catalogMetric(drama.heat) != null;
-    views = views || catalogMetric(drama.views) != null;
-    score = score || scoreValue(drama.score) != null;
-    dated = dated || DateTime.tryParse(drama.onlineDate) != null;
-    if (heat && views && score && dated) break;
+  final rows = items.toList();
+  var heat = 0;
+  var views = 0;
+  var score = 0;
+  var dated = 0;
+  for (final drama in rows) {
+    if (catalogMetric(drama.heat) != null) heat++;
+    if (catalogMetric(drama.views) != null) views++;
+    if (scoreValue(drama.score) != null) score++;
+    if (DateTime.tryParse(drama.onlineDate) != null) dated++;
   }
+  // 全源池里「任一条别的源带字段」就宣布支持，点选后却是全 null
+  // 降级成假排序。要求至少半数条目有可比值才开放该排序选项。
+  bool enough(int count) => rows.isNotEmpty && count * 2 >= rows.length;
   return {
     CatalogSort.source,
     CatalogSort.name,
     CatalogSort.season,
-    if (heat) CatalogSort.heat,
-    if (views) CatalogSort.views,
-    if (score) CatalogSort.score,
-    if (dated) CatalogSort.date,
+    if (enough(heat)) CatalogSort.heat,
+    if (enough(views)) CatalogSort.views,
+    if (enough(score)) CatalogSort.score,
+    if (enough(dated)) CatalogSort.date,
   };
+}
+
+/// 分类条多来源合并（站点板块 / 源站菜单 / 条目池 / 本地词表）：按
+/// 归一化名去重，保留传入顺序（远端主页优先）。板块标题截短后与源站
+/// 分类同名时，旧实现会并排显示两个 chip 且 id 不同、内容还不一样。
+List<CatalogCategory> dedupeCategories(Iterable<CatalogCategory> ordered) {
+  final seen = <String>{};
+  return [
+    for (final category in ordered)
+      if (seen.add(normalizedSearchText(category.name))) category,
+  ];
+}
+
+/// 当前池上真正生效的筛选视图：切源/切档/恢复备份后，持久化的
+/// area/year 可能在新池里根本不存在。旧实现仍做精确匹配，把列表静默
+/// 滤空，且另一维度的选项也被这个悬空值过滤成空（面板整节消失，
+/// 用户连清除都做不到）。悬空值一律视为「未选中」。
+CatalogView effectiveFilterView(Iterable<Drama> rows, CatalogView view) {
+  if (view.area.isEmpty && view.year.isEmpty) return view;
+  final areas = <String>{for (final drama in rows) drama.area.trim()};
+  final years = <String>{for (final drama in rows) drama.year.trim()};
+  final area = areas.contains(view.area) ? view.area : '';
+  final year = years.contains(view.year) ? view.year : '';
+  return area == view.area && year == view.year
+      ? view
+      : view.copyWith(area: area, year: year);
 }
 
 int _seasonNumber(String label) {
@@ -305,7 +334,7 @@ Set<String> catalogReleaseOptions(Iterable<Drama> items) {
 }
 
 List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
-  final items = filterCatalog(rows, view);
+  final items = filterCatalog(rows, effectiveFilterView(rows, view));
   if (view.sort == CatalogSort.source) return items;
   final positions = {for (final entry in items.indexed) entry.$2.id: entry.$1};
   final metrics = <String, num?>{
@@ -335,6 +364,30 @@ List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
   if (metricDriven && metrics.values.every((value) => value == null)) {
     return items;
   }
+  // 跨源量纲归一：各源的 heat 可能是裸整数、「X万热度」或播放量字符串，
+  // score 有 0-10 与 0-100 两种刻度。直接按绝对值降序等于拿不同单位
+  // 比大小（用户反馈「所有源的排序不对」的数据层根因）。按源内最大值
+  // 归一到 0~1 再比较；单源时是单调变换，原有顺序完全不变。日期是
+  // 绝对时间戳，跨源可比，不归一。
+  final sourceMax = <String, num>{};
+  if (metricDriven && view.sort != CatalogSort.date) {
+    for (final drama in items) {
+      final value = metrics[drama.id];
+      if (value == null) continue;
+      final previous = sourceMax[drama.source];
+      if (previous == null || value > previous) {
+        sourceMax[drama.source] = value;
+      }
+    }
+  }
+  num? normalized(Drama drama) {
+    final value = metrics[drama.id];
+    if (value == null) return null;
+    final maximum = sourceMax[drama.source];
+    if (maximum == null || maximum == 0) return value;
+    return value / maximum;
+  }
+
   items.sort((a, b) {
     final comparison = switch (view.sort) {
       CatalogSort.source => 0,
@@ -342,7 +395,7 @@ List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
         a.title,
       ).compareTo(normalizedSearchText(b.title)),
       CatalogSort.season => naturalTitleCompare(a.title, b.title),
-      _ => _descending(metrics[a.id], metrics[b.id]),
+      _ => _descending(normalized(a), normalized(b)),
     };
     return comparison != 0
         ? comparison

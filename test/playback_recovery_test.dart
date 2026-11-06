@@ -22,12 +22,15 @@ void main() {
     expect(recovery.next(route(0)), PlaybackRecoveryAction.reuse);
   });
 
-  test('one-route sources refresh twice without endless retrying', () {
+  test('one-route sources refresh once (with global cooldown)', () {
     final recovery = PlaybackRecovery();
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.reuse);
-    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
+    // 全链重解析只给一次，避免故障场景叠两轮十几秒的解析等待。
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.refresh);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
+    // 换集后 reset 仍受 60s 全局冷却，不立即再放行 refresh。
+    recovery.reset();
+    expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.reuse);
     expect(recovery.next(route(0, count: 1)), PlaybackRecoveryAction.stop);
   });
 

@@ -266,26 +266,32 @@ class CatalogBrowser {
       return cached.$3;
     }
     final choices = _choices(group);
-    final known = choices
-        .map((choice) => choice.category.name)
-        .toSet()
-      // 「未分类」是空 category 的兜底名，不算源站自带分组。
-      ..remove(categoryName(''));
-    // 本地兜底组（长剧/短剧档与题材词）的内容完全来自条目池，按池命中
-    // 过滤：没有对应内容的分组不下发（点进去必空），条目到达后自然出现。
-    // category: 源站上报组不在此列——其内容在服务端，本地浏览缓存只是
-    // 冰山一角，按池判定会误杀。
+    // 「源站自带分组」只认站点菜单：choices 还混了条目池分类名，而磁盘
+    // 缓存/详情回填是逐步到达的，用它判定会让题材词表在冷启动先出现、
+    // 菜单到达后整组消失（分类条闪变），也会误把条目池名字当源站分组。
+    final known = <String>{
+      for (final source in group.sources)
+        for (final category in _menus[source.id] ?? const <CatalogCategory>[])
+          categoryName(category.name),
+    }..remove(categoryName(''));
     final hits = _contentfulLocals(group);
+    // 内容去重而不是名字去重：旧实现给本地档恒加「·内容」后缀来回避
+    // 撞名，于是「短剧」与「短剧·内容」两个 chip 内容几乎逐条相同；纯
+    // 视频源全被判长剧时「长剧·内容」又与「全部」全等。只有长短剧都
+    // 存在时这两个档才有区分意义，且源站已上报短剧类时不再发短剧档。
+    // 任何名字里带「短剧」的既有分组（源站菜单上报的 category:短剧，
+    // 或条目池分类名 local:短剧）都与本地短剧档内容重复，只保留前者。
+    final hasShortNamedChoice = choices.any(
+      (choice) => choice.category.name.contains('短剧'),
+    );
+    final hasBothKinds =
+        hits.contains(localLongCategory) && hits.contains(localShortCategory);
     final listed = <CatalogCategory>[
       CatalogCategory.all,
-      // 长剧/短剧固定档：按条目内容定性全源统一划分，不依赖源站分类上报。
-      // 名字恒带「·内容」后缀：短剧源自己就上报「短剧」分类，撞名时若按
-      // 冲突与否改名，条目池/菜单是异步到达的，条上文字会先显示「短剧」
-      // 再跳成「短剧·内容」——恒定命名既保证名字唯一，又不会跳字。
-      if (hits.contains(localLongCategory))
-        CatalogCategory(localLongCategory, '长剧·内容', local: true),
-      if (hits.contains(localShortCategory))
+      if (hasBothKinds && !hasShortNamedChoice)
         CatalogCategory(localShortCategory, '短剧·内容', local: true),
+      if (hasBothKinds)
+        CatalogCategory(localLongCategory, '长剧·内容', local: true),
       for (final choice in choices) choice.category,
       // 固定题材词表只作兜底：源站自己上报过分类（条目带分类字段）时
       // 不再追加提示词分组，避免与源自带分组重复/冲突；完全无分类的
@@ -333,9 +339,12 @@ class CatalogBrowser {
     final requests = choice != null && !choice.category.local
         ? choice.requests
         : {for (final source in group.sources) source.id: ''};
+    // 会话必须包含原始 category（含 `local:` 档）与 group.id：旧实现把
+    // local 档的 category 段写成空串，导致「全部 / 长剧·内容 / 题材」
+    // 共用同一份会话与 nextPage，切档后上拉分页拿到的是上一档的下一页。
     final key =
-        '${group.sources.map((s) => s.id).join(',')}|'
-        '${choice?.category.local == false ? category : ''}|$query|'
+        '${group.id}|${group.sources.map((s) => s.id).join(',')}|'
+        '$category|$query|'
         // 服务端排序参与会话隔离：不同排序各自缓存页序，切换排序即切换会话。
         '$sort';
     final session = _sessions.putIfAbsent(key, _CatalogSession.new);
@@ -357,13 +366,17 @@ class CatalogBrowser {
           if (index < row.length) items[row[index].id] = row[index];
         }
       }
+      // 叠加本地缓存池时只收「匹配本组」的条目：旧实现对 local choice
+      // 无条件叠加整份池，导致题材页比「全部」页还多出历史条目；完全
+      // 不叠加又会让纯本地缓存的题材页空白。short/long 内容档不在
+      // _choices 里（choice==null），走不到这段，天然与「全部」同池。
       if (choice != null) {
         for (final source in group.sources) {
           for (final item in _library[source.id]?.values ?? const <Drama>[]) {
-            if (choice.category.local ||
-                categoryName(item.category) == choice.category.name) {
-              items.putIfAbsent(item.id, () => item);
-            }
+            final matches = categoryName(item.category) == choice.category.name ||
+                (choice.category.local &&
+                    matchesLocalGenre(item, choice.category.name));
+            if (matches) items.putIfAbsent(item.id, () => item);
           }
         }
       }
@@ -403,7 +416,13 @@ class CatalogBrowser {
       final cached = snapshot();
       if (cached.items.isNotEmpty) onCached?.call(cached);
       if (cacheOnly) return cached;
-      if (cached.fresh && cached.items.isNotEmpty) return cached;
+      // 带排序时不能 early-return 基础缓存：Go 的 `cached` 只按
+      // source|category 取键，读到的永远是「源站顺序」，且 UI 仍显示
+      // 已选排序 → 切源/切档后「选了排序纹丝不动」。继续往下发带
+      // sort 的 catalog 请求覆盖即可。
+      if (sort.isEmpty && cached.fresh && cached.items.isNotEmpty) {
+        return cached;
+      }
     }
 
     await _each(sourceOrder, (source) async {
@@ -446,12 +465,17 @@ class CatalogBrowser {
         entry.hasMore =
             query.isEmpty || (SourceSite.byId(source)?.pagedSearch ?? false);
         entry.fresh = false;
-        if (force) entry.items = [];
+        // 强制刷新失败（断网/源站超时）不能清掉已在显示的磁盘缓存：
+        // 旧实现把 entry.items 清空，用户看到的就是「下拉刷新一下，
+        // 缓存突然没有了」。错误仍通过 failures 以横幅/警告呈现。
         failures[source] = error.toString();
       }
     });
     final result = snapshot();
-    if (result.items.isEmpty && failures.isNotEmpty) {
+    // 强制刷新失败时即便仍保有缓存条目也要把错误抛给 UI（错误横幅）。
+    // 条目本身不再清空：交给首页在 catch 里保留旧列表，避免「下拉刷新
+    // 一下缓存就没了」。普通加载有缓存可显示时照旧静默降级。
+    if (failures.isNotEmpty && (result.items.isEmpty || force)) {
       throw AppFailure(result.warning);
     }
     return result;

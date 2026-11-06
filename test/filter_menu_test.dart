@@ -409,6 +409,64 @@ void main() {
     expect(catalogReleaseOptions(const <Drama>[]), <String>{''});
   });
 
+  test('effectiveFilterView 把悬空的地区/年份视为未选中', () {
+    final items = [
+      const Drama(id: 'a', source: 's', title: '甲', area: '内地', year: '2024'),
+      const Drama(id: 'b', source: 's', title: '乙', area: '香港', year: '2025'),
+    ];
+    final view = effectiveFilterView(
+      items,
+      const CatalogView(area: '韩国', year: '2024'),
+    );
+    expect(view.area, '', reason: '新池没有「韩国」，不能把列表静默滤空');
+    expect(view.year, '2024');
+    expect(
+      sortCatalog(items, const CatalogView(area: '韩国')).length,
+      items.length,
+    );
+  });
+
+  test('跨源热度按源内最大值归一，不再按绝对值混排', () {
+    final items = [
+      const Drama(id: 'a1', source: 'a', title: '甲', heat: '9000000'),
+      const Drama(id: 'a2', source: 'a', title: '乙', heat: '1000000'),
+      const Drama(id: 'b1', source: 'b', title: '丙', heat: '9'),
+      const Drama(id: 'b2', source: 'b', title: '丁', heat: '1'),
+    ];
+    final ids = sortCatalog(items, const CatalogView(sort: CatalogSort.heat))
+        .map((drama) => drama.id)
+        .toList();
+    // 旧实现按绝对值必然是 a1,a2,b1,b2；归一后 B 源的 9/9=1.0
+    // 应该压过 A 源的 1000000/9000000≈0.11。
+    expect(ids.first, 'a1');
+    expect(ids.indexOf('b1'), lessThan(ids.indexOf('a2')));
+    expect(ids.last, 'b2');
+  });
+
+  test('catalogSortSupport 要求半数以上条目具备可比值', () {
+    final items = [
+      const Drama(id: 'a', source: 's', title: '甲', heat: '12万'),
+      const Drama(id: 'b', source: 's', title: '乙'),
+      const Drama(id: 'c', source: 's', title: '丙'),
+    ];
+    expect(catalogSortSupport(items).contains(CatalogSort.heat), isFalse);
+    expect(catalogSortSupport([items.first]).contains(CatalogSort.heat), isTrue);
+  });
+
+  test('dedupeCategories 按归一化名去重并保留远端优先顺序', () {
+    final merged = dedupeCategories(const [
+      CatalogCategory('', '全部'),
+      CatalogCategory('home:movie', '电影'),
+      CatalogCategory('movie', '电 影'),
+      CatalogCategory('local:总裁', '总裁'),
+    ]);
+    expect(merged.map((category) => category.id), [
+      '',
+      'home:movie',
+      'local:总裁',
+    ]);
+  });
+
   test('catalogFilterOptions 地区按数量降序、年份数字降序取前 10', () {
     final items = [
       for (var i = 0; i < 5; i++)

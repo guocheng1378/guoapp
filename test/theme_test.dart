@@ -271,8 +271,9 @@ void main() {
         SystemChrome.latestStyle?.systemNavigationBarContrastEnforced,
         isFalse,
       );
-      expect(find.text('选集'), findsOneWidget);
-      expect(find.byKey(const ValueKey('play-episode-1')), findsOneWidget);
+      // 播放器 chrome 改造后半屏面板标题按 compact 在「剧集/选集」间
+      // 切换且默认可能未挂载；`play-episode-1` 这个 key 在生产代码里
+      // 也已不存在。本用例只验证亮/暗主题与 SystemChrome 口径。
       await tester.pumpWidget(const SizedBox.shrink());
       for (var i = 0; i < 12; i++) {
         await tester.pump(const Duration(milliseconds: 10));

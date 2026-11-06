@@ -113,9 +113,12 @@ class AppScaffold extends StatelessWidget {
     if (!scrollable) {
       return children.isEmpty ? null : Column(children: children);
     }
-    return ListView(
+    // 次要页的卡片自带 backdrop/隐式动画：ListView(children:) 会在进页
+    // 第一帧把全部卡片一起挂载，改 builder 让视口外的卡片延迟构建。
+    return ListView.builder(
       padding: padding,
-      children: children,
+      itemCount: children.length,
+      itemBuilder: (context, index) => children[index],
     );
   }
 }

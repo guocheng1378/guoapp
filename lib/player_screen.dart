@@ -36,6 +36,7 @@ import 'player_side_panel.dart';
 import 'player_skip_marks.dart';
 import 'screen_brightness.dart';
 import 'television_controls.dart';
+import 'text_input_dismiss.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
 import 'lan_controller.dart';
@@ -135,6 +136,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _handoffOwned = true;
   double? _lanFirstPosition;
   String? _savedProgressKey;
+  // 最近一次 seek 的时间：周期存盘在 seek 后 1s 内挂起，避免把中间
+  // 位置/duration 漂移写成分集进度（flush 保存不受此限，不丢进度）。
+  DateTime? _lastSeekAt;
   // 本次播放是否已用 notify 通知过「继续观看」（周期保存静默，只在退出/切集时通知一次）。
   bool _watchNotified = false;
   // 位置流重活节流：上次执行时的播放位置（毫秒），-1 表示需要立刻执行一次。
@@ -291,6 +295,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 搜索 → 详情 → 播放、榜单/下载等入口会直推 PlayerScreen，不经过
+    // 启动薄壳的焦点收口；首帧后再收一次键盘。这里只 hide、不 unfocus，
+    // 否则会连播放页自己的遥控/键盘焦点一起移走。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _closed) return;
+      unawaited(hideTextInput());
+    });
     _index = widget.initialIndex;
     _profileEpoch = widget.handoff?.profileEpoch ?? widget.store.profileEpoch;
     final preferences = widget.store.playbackPreferences;
@@ -1120,6 +1131,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     final ticket = _generation;
     _acceptErrors = false;
+    // 原地重开沿用同一地址与停留位置：首个位置事件只做节流基线，
+    // 避免重开的初始位置被误当成播放推进、立刻触发片尾连跳。
+    // 跳片额度保持原状（同一次播放每段只生效一次的语义不变）。
+    _positionPrimed = false;
     _danmaku.setPlan(null);
     await _serialize(() async {
       if (_closed || ticket != _generation) {
@@ -1184,6 +1199,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     final position = _player.state.position.inMilliseconds / 1000;
     final duration = _player.state.duration.inMilliseconds / 1000;
     if (position < .1) {
+      return;
+    }
+    // seek 后 1s 内不写周期进度：HLS 去广告改写/片长漂移期间的位置
+    // 会被误判成 finished，下次进入直接从头播。切集/退出的 flush
+    // 不受限，保证进度不丢。
+    if (!flush &&
+        _lastSeekAt != null &&
+        DateTime.now().difference(_lastSeekAt!) < const Duration(seconds: 1)) {
+      return;
+    }
+    // 片长已上报但位置明显越界（中间态），同样不落盘。
+    if (duration > 0 && position > duration + 1) {
       return;
     }
     final store = widget.store;
@@ -1275,7 +1302,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       _playIntent = playWhenReady;
     }
     _resumePosition = position;
-    // 换一集重来：片头/片尾各允许生效一次。
+    // 换一集重来：片头/片尾各允许生效一次。续播落在片头区间时仍按
+    // 既有约定自动跳到 introEnd（player_skip_marks_test 覆盖），勿改。
     _introSkipped = false;
     _outroSkipped = false;
     // 重开后首个位置事件（open 的 resume 初始位置）只做节流基线：
@@ -1496,9 +1524,34 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 起播零等待后首帧可能只有 1 条线路；打开/切换线路时按需向核心拉
+  /// 全表（官方线补兑也在这里发生），缓存命中时零网络。
+  Future<PlaybackPlan> _refreshRoutes(PlaybackPlan plan) async {
+    if (plan.routeCount >= 2 ||
+        widget.detail.drama.source != 'dongpiandi') {
+      return plan;
+    }
+    try {
+      final refreshed = await widget.repository.playbackRoutes(plan);
+      if (mounted) setState(() => _plan = refreshed);
+      return refreshed;
+    } catch (_) {
+      return plan;
+    }
+  }
+
+  /// 真果·鉴即使首帧只有 1 条线路也要给入口，否则用户永远打不开
+  /// 面板去触发按需补线（官方源入口会整个消失）。
+  bool get _routesAvailable =>
+      (_plan?.routeCount ?? 0) >= 2 ||
+      (widget.detail.drama.source == 'dongpiandi' &&
+          (_plan?.session.isNotEmpty ?? false));
+
   Future<void> _switchRoute() async {
-    final plan = _plan;
-    if (plan == null || plan.routeCount < 2) return;
+    final current = _plan;
+    if (current == null) return;
+    final plan = await _refreshRoutes(current);
+    if (!mounted || plan.routeCount < 2) return;
     // 循环切到下一条：原先用 hasAlternative 早退（它的语义是「当前不是最后
     // 一条」），切到最后一条后电视端就再也换不了线；且传的是
     // alternative（失败恢复语义）而非用户主动切线，改走 _selectRoute 的
@@ -1525,8 +1578,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 线路面板：官方源平铺 + 第三方源折叠成一条入口，点选即切。
   /// 真果·鉴一集常带 20~30 条三方线，全平铺会把 1~5 条官方线淹没在长列表里。
   Future<void> _showRouteMenu() async {
-    final plan = _plan;
-    if (plan == null || plan.routeCount < 2 || !mounted) return;
+    final current = _plan;
+    if (current == null || !mounted) return;
+    final plan = await _refreshRoutes(current);
+    if (!mounted || plan.routeCount < 2) return;
     final labels = plan.routeLabels;
     String labelOf(int index) {
       final label = (index >= 0 && index < labels.length)
@@ -1558,7 +1613,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   String? get _routeLabel {
     final plan = _plan;
-    if (plan == null || plan.routeCount < 2) return null;
+    if (plan == null) return null;
+    if (plan.routeCount < 2) {
+      return widget.detail.drama.source == 'dongpiandi' ? '线路' : null;
+    }
     final index = plan.routeIndex;
     final label = (index >= 0 && index < plan.routeLabels.length)
         ? plan.routeLabels[index].trim()
@@ -2103,12 +2161,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 时该段保持 0（[resolveSkipAction] 会当作未设置）。
   EpisodeSkipMarks _effectiveSkipMarks(double duration) {
     if (_skipIntroSeconds <= 0 && _skipOutroFromEnd <= 0) return _skipMarks;
-    return EpisodeSkipMarks(
-      introEnd:
-          _skipMarks.hasIntro ? _skipMarks.introEnd : _skipIntroSeconds.toDouble(),
-      outroStart: _skipMarks.hasOutro || duration <= 0
-          ? _skipMarks.outroStart
-          : (duration - _skipOutroFromEnd).clamp(0.0, duration).toDouble(),
+    // 预设片尾按 duration-N 换算，钳制规则见 effectiveSkipMarks：
+    // 短片长/片长漂移时整段作废，避免开播即被判成片尾连环切集。
+    return effectiveSkipMarks(
+      manual: _skipMarks,
+      introPreset: _skipIntroSeconds.toDouble(),
+      outroFromEnd: _skipOutroFromEnd.toDouble(),
+      duration: duration,
     );
   }
 
@@ -2143,8 +2202,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       case SkipMarkAction.skipIntro:
         _introSkipped = true;
         _interactions.hint('已跳过片头');
+        // seek 失败要复位标记，否则本集永远停在片头且不再重试。
         unawaited(
-          _seekTo(Duration(milliseconds: (marks.introEnd * 1000).round())),
+          _applyIntroSeek(
+            Duration(milliseconds: (marks.introEnd * 1000).round()),
+          ),
         );
       case SkipMarkAction.skipOutro:
         _outroSkipped = true;
@@ -2155,11 +2217,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  Future<void> _seekTo(Duration target) async {
-    if (_closed || _loading || _error != null) return;
+  /// 跳片头：seek 没落地就把「已跳过」标记还回去，让下一个位置事件重试。
+  /// open 刚完成、duration 未知或缓冲不足时 seek 会抛错，旧实现先置标记
+  /// 再 fire-and-forget，失败后本集再也不跳片头。
+  Future<void> _applyIntroSeek(Duration target) async {
+    final succeeded = await _seekTo(target);
+    if (!succeeded && !_closed) _introSkipped = false;
+  }
+
+  /// 返回 seek 是否真正落地（供跳片头决定是否回滚标记）。
+  Future<bool> _seekTo(Duration target) async {
+    if (_closed || _loading || _error != null) return false;
     _handoffOwned = false;
     widget.handoff?.fail('接收端已调整播放位置');
     final ticket = ++_seekSequence;
+    _lastSeekAt = DateTime.now();
     final generation = _generation;
     _danmaku.beginSeek();
     _enhancement.ignorePerformance();
@@ -2174,6 +2246,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _danmaku.endSeek(succeeded ? target : _player.state.position);
       }
     }
+    return succeeded;
   }
 
   void _seek(int seconds) {
@@ -2765,7 +2838,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               // 入口可用性按「线路数 ≥2」判定，而非 hasAlternative（后者语义是
               // 「当前不是最后一条」，处在最后一条时为 false → 线路按钮整个
               // 消失，用户再也切不回来；真果·鉴一集常带 20~30 条线，必现）。
-              onRoute: (_plan?.routeCount ?? 0) >= 2
+              onRoute: _routesAvailable
                   ? (_television ? _switchRoute : _showRouteMenu)
                   : null,
               onDisplayOptions: _showDisplayOptions,

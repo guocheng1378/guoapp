@@ -952,55 +952,40 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 		ReleaseStatus: status,
 	}
 
-	// 对每集并发调用 playback resolve，拿到真实 m3u8（按原序回填）。
+	// 详情只解析首集，其余集只留 ID/PageURL/token 反查信息，播放期按需
+	// 解析（resolveDongpiandiMedia 的冷起播缓存路径）。旧实现对 N 个分集
+	// 并发 resolve + 兑换，13 集 5.8s、74 集 15s，全部压在「点卡 → 播放」
+	// 的同步链上，是「真果·鉴进入卡」的主因；还会抢光站点限流额度，
+	// 让用户真正要播的那一集兑不出官方线。Chapter 的 ID/PageURL 必须
+	// 保留：PageURL 用于反查 detailID→token，ID 用于线路缓存与弹幕。
 	chapters := make([]Chapter, len(episodes))
-	var wg sync.WaitGroup
-	// 6 路并发：每集要一次 resolve（+官方票据兑换），真网实测 4 路时
-	// 13 集要 5.8s，提到 6 路可压到 3s 级；兑换并发由 client 共享闸门兜住。
-	sem := make(chan struct{}, 6)
 	for i := range episodes {
 		ep := episodes[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			// 只对首集全量兑换官方票据（其余集留给播放期按需兑换）：
-			// 真网实测「一部剧几十集一起全量兑换」会被站点限流（故纵 74 集
-			// 只有 12 集兑出官方线、耗时 15s），绝大多数集反而丢掉官方源，
-			// 用户看到的就是「官方源一个都没有」。首集兑换保证详情页默认
-			// 地址落在官方线，其它集在播放期解析（单集请求，成功率高）。
-			full := i == 0
-			set, _ := dongpiandiResolveLinesSet(ctx, client, ep.Token, false, full, 0)
-			lines := set.Lines
-			m3u8 := ""
-			if len(lines) > 0 {
-				m3u8 = lines[0].URL
-				// 三方直连无条件缓存（长效）；官方线只在票据全兑出来时刷新，
-				// 一次限流丢线不覆盖上一次的结果。此前残缺时整表都不缓存，
-				// 那些集每次播放都要重新 resolve（1~3s）。
+		num := dongpiandiEpisodeNumber(ep.Number, i+1)
+		title := strings.TrimSpace(ep.Title)
+		if title == "" {
+			title = "第" + strconv.Itoa(num) + "集"
+		}
+		chapter := Chapter{
+			ID:      providerDramaID(sourceDongpiandi, ep.ID),
+			Source:  sourceDongpiandi,
+			Title:   title,
+			PageURL: dongpiandiBaseURL() + "/player/" + url.PathEscape(detail.ID),
+			Referer: dongpiandiBaseURL() + "/",
+		}
+		raw, _ := json.Marshal(num)
+		chapter.CurrentEpisode = raw
+		if i == 0 {
+			// 首集仍全量兑换，保证详情页默认地址落在官方线。
+			set, _ := dongpiandiResolveLinesSet(ctx, client, ep.Token, false, true, 0)
+			if lines := set.Lines; len(lines) > 0 {
+				chapter.VideoURL = lines[0].URL
 				dongpiandiCacheLines(ep.ID, lines, set.complete())
 				dongpiandiCacheTickets(ep.ID, set.TicketLines)
 			}
-			num := dongpiandiEpisodeNumber(ep.Number, i+1)
-			title := strings.TrimSpace(ep.Title)
-			if title == "" {
-				title = "第" + strconv.Itoa(num) + "集"
-			}
-			chapter := Chapter{
-				ID:       providerDramaID(sourceDongpiandi, ep.ID),
-				Source:   sourceDongpiandi,
-				Title:    title,
-				VideoURL: m3u8,
-				PageURL:  dongpiandiBaseURL() + "/player/" + url.PathEscape(detail.ID),
-				Referer:  dongpiandiBaseURL() + "/",
-			}
-			raw, _ := json.Marshal(num)
-			chapter.CurrentEpisode = raw
-			chapters[i] = chapter
-		}()
+		}
+		chapters[i] = chapter
 	}
-	wg.Wait()
 	compact := make([]Chapter, 0, len(chapters))
 	for _, chapter := range chapters {
 		if chapter.ID != "" {
@@ -1037,7 +1022,10 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 // 60~100 集的剧，24 集之外的集永远没人补、只能靠播放期现场兑换（用户翻到
 // 后面集数看到的全是三方源）；预算同步放宽到 150s 兜住 48 集的串行节奏。
 const (
-	dongpiandiBackfillLimit  = 48
+	// 详情改为懒解析后不再需要为整部剧预兑官方线：后台补兑只预热最
+	// 近几集，其余集由播放期/线路面板按需兑换。48 集串行 150s 会长期
+	// 占住兑换闸门与站点限流窗，是「点卡反而变慢」的隐形放大器。
+	dongpiandiBackfillLimit  = 8
 	dongpiandiBackfillDelay  = 2 * time.Second
 	dongpiandiBackfillBudget = 150 * time.Second
 	dongpiandiBackfillGap    = 400 * time.Millisecond
@@ -1486,17 +1474,29 @@ var (
 	dongpiandiSpeedCache = map[string]dongpiandiSpeedEntry{}
 )
 
-func dongpiandiSpeedGet(address string) (dongpiandiProbeResult, bool) {
+// dongpiandiSpeedKey 用「线 ID + 去掉查询串的 URL」做测速缓存键。
+// 官方直链每次重兑都会换预签名查询串，按完整 URL 做键必然 miss，
+// 每次切集都重跑 1.5s 探针；同一资源的 path 不变，去掉查询串即可复用。
+// 线 ID 前缀避免不同线路恰好同 path 时串味。
+func dongpiandiSpeedKey(line dongpiandiLine) string {
+	address := line.URL
+	if idx := strings.IndexByte(address, '?'); idx >= 0 {
+		address = address[:idx]
+	}
+	return line.ID + "|" + address
+}
+
+func dongpiandiSpeedGet(key string) (dongpiandiProbeResult, bool) {
 	dongpiandiSpeedMu.Lock()
 	defer dongpiandiSpeedMu.Unlock()
-	entry, ok := dongpiandiSpeedCache[address]
+	entry, ok := dongpiandiSpeedCache[key]
 	if !ok || time.Since(entry.at) > dongpiandiSpeedTTL {
 		return dongpiandiProbeResult{}, false
 	}
 	return entry.res, true
 }
 
-func dongpiandiSpeedPut(res dongpiandiProbeResult) {
+func dongpiandiSpeedPut(key string, res dongpiandiProbeResult) {
 	if res.url == "" || !res.ready {
 		return
 	}
@@ -1504,25 +1504,37 @@ func dongpiandiSpeedPut(res dongpiandiProbeResult) {
 	defer dongpiandiSpeedMu.Unlock()
 	if len(dongpiandiSpeedCache) >= 256 {
 		now := time.Now()
-		for key, entry := range dongpiandiSpeedCache {
+		for existing, entry := range dongpiandiSpeedCache {
 			if now.Sub(entry.at) > dongpiandiSpeedTTL {
-				delete(dongpiandiSpeedCache, key)
+				delete(dongpiandiSpeedCache, existing)
 			}
 		}
+		// 旧实现满表整表清空，一批切集会集体重跑探针；改为逐出最旧一条，
+		// 与 dongpiandiLinesCache 的 LRU 口径一致。
 		if len(dongpiandiSpeedCache) >= 256 {
-			dongpiandiSpeedCache = map[string]dongpiandiSpeedEntry{}
+			var oldestKey string
+			var oldest time.Time
+			for existing, entry := range dongpiandiSpeedCache {
+				if oldestKey == "" || entry.at.Before(oldest) {
+					oldestKey, oldest = existing, entry.at
+				}
+			}
+			if oldestKey != "" {
+				delete(dongpiandiSpeedCache, oldestKey)
+			}
 		}
 	}
-	dongpiandiSpeedCache[res.url] = dongpiandiSpeedEntry{res: res, at: time.Now()}
+	dongpiandiSpeedCache[key] = dongpiandiSpeedEntry{res: res, at: time.Now()}
 }
 
 // dongpiandiProbeLineCached 命中缓存直接返回，未命中实测后回填（只缓存可达结果）。
-func dongpiandiProbeLineCached(ctx context.Context, address string) dongpiandiProbeResult {
-	if res, ok := dongpiandiSpeedGet(address); ok {
+func dongpiandiProbeLineCached(ctx context.Context, line dongpiandiLine) dongpiandiProbeResult {
+	key := dongpiandiSpeedKey(line)
+	if res, ok := dongpiandiSpeedGet(key); ok {
 		return res
 	}
-	res := dongpiandiProbeLine(ctx, address)
-	dongpiandiSpeedPut(res)
+	res := dongpiandiProbeLine(ctx, line.URL)
+	dongpiandiSpeedPut(key, res)
 	return res
 }
 
@@ -1576,9 +1588,9 @@ func dongpiandiProbeGroup(ctx context.Context, candidates []dongpiandiLine, budg
 	}
 	outcomes := make(chan probeOutcome, len(candidates))
 	for i, line := range candidates {
-		go func(idx int, address string) {
-			outcomes <- probeOutcome{idx, dongpiandiProbeLineCached(probeCtx, address)}
-		}(i, line.URL)
+		go func(idx int, candidate dongpiandiLine) {
+			outcomes <- probeOutcome{idx, dongpiandiProbeLineCached(probeCtx, candidate)}
+		}(i, line)
 	}
 	results := make([]dongpiandiProbeResult, len(candidates))
 	collected := 0
@@ -1763,7 +1775,10 @@ func dongpiandiFirstSegment(base, body string) string {
 // dongpiandiMediaAlive 轻量验证播放地址当前可用
 // （m3u8 内容校验 / mp4 Range 2xx / 无后缀 mp4 按字节流魔数判定）。
 func dongpiandiMediaAlive(ctx context.Context, address string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	// 死地址现在会先走「已过滤同源死线」的缓存起播，判死的代价从
+	// 「3s + 全链 2~5s + 测速」降到「1s + 本地」，超时可以收短。
+	// 慢 CDN 被误判死也只是走缓存/全链兜底，不会播死地址。
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	if strings.Contains(strings.ToLower(address), ".mp4") {
 		total, _, _ := dongpiandiFetchSpeedCapture(ctx, address, 16*1024)
@@ -2162,7 +2177,18 @@ func dongpiandiOnlyActive(ctx context.Context) bool {
 // 凑不出来返回 ok=false，调用方继续走全链解析。
 func (d *Downloader) dongpiandiMediaFromCachedLines(ctx context.Context, task Task, sourceID string) (providerMedia, bool) {
 	lines := dongpiandiCachedLines(sourceID)
-	if dongpiandiOfficialTryDue(sourceID) {
+	// 缓存里已有新鲜官方线时不要再兑一次票：每次重兑都是一次 POST，
+	// 失败还会把 15/30/60s 冷却记在这一集上，反而让线路面板的按需
+	// 补兑被闸门挡住。只有官方段过期/缺失（lines 里没有 Official）
+	// 才补兑。
+	hasOfficial := false
+	for _, line := range lines {
+		if line.Official {
+			hasOfficial = true
+			break
+		}
+	}
+	if !hasOfficial && dongpiandiOfficialTryDue(sourceID) {
 		if tickets := dongpiandiCachedTickets(sourceID); len(tickets) > 0 {
 			dongpiandiMarkOfficialTried(sourceID)
 			redeemed, throttled := dongpiandiRedeemTicketsRetry(ctx, newDongpiandiClient(), tickets, 2)
@@ -2218,6 +2244,56 @@ func (d *Downloader) dongpiandiMediaFromCachedLines(ctx context.Context, task Ta
 	return prepared, true
 }
 
+// dongpiandiMediaFromDeadAddressCache 是「地址判死」后的缓存快路径。
+// 历史约束（78985272/85512224）：旧缓存线可能与死地址同源，直接吃缓存
+// 会把死线再播一遍。这里先用 dongpiandiCachedLinesState 取「仍新鲜」的
+// 段（过期官方线根本不会返回），再按 URL 精确排除死地址本身；过滤后
+// 凑不出就返回 false，由调用方走完整重解析，原约束完整保留。
+// 起播期不重兑票据（冷却留给线路面板）也不测速（1.2s 不压在切集上）。
+func (d *Downloader) dongpiandiMediaFromDeadAddressCache(ctx context.Context, sourceID, deadAddress string) (providerMedia, bool) {
+	if sourceID == "" {
+		return providerMedia{}, false
+	}
+	lines, _ := dongpiandiCachedLinesState(sourceID)
+	kept := make([]dongpiandiLine, 0, len(lines))
+	for _, line := range lines {
+		if line.URL == "" || (deadAddress != "" && line.URL == deadAddress) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if len(kept) == 0 {
+		return providerMedia{}, false
+	}
+	if dongpiandiOnlyActive(ctx) {
+		official := false
+		for _, line := range kept {
+			if line.Official {
+				official = true
+				break
+			}
+		}
+		if !official {
+			return providerMedia{}, false
+		}
+	}
+	media := dongpiandiLineMedia(kept[0])
+	for _, line := range kept[1:] {
+		if line.URL == media.URL {
+			continue
+		}
+		media.Variants = append(media.Variants, dongpiandiLineMedia(line))
+	}
+	if media.URL == "" {
+		return providerMedia{}, false
+	}
+	prepared, err := d.prepareWebProviderMedia(ctx, media, "真果·鉴")
+	if err != nil {
+		return providerMedia{}, false
+	}
+	return prepared, true
+}
+
 // dongpiandiCachedTickets 取某集缓存的全部官方票据（过期或不存在返回空）。
 func dongpiandiCachedTickets(episodeID string) []dongpiandiLine {
 	if episodeID == "" {
@@ -2244,29 +2320,30 @@ func (d *Downloader) resolveDongpiandiMedia(ctx context.Context, task Task) (pro
 	if address != "" && d.dongpiandiOfficialOnlyBlocksAddress(ctx, task, address) {
 		address = ""
 	}
-	if address != "" && dongpiandiMediaAlive(ctx, address) {
-		media, err := d.prepareWebProviderMedia(ctx, providerMedia{URL: address}, "真果·鉴")
-		if err != nil {
-			return providerMedia{}, err
-		}
-		// 等待窗自适应：缓存已有官方线（首集/近期解析过）attach 几乎零成本，
-		// 2.4s 足够；缓存没有官方线时这一步要现场 resolve + 兑换（真网单集
-		// 约 1.5~2.5s），2.4s 常常刚好超时 → 线路面板没有官方源，放宽到 3.5s。
-		wait := dongpiandiAttachWaitFresh
-		if _, sourceID, valid := splitProviderDramaID(task.Chapter.ID); !valid || !dongpiandiHasFreshOfficial(sourceID) {
-			wait = dongpiandiAttachWaitCold
-		}
-		d.dongpiandiAttachRoutes(ctx, &media, task, wait)
-		return media, nil
+	alive := address != "" && dongpiandiMediaAlive(ctx, address)
+	deadAddress := ""
+	if address != "" && !alive {
+		deadAddress = address
 	}
-	// 缓存优先起播（红果式：能不付全链就不付全链）。这一集解析过一次后，
-	// 线路表/票据就进了 dongpiandiLinesCache——直接用缓存起播，省掉「重拉
-	// 详情 + resolve token + 全量兑换」的同步往返（真机实测这条全链可拖到
-	// 分钟级，是「真果·鉴看不了」的观感主因）。只用于无地址的冷起播：
-	// 地址存在但已死时必须强制全链刷新（旧缓存线与死地址同源，再吃缓存
-	// 只会把死线再播一遍）。凑不出来再走下面的全链。
-	if address == "" {
-		if _, sourceID, valid := splitProviderDramaID(task.Chapter.ID); valid {
+	if alive {
+		// P0-3：起播关键路径不再同步等 2.4/3.5s 的 attach 等待窗，也不
+		// 在这里跑线路测速。线路面板打开时由 "routes" action 现场拉全表
+		// 并补兑官方线（缓存命中时零网络），见 nativePlaybackRoutes。
+		// 起播地址本身已经由 resolve/缓存快路径择优完成。
+		return d.prepareWebProviderMedia(ctx, providerMedia{URL: address}, "真果·鉴")
+	}
+	// 缓存优先起播（能不付全链就不付全链）：
+	// - address==""：详情懒解析后的常规冷起播，走原有缓存路径；
+	// - 地址判死：先从「已过滤同源死线、仍新鲜」的缓存里挑另一条直接播，
+	//   省掉旧实现固定的 3s 判死 + 2~5s 全链 + 1.2s 测速（切集卡主因）。
+	//   历史约束保留：过滤后凑不出，仍完整走下面的全链重解析；绝不复用
+	//   与死地址同源的线，也不会在全链失败后回退播死地址。
+	if _, sourceID, valid := splitProviderDramaID(task.Chapter.ID); valid {
+		if deadAddress != "" {
+			if prepared, ok := d.dongpiandiMediaFromDeadAddressCache(ctx, sourceID, deadAddress); ok {
+				return prepared, nil
+			}
+		} else if address == "" {
 			if prepared, ok := d.dongpiandiMediaFromCachedLines(ctx, task, sourceID); ok {
 				return prepared, nil
 			}
@@ -2315,6 +2392,11 @@ func (d *Downloader) resolveDongpiandiMedia(ctx context.Context, task Task) (pro
 				}
 			}
 		}
+	}
+	if deadAddress != "" {
+		// 旧实现会在全链也失败后把死地址再 prepare 一次，播放器拿到
+		// 403 才报错；明确失败比分因更清楚，也杜绝「切集后一直转圈」。
+		return providerMedia{}, errors.New("真果·鉴：原播放地址已失效且本次未能重新解析，请重试或切换线路")
 	}
 	if address == "" {
 		if dongpiandiOnlyActive(ctx) {

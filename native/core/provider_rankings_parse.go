@@ -93,9 +93,10 @@ func parseHongguoRanking(body string, board rankingBoard, page int) (rankingPage
 		if len(row.Tags) > 0 {
 			drama.CategoryName = row.Tags[0]
 		}
-		if len(row.EpisodeIDs) > 0 {
-			drama.TotalEpisode = len(row.EpisodeIDs)
-		}
+		// 榜单接口不下发集数：episodeVids 只是本页挂的 vid 片段（常为 2~3
+		// 条），把它当总集数会写出「共 2 部 / 更新至 2 集」，且该值落在
+		// TotalEpisode 强字段上，绕过 nativeNormalize 的弱字段上限护栏。
+		// 宁可不显示集数，也不要显示错的；真实集数由详情页给出。
 		result.Items = append(result.Items, rankingItem{Rank: row.Rank, Drama: drama, Metric: row.Heat})
 	}
 	if len(result.Items) == 0 && result.HasMore {

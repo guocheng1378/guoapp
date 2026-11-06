@@ -85,14 +85,48 @@ func (d *Downloader) writeRankingCacheLocked() {
 // 只有成功落盘才推进 lastWrite/清 dirty。须持 cache.mu。
 func (d *Downloader) flushRankingCacheLocked() {
 	cache := &d.rankings
+	if d.cfg.dataDir == "" {
+		return
+	}
 	body, err := json.Marshal(cache.pages)
 	if err != nil || len(body) > 8<<20 {
 		return
 	}
 	if writeNativeCacheFile(filepath.Join(d.cfg.dataDir, "rankings.json"), body) != nil {
+		// 尾写链不能断：失败后重排一次退避定时器。旧实现保留 dirty 却
+		// 不再排定时器，之后没有新写请求就永远不落盘，重启读到旧页/空页。
+		if cache.writeTimer == nil {
+			cache.writeTimer = time.AfterFunc(rankingWriteInterval, func() {
+				cache.mu.Lock()
+				defer cache.mu.Unlock()
+				cache.writeTimer = nil
+				if cache.dirty {
+					d.flushRankingCacheLocked()
+				}
+			})
+		}
 		return
 	}
 	cache.lastWrite, cache.dirty = time.Now(), false
+}
+
+// flushRankingCache 供切后台/退出时的强制冲刷：榜单也有 2s 合并窗，
+// 只冲 catalogs.json 会让待写的 rankings.json 随进程被杀而丢失。
+func (d *Downloader) flushRankingCache() {
+	if d.cfg.dataDir == "" {
+		return
+	}
+	d.rankings.mu.Lock()
+	defer d.rankings.mu.Unlock()
+	// 先停掉旧尾写定时器并置空：flush 失败时会重排一个新的，顺序反了
+	// 会把新定时器一起停掉、dirty 又变成没人刷。
+	if timer := d.rankings.writeTimer; timer != nil {
+		timer.Stop()
+		d.rankings.writeTimer = nil
+	}
+	if d.rankings.dirty {
+		d.flushRankingCacheLocked()
+	}
 }
 
 func (engine *nativeEngine) nativeRanking(ctx context.Context, input nativeInput) (any, error) {
@@ -124,6 +158,13 @@ func (engine *nativeEngine) nativeRanking(ctx context.Context, input nativeInput
 		drama := nativeNormalize(row.Drama)
 		if old, found := library[drama.ID]; found {
 			drama = mergeNativeDrama(old, drama)
+		}
+		if board.Source == sourceHongguo {
+			// 红果榜单响应没有集数字段；目录缓存里可能残留旧版本把
+			// episodeVids 长度/播放量当集数的脏值，不能被反向灌回榜单
+			// 卡片（用户看到的「共 N 部 / 更新至 N 集」就是这么来的）。
+			// rankings.json 的 stale 页同样在这里被清洗。
+			drama.Episodes = 0
 		}
 		items = append(items, item{Rank: row.Rank, Drama: drama, Metric: row.Metric})
 	}

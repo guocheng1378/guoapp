@@ -112,6 +112,33 @@ SkipMarkAction resolveSkipAction({
   return SkipMarkAction.none;
 }
 
+/// 合并「用户手动标定」与「站源社区预设」，并给预设片尾加安全下界。
+///
+/// 预设的片尾是「距结尾 N 秒」。短剧片长只有几十秒、或 mpv 起播时
+/// duration 只报到已缓冲长度、或 HLS 广告分片被剔除后片长变短时，
+/// `duration - N` 会落在片头附近：开播十几秒就被判成片尾，接着自动
+/// 切下一集且下一集从 0 起播——真机观感就是「去广告有时重新播放、
+/// 一直过不去」。因此只有阈值晚于「片长一半」且晚于「片头结束 + 5 秒」
+/// 时才启用片尾跳过，越界整段作废（宁可不跳，不能把用户带走）。
+EpisodeSkipMarks effectiveSkipMarks({
+  required EpisodeSkipMarks manual,
+  required double introPreset,
+  required double outroFromEnd,
+  required double duration,
+}) {
+  final introEnd = manual.hasIntro ? manual.introEnd : introPreset;
+  var outroStart = manual.outroStart;
+  if (!manual.hasOutro && duration > 0 && outroFromEnd > 0) {
+    final floor =
+        duration * 0.5 > introEnd + 5 ? duration * 0.5 : introEnd + 5;
+    final threshold = duration - outroFromEnd;
+    if (threshold > floor && threshold < duration - 1) {
+      outroStart = threshold;
+    }
+  }
+  return EpisodeSkipMarks(introEnd: introEnd, outroStart: outroStart);
+}
+
 /// 秒 -> mm:ss（超过一小时走 h:mm:ss，长视频也够用）。
 String skipMarkClock(double seconds) {
   final total = seconds <= 0 ? 0 : seconds.round();

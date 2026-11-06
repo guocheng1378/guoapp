@@ -149,7 +149,9 @@ func TestMergeDongpiandiRoutes(t *testing.T) {
 	}
 }
 
-func TestResolveDongpiandiMediaAliveAttachesRoutes(t *testing.T) {
+// P0-3：地址存活时起播不再同步 attach 线路表（原实现固定等 2.4/3.5s
+// + 1.2s 测速），线路全表改由打开面板时的 "routes" action 按需拉取。
+func TestResolveDongpiandiMediaAliveDoesNotAttachRoutes(t *testing.T) {
 	srv := newDongpiandiRouteServer(
 		`{"id":"d1","title":"测试剧","episodes":[{"id":"e1","key":"e-0001","token":"t1"}]}`,
 		dongpiandiLineOptionsJSON([]map[string]any{
@@ -178,22 +180,23 @@ func TestResolveDongpiandiMediaAliveAttachesRoutes(t *testing.T) {
 	if media.URL != srv.server.URL+"/v1.mp4" {
 		t.Fatalf("primary URL changed: %q", media.URL)
 	}
-	if media.Label != "主线" {
-		t.Fatalf("label not attached: %q", media.Label)
+	if len(media.Variants) != 0 {
+		t.Fatalf("playback must not wait for route attachment: %+v", media.Variants)
 	}
-	if len(media.Variants) != 1 || media.Variants[0].URL != srv.server.URL+"/v2.mp4" || media.Variants[0].Label != "备线" {
-		t.Fatalf("routes not attached: %+v", media.Variants)
-	}
-	// Variants 经 nativePlaybackChoices 展开成多线路
+	// 首帧只有一条线路；面板打开时由 routes action 补齐（见
+	// TestNativePlaybackRoutesFillsLinesOnPanelOpen）。
 	choices := nativePlaybackChoices(media, 0)
-	if len(choices.media) != 2 {
-		t.Fatalf("choices lost routes: %+v", choices.media)
+	if len(choices.media) != 1 {
+		t.Fatalf("first frame should have exactly one route: %+v", choices.media)
 	}
 }
 
 func TestResolveDongpiandiMediaDeadRefreshesAllRoutes(t *testing.T) {
+	// 缓存里只有「与死地址同源」的线时，过滤后必须完整走全链刷新
+	// （78985272/85512224 的历史约束），不能把死线再播一遍。
+	const episodeID = "e-dead-refresh"
 	srv := newDongpiandiRouteServer(
-		`{"id":"d1","title":"测试剧","episodes":[{"id":"e1","key":"e-0001","token":"t1"}]}`,
+		`{"id":"d1","title":"测试剧","episodes":[{"id":"e-dead-refresh","key":"e-0001","token":"t1"}]}`,
 		dongpiandiLineOptionsJSON([]map[string]any{
 			{"id": "l1", "label": "主线", "url": "PLACEHOLDER/v1.mp4", "url_kind": "mp4", "resolved": true, "preference_weight": 900, "selected": true},
 			{"id": "l2", "label": "备线", "url": "PLACEHOLDER/v2.mp4", "url_kind": "mp4", "resolved": true, "preference_weight": 800},
@@ -203,13 +206,17 @@ func TestResolveDongpiandiMediaDeadRefreshesAllRoutes(t *testing.T) {
 	srv.resolve = strings.ReplaceAll(srv.resolve, "PLACEHOLDER", srv.server.URL)
 	withDongpiandiBaseURL(t, srv.server.URL)
 
+	deadURL := srv.server.URL + "/dead.mp4"
+	dongpiandiCacheLines(episodeID, []dongpiandiLine{
+		{ID: "dead", Label: "死线", URL: deadURL},
+	}, false)
 	d := &Downloader{}
 	task := Task{
 		DramaID: providerDramaID(sourceDongpiandi, "d1"),
 		Chapter: Chapter{
-			ID:       providerDramaID(sourceDongpiandi, "e1"),
+			ID:       providerDramaID(sourceDongpiandi, episodeID),
 			Source:   sourceDongpiandi,
-			VideoURL: srv.server.URL + "/dead.mp4", // 404 → 走失效路径
+			VideoURL: deadURL, // 404 → 走失效路径
 			PageURL:  srv.server.URL + "/player/d1",
 		},
 	}
@@ -272,15 +279,32 @@ func TestResolveDongpiandiMediaColdStartUsesCache(t *testing.T) {
 		t.Fatalf("cache-first media wrong: %+v", media)
 	}
 
-	// 地址存在但已死：必须走全链刷新（会打 API）。
+	// 地址存在但已死，缓存里还有另一条新鲜线：直接复用它，零 API，
+	// 且绝不把死地址再播一遍（切集卡的主修复）。
 	srv.apiCalls.Store(0)
 	deadTask := task
-	deadTask.Chapter.VideoURL = srv.server.URL + "/dead.mp4"
+	deadURL := srv.server.URL + "/dead.mp4"
+	deadTask.Chapter.VideoURL = deadURL
+	media, err = d.resolveDongpiandiMedia(context.Background(), deadTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.apiCalls.Load(); got != 0 {
+		t.Fatalf("dead address should reuse a different cached line, got %d API calls", got)
+	}
+	if media.URL == deadURL || media.URL != srv.server.URL+"/v1.mp4" {
+		t.Fatalf("dead line replayed or wrong cached line: %+v", media)
+	}
+	// 缓存里只剩同源死线：过滤后必须完整走全链，历史约束不能破。
+	dongpiandiCacheLines("e-cache-1", []dongpiandiLine{
+		{ID: "dead", Label: "死线", URL: deadURL},
+	}, false)
+	srv.apiCalls.Store(0)
 	if _, err := d.resolveDongpiandiMedia(context.Background(), deadTask); err != nil {
 		t.Fatal(err)
 	}
 	if got := srv.apiCalls.Load(); got == 0 {
-		t.Fatal("dead address must refresh via API, cache bypassed")
+		t.Fatal("same-source dead line must be filtered and fall back to full refresh")
 	}
 }
 

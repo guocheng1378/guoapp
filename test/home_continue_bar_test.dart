@@ -100,6 +100,10 @@ void main() {
       expect(find.byType(PlaybackLaunchScreen), findsOneWidget);
       // detail 挂起中：薄壳应停在转圈加载态，绝不 mount PlayerScreen。
       expect(find.byType(PlayerScreen), findsNothing);
+      // 消费薄壳的 20s 超时看门狗，否则 fake-async 的 teardown 会报
+      // pending timer（测试宿主没有真实网络完成这次 detail）。
+      await tester.pump(const Duration(seconds: 20));
+      await tester.pump();
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );

@@ -107,10 +107,13 @@ func hongguoSearchChineseSeason(number int) string {
 }
 
 func (series *hongguoSearchSeries) add(drama Drama) bool {
-	base, season, unit, label := hongguoSearchSeason(drama.DisplayTitle())
+	base, season, _, label := hongguoSearchSeason(drama.DisplayTitle())
 	if season == 0 && hongguoSearchText(drama.DisplayTitle()) == series.key {
 		season = 1
-	} else if season == 0 || unit != series.unit || hongguoSearchText(base) != series.key {
+	} else if season == 0 || hongguoSearchText(base) != series.key {
+		// 站点系列里「第N部 / 第N季」混用是常态，Dart 侧同系列判定
+		// 也明确不按 unit 过滤；这里若按 unit 分组会把同一系列拆成两
+		// 组、季号补不全。
 		return false
 	}
 	series.known[season] = true
@@ -134,7 +137,7 @@ func hongguoSearchSeriesGroups(keyword string, dramas []Drama) []*hongguoSearchS
 		if season == 0 || !strings.Contains(key, query) {
 			continue
 		}
-		groupKey := key + ":" + unit
+		groupKey := key
 		if byKey[groupKey] == nil {
 			series := &hongguoSearchSeries{title: base, key: key, unit: unit, known: map[int]bool{}, labels: map[int]string{}}
 			byKey[groupKey] = series

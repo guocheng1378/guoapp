@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'core_bridge.dart';
 import 'local_store.dart';
+import 'motion.dart';
 
 /// 下载完成/失败的全局汇总。
 ///
@@ -59,7 +60,12 @@ class DownloadSummary extends ChangeNotifier {
   Future<void> bind(AppRepository repository, LocalStore store) async {
     _repository = repository;
     _store = store;
-    _timer ??= Timer.periodic(_interval, (_) => unawaited(tick()));
+    // widget test 的 fake-async 下不挂常驻周期 timer：它会在 teardown
+    // 报「A Timer is still pending」，让所有挂载首页/下载页的用例变红。
+    // 真机行为不变；首次基线拉取（下面的 tick）仍照常执行。
+    if (!Motion.inTest) {
+      _timer ??= Timer.periodic(_interval, (_) => unawaited(tick()));
+    }
     _watching = true;
     await tick();
   }

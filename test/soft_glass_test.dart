@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -87,6 +89,35 @@ void main() {
     await tester.pump();
     expect(find.byType(BackdropFilter), findsNothing);
     expect(find.text('玻璃'), findsOneWidget);
+  });
+
+  testWidgets('弹窗转场动画期玻璃降级，动画结束恢复真磨砂', (tester) async {
+    await GlassPreferences.setEnabled(true);
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
+    );
+    await tester.pumpAndSettle();
+    final context = tester.element(find.byType(Scaffold));
+    unawaited(
+      showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: '弹窗',
+        transitionDuration: const Duration(milliseconds: 170),
+        pageBuilder: (dialogContext, routeAnimation, secondaryAnimation) =>
+            const Align(child: SoftGlassSurface(child: Text('弹窗玻璃'))),
+        transitionBuilder: (context, animation, secondaryAnimation, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(find.text('弹窗玻璃'), findsOneWidget);
+    // Fade+Scale 动画帧里 N 枚胶囊各自采样背景 → 卡；动画期临时关模糊。
+    expect(find.byType(BackdropFilter), findsNothing);
+
+    await tester.pumpAndSettle();
+    expect(find.byType(BackdropFilter), findsOneWidget);
   });
 
   testWidgets('材质配方实时生效：改配方后玻璃面立即重建', (tester) async {

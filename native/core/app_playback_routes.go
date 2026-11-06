@@ -18,6 +18,9 @@ type nativePlaybackChoice struct {
 	skipIntro        int
 	skipOutroFromEnd int
 	media            []providerMedia
+	// 线路面板按需补兑需要知道当前播放的是哪一集（P0-3：起播不再同步
+	// attach 线路表，改由打开面板时现场拉）。
+	task             Task
 	index            int
 	qualities        []int
 	streamSession    string
@@ -219,6 +222,51 @@ func (engine *nativeEngine) nativeSelectPlayback(ctx context.Context, session st
 	}
 	choice.index = index
 	return engine.nativeOpenPlayback(ctx, choice)
+}
+
+// nativePlaybackRoutes 供线路面板打开时按需补齐线路表（P0-3）。
+// 起播不再同步 attach，因此首帧可能只有 1 条线路；这里现场拉全表并补
+// 兑官方线（dongpiandiRouteLines 内部有缓存与冷却闸门，第二次零网络）。
+// 不重开流会话、不换 URL：只更新当前会话的 choice.media，把线路元数据
+// 返回给 Dart 合并进现有 plan。
+func (engine *nativeEngine) nativePlaybackRoutes(ctx context.Context, session string) (map[string]any, error) {
+	engine.mu.Lock()
+	choice, exists := engine.playbacks[session]
+	engine.mu.Unlock()
+	if !exists {
+		return nil, errors.New("播放线路已失效，请重新解析播放")
+	}
+	if len(choice.media) < 2 &&
+		sourceFromDramaID(choice.task.DramaID) == sourceDongpiandi {
+		lines := engine.downloader.dongpiandiRouteLines(ctx, choice.task)
+		if len(lines) > 0 {
+			lines = dongpiandiCurateLines(ctx, lines, 1200*time.Millisecond)
+			seen := map[string]bool{}
+			for _, option := range choice.media {
+				seen[option.URL] = true
+			}
+			for _, line := range lines {
+				option := dongpiandiLineMedia(line)
+				if option.URL == "" || seen[option.URL] {
+					continue
+				}
+				seen[option.URL] = true
+				choice.media = append(choice.media, option)
+			}
+		}
+		// 会话可能已被逐出/释放：不要把一个已消失的 session 写回来。
+		engine.mu.Lock()
+		if _, still := engine.playbacks[session]; still {
+			engine.playbacks[session] = choice
+		}
+		engine.mu.Unlock()
+	}
+	return map[string]any{
+		"routeIndex":    choice.index,
+		"routeCount":    len(choice.media),
+		"routeLabels":   nativeRouteLabels(choice.media),
+		"routeOfficial": nativeRouteOfficial(choice.media),
+	}, nil
 }
 
 func (engine *nativeEngine) nativeReleasePlayback(session string) {

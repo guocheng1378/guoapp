@@ -384,10 +384,48 @@ class SoftGlassSurface extends StatelessWidget {
     RouteTransitionSignal.reversing,
   ]);
 
+  /// 模糊核按 σ 复用：ImageFilter 不可变，每次 build 新建只会制造 GC
+  /// 压力。调参台拖动、滚动接近度、弹窗动画都会高频走到这里。
+  static final Map<double, ImageFilter> _blurFilters = <double, ImageFilter>{};
+
+  static ImageFilter _blurFilter(double sigma) {
+    // 量化到 0.1：避免浮点 σ 把缓存撑成无限表，肉眼无差。
+    final key = (sigma * 10).roundToDouble() / 10;
+    if (_blurFilters.length > 64) _blurFilters.clear();
+    return _blurFilters.putIfAbsent(
+      key,
+      () => ImageFilter.blur(sigmaX: key, sigmaY: key),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final primary = Theme.of(context).colorScheme.primary;
+    // 弹窗（PopupRoute）转场用 Fade+Scale：Opacity 层把每枚胶囊的
+    // BackdropFilter 与裁剪祖先隔开、Scale 每帧让缓存失效，N 枚胶囊
+    // 等于每帧 N 次背景重采样 + 2N 次大半径内阴影模糊。动画期间把玻璃
+    // 临时降级为纯底色 + 描边，动画结束的下一帧自动恢复真磨砂。
+    final route = ModalRoute.of(context);
+    final popup = route is PopupRoute ? route.animation : null;
+    if (popup == null) return _surface(context, brightness, primary, false);
+    return AnimatedBuilder(
+      animation: popup,
+      builder: (context, _) => _surface(
+        context,
+        brightness,
+        primary,
+        popup.status != AnimationStatus.completed,
+      ),
+    );
+  }
+
+  Widget _surface(
+    BuildContext context,
+    Brightness brightness,
+    Color primary,
+    bool animating,
+  ) {
     return ListenableBuilder(
       // 材质配方与玻璃总开关都要实时生效：调参台拖动 / 设置页切换开关
       // → 所有玻璃面立即重建（不重启）。回退动画期间再叠加一路信号，
@@ -399,7 +437,7 @@ class SoftGlassSurface extends StatelessWidget {
         final dark = brightness == Brightness.dark;
         // 回退动画期：整页每帧重绘，任何模糊都会放大成本 → 临时去掉
         // 磨砂与内阴影（动画结束下一帧自动恢复）。
-        final cheap = RouteTransitionSignal.reversing.value;
+        final cheap = RouteTransitionSignal.reversing.value || animating;
         // 玻璃关闭 → 降级为不透明浮层（低端设备更流畅，且不再采样背景）。
         final fallback = dark
             ? const Color(0xFF1E2026)
@@ -423,7 +461,7 @@ class SoftGlassSurface extends StatelessWidget {
             if (selfBlur && blur > 0.01)
               Positioned.fill(
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+                  filter: _blurFilter(blur),
                   child: const SizedBox.expand(),
                 ),
               ),

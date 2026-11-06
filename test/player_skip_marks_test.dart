@@ -86,6 +86,54 @@ void main() {
     });
   });
 
+  group('effectiveSkipMarks：社区预设的安全钳制', () {
+    test('短剧/片长漂移：片尾阈值落在前半段时整段作废', () {
+      final marks = effectiveSkipMarks(
+        manual: const EpisodeSkipMarks(),
+        introPreset: 12,
+        outroFromEnd: 45,
+        duration: 60,
+      );
+      expect(marks.introEnd, 12);
+      // 旧实现会算出 15s，开播十几秒就切下一集并从头播。
+      expect(marks.hasOutro, isFalse);
+      expect(marks.outroStart, 0);
+    });
+
+    test('正常片长：片尾阈值按 duration-N 换算', () {
+      final marks = effectiveSkipMarks(
+        manual: const EpisodeSkipMarks(),
+        introPreset: 90,
+        outroFromEnd: 45,
+        duration: 1500,
+      );
+      expect(marks.introEnd, 90);
+      expect(marks.outroStart, 1455);
+    });
+
+    test('手动标定优先，片长未知时不换算预设', () {
+      final marks = effectiveSkipMarks(
+        manual: const EpisodeSkipMarks(introEnd: 30, outroStart: 1200),
+        introPreset: 90,
+        outroFromEnd: 45,
+        duration: 0,
+      );
+      expect(marks.introEnd, 30);
+      expect(marks.outroStart, 1200);
+    });
+
+    test('片尾阈值不得早于片头结束 + 5 秒', () {
+      final marks = effectiveSkipMarks(
+        manual: const EpisodeSkipMarks(),
+        introPreset: 100,
+        outroFromEnd: 95,
+        duration: 200,
+      );
+      // threshold=105，下界=max(片长一半 100, 100+5)=105，不满足严格大于 → 作废。
+      expect(marks.hasOutro, isFalse);
+    });
+  });
+
   group('resolveSkipAction', () {
     const marks = EpisodeSkipMarks(introEnd: 45, outroStart: 1330);
     const duration = 1400.0;

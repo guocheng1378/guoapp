@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'app_layout.dart';
 import 'core_bridge.dart';
@@ -11,6 +10,7 @@ import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
 import 'player_screen.dart';
+import 'text_input_dismiss.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
 
@@ -25,15 +25,12 @@ Future<void> openPlaybackDirectly(
   required LocalStore store,
 }) {
   // 兜底：搜索建议直达 / 追剧卡 / 以后新增的入口都不经过搜索框的
-  // onTapOutside，起播前统一释放文本焦点——否则键盘会跟着 opaque:false
-  // 浮层一路弹进播放器。电视模式不动遥控焦点。
-  if (!AppLayout.isTelevision(context)) {
-    // unfocus 只把焦点移走；MIUI 输入法在编辑连接刚 detach 时偶发不收
-    // 键盘（candidate 栏残留），随 opaque:false 浮层进播放器。硬断编辑
-    // 连接并显式 hide，双保险。
-    FocusManager.instance.primaryFocus?.unfocus();
-    SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
-  }
+  // onTapOutside，起播前统一释放文本焦点并硬断编辑连接——否则键盘会
+  // 跟着 opaque:false 浮层一路弹进播放器。电视模式不动遥控焦点。
+  // 不 await 平台消息：点按后推路由必须当帧发生，收键盘与转场并行即可。
+  unawaited(
+    dismissPlaybackTextInput(television: AppLayout.isTelevision(context)),
+  );
   return Navigator.of(context).push(
     PageRouteBuilder<void>(
       // opaque:false：转场与加载期间底下页面不被遮挡，浮层只是叠加。
@@ -159,6 +156,17 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
       // 续播位置按（剧, 集）读取（watched 只用于定位默认进哪一集）。
       final saved = widget.store.episodeWatched(drama.id, episode.number);
       final position = saved != null && !saved.finished ? saved.position : 0.0;
+      if (!mounted ||
+          generation != _generation ||
+          _profileEpoch != widget.store.profileEpoch) {
+        return;
+      }
+      // 真正进播放页前再收一次：薄壳被 pop 时 FocusScope 会把焦点还给
+      // 栈底仍 autofocus 的搜索框，2257 只在「打开薄壳」时收过一次，
+      // 正是「搜索后进播放还弹输入法」的漏网点。
+      await dismissPlaybackTextInput(
+        television: AppLayout.isTelevision(context),
+      );
       if (!mounted ||
           generation != _generation ||
           _profileEpoch != widget.store.profileEpoch) {

@@ -10,6 +10,7 @@ import 'follow_state.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'motion.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
@@ -88,20 +89,31 @@ class _SavedLibraryState extends State<SavedLibrary> {
   /// 快照（卡片显示「共数万集」）。对可疑条目（episodes > 500）后台拉一次
   /// 详情，用真实分集数覆盖；失败静默，不影响列表展示。
   Future<void> _healEpisodeCounts() async {
+    final epoch = widget.store.profileEpoch;
     final suspects = {
       for (final drama in widget.store.favorites) drama.id: drama,
       for (final entry in widget.store.history) entry.drama.id: entry.drama,
     }.values.where((drama) => drama.episodes > 500).toList();
     for (final drama in suspects) {
-      if (!mounted) return;
+      // 请求飞行中切了用户档：旧档的详情不能写进新档。
+      if (!mounted || epoch != widget.store.profileEpoch) return;
       try {
         final detail = await widget.repository.detail(drama);
-        if (!mounted) return;
-        if (detail.drama.episodes > 0) {
+        if (!mounted || epoch != widget.store.profileEpoch) return;
+        // 详情同样返回 >500 说明这也是脏值（分页总数/播放量），别拿它
+        // 覆盖；0 表示本次没拿到集数，也跳过。
+        final count = detail.drama.episodes;
+        if (count > 0 && count <= 500) {
           await widget.store.refreshDrama(detail.drama);
         }
       } catch (_) {
         // 源不可用/受限等：静默跳过，用户打开详情时 merge 仍会修正。
+      }
+      // 串行 + 节流：几十部可疑剧一次性打满详情解析会抢站点限流。
+      // widget test 的 fake-async 下不放常驻/延迟 timer（避免 teardown
+      // 报 pending），真机才节流。
+      if (!Motion.inTest) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
       }
     }
   }
@@ -274,6 +286,25 @@ class _SavedLibraryState extends State<SavedLibrary> {
                 ? state?.hasUpdates == true
                 : state?.status.name == _filter);
       }).toList();
+      if (!widget.history) {
+        // 追剧页默认按「加入顺序倒序」，老剧有新更新时永远沉在底下。
+        // 改为有更新的置顶、其余按最近观看时间倒序；最近观看页本身
+        // 已按 updatedAt 倒序，不重排。
+        items.sort((a, b) {
+          final aUpdates =
+              widget.store.following(a.id)?.hasUpdates == true ? 1 : 0;
+          final bUpdates =
+              widget.store.following(b.id)?.hasUpdates == true ? 1 : 0;
+          final byUpdate = bUpdates.compareTo(aUpdates);
+          if (byUpdate != 0) return byUpdate;
+          final aWatched = widget.store.watched(a.id)?.updatedAt;
+          final bWatched = widget.store.watched(b.id)?.updatedAt;
+          if (aWatched != null && bWatched != null) {
+            return bWatched.compareTo(aWatched);
+          }
+          return aWatched == null ? 1 : -1;
+        });
+      }
       final ids = items.map((drama) => drama.id).toSet();
       // 「继续追剧」只在追剧页出现：最近观看页的列表本身按时间倒序，
       // 第一条就是"继续观看"，再挂一个入口只是把第一行抄一遍。

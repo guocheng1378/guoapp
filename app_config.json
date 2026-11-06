@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2255,
-    "version": "v0.2.96-2255",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2255/zhenguojian-0.2.96+2255-arm64-v8a.apk",
-    "notes": "真果·鉴封面修复：部分剧集封面（百度图床中转）不再因防盗链被拒，恢复显示、加载更快\n播放更稳：长时间边看边下时，正在播放的线路不再被后台任务挤掉\n界面与列表若干细节优化与稳定性改进"
+    "build": 2258,
+    "version": "v0.2.96-2258",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2258/zhenguojian-0.2.96+2258-arm64-v8a.apk",
+    "notes": "榜单与目录：红果榜单季数/集数显示修正（不再把分片误算成集数）；所有源排序筛选跨源归一（热度/评分按各源最大值归一），分组去重（同名异写合并、移除硬编码分组）\n真果·鉴：进入/切集卡顿大幅优化（详情懒解析只解首集、死链缓存快起播、换线转入后台），倍速缓存按 LRU 回收\n播放器：新增切线路面板、修复进度误判「从头播完」、边下边看时正在播放的线路不再被后台挤占\n追剧/收藏：集数自修复节流、更新计数按差量、列表按更新+观看时间排序\n交互与性能：电视搜索键盘收起、雾面顶栏性能优化、下载汇总定时器测试守卫"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
