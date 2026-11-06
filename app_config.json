@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2257,
-    "version": "v0.2.96-2257",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2257/zhenguojian-0.2.96+2257-arm64-v8a.apk",
-    "notes": "修复播放器简介乱码：各源（含黄果类）简介里的 &nbsp; 等 HTML 实体未解码导致显示成乱码，现已统一清洗\n搜索后进入播放器不再误弹输入法\n真果·鉴切集修复：优先官方线路并自动补兑，避免大概率落到第三方源或失败\n若干稳定性与细节改进"
+    "build": 2258,
+    "version": "v0.2.96-2258",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2258/zhenguojian-0.2.96+2258-arm64-v8a.apk",
+    "notes": "榜单与目录：红果榜单季数/集数显示修正（不再把分片误算成集数）；所有源排序筛选跨源归一（热度/评分按各源最大值归一），分组去重（同名异写合并、移除硬编码分组）\n真果·鉴：进入/切集卡顿大幅优化（详情懒解析只解首集、死链缓存快起播、换线转入后台），倍速缓存按 LRU 回收\n播放器：新增切线路面板、修复进度误判「从头播完」、边下边看时正在播放的线路不再被后台挤占\n追剧/收藏：集数自修复节流、更新计数按差量、列表按更新+观看时间排序\n交互与性能：电视搜索键盘收起、雾面顶栏性能优化、下载汇总定时器测试守卫"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
