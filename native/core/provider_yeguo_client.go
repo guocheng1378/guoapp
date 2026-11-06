@@ -34,11 +34,13 @@ const (
 )
 
 var (
+	yeguoBackupSites  = []string{"https://attract.vgbyziuz.cc", "https://as.vgbyziuz.cc", "https://anyway.vgbyziuz.cc", "https://analyze.buxefaex.cc"}
 	errYeguoDecode    = errors.New("野果接口响应校验或解码失败")
 	yeguoModuleImport = regexp.MustCompile(`(?s)import\s*\{([^{};]+)\}\s*from\s*["'\x60]([^"'\x60]+)["'\x60]`)
-	// baseURL:xxx() 调用点：xxx 是返回接口根地址的箭头函数名，
-	// 页面不再直供 apiBaseURL 时从站点脚本里反查该函数定义。
-	yeguoScriptBaseCall   = regexp.MustCompile(`baseURL:([a-zA-Z_$][a-zA-Z0-9_$]*)\(\)`)
+	// baseURL:xxx(...) 调用点：xxx 是返回接口根地址的箭头函数名
+	// （可带参调用），页面不再直供 apiBaseURL 时从站点脚本里反查
+	// 该函数定义。
+	yeguoScriptBaseCall   = regexp.MustCompile(`baseURL:([a-zA-Z_$][a-zA-Z0-9_$]*)\([a-zA-Z_$]?[a-zA-Z0-9_$]*\)`)
 	yeguoPublicField      = regexp.MustCompile(`\b(version|mode|padding|key|iv|sign_key)\s*:\s*(?:[a-zA-Z_$][a-zA-Z0-9_$]*\(\s*)?["'\x60]([^"'\x60\\\r\n]{1,512})["'\x60]`)
 	yeguoTransitBase64    = regexp.MustCompile(`Base64\.decode\(["']([A-Za-z0-9+/=]{128,})["']\)`)
 	yeguoTransitSuffix    = regexp.MustCompile(`(?i)\+\s*["']\.([a-z0-9-]+(?:\.[a-z0-9-]+)+)["']`)
@@ -119,6 +121,7 @@ func isYeguoActiveSite(raw string) bool {
 		strings.HasSuffix(host, ".fzchosdi.cc"),
 		strings.HasSuffix(host, ".awlaxemk.cc"),
 		strings.HasSuffix(host, ".vuenadqi.cc"),
+		strings.HasSuffix(host, ".vgbyziuz.cc"),
 		host == "yeguodj.com" || host == "www.yeguodj.com" || strings.HasSuffix(host, ".yeguodj.com"),
 		host == "ocdjlxow.cc" || strings.HasSuffix(host, ".ocdjlxow.cc"):
 		return true
@@ -193,6 +196,7 @@ func yeguoTransitSites(body string) []string {
 			host := strings.ToLower(parsed.Hostname())
 			if strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") ||
 				strings.HasSuffix(host, ".awlaxemk.cc") || strings.HasSuffix(host, ".vuenadqi.cc") ||
+				strings.HasSuffix(host, ".vgbyziuz.cc") ||
 				strings.HasSuffix(host, ".yeguodj.com") || strings.HasSuffix(host, ".ocdjlxow.cc") {
 				add(match)
 			}
@@ -362,17 +366,30 @@ func yeguoValidAPIBase(base string) (string, error) {
 }
 
 // yeguoScriptAPIBase 从站点 module 脚本反查接口根地址：先找
-// baseURL:xxx() 调用点，再在脚本里定位 xxx=()=>"https://…" 的
-// 箭头函数定义（移植自 Xanerix/guoapp 3b24e89）。页面改版不再
-// 直供 apiBaseURL 时，这条路径兜底，无需每次手动加域名白名单。
-func yeguoScriptAPIBase(script string) string {
+// baseURL:xxx(...) 调用点，再在脚本里定位 xxx 的箭头函数定义——
+// ①字面形态 xxx=()=>"https://…"（移植自 Xanerix/guoapp 3b24e89）；
+// ②生产态同源形态 xxx=(…)=>{…origin:yyy…`${yyy}/api.php`…}，此时
+// 接口根就是页面自身的 origin（移植自 Xanerix/guoapp 2194056）。
+// 页面改版不再直供 apiBaseURL 时，这两条路径兜底，无需每次手动
+// 加域名白名单。
+func yeguoScriptAPIBase(script, origin string) string {
 	for _, call := range yeguoScriptBaseCall.FindAllStringSubmatch(script, 16) {
-		pattern, err := regexp.Compile(`(?:^|[^a-zA-Z0-9_$.])` + regexp.QuoteMeta(call[1]) + `=\(\)=>["'\x60](https?://[^"'\x60\s]{1,512})["'\x60]`)
+		definition := `(?:^|[^a-zA-Z0-9_$.])` + regexp.QuoteMeta(call[1]) + `=`
+		literal, err := regexp.Compile(definition + `\(\)=>["'\x60](https?://[^"'\x60\s]{1,512})["'\x60]`)
 		if err != nil {
 			continue
 		}
-		if match := pattern.FindStringSubmatch(script); match != nil {
+		if match := literal.FindStringSubmatch(script); match != nil {
 			if base, err := yeguoValidAPIBase(match[1]); err == nil {
+				return base
+			}
+		}
+		sameOrigin, err := regexp.Compile(definition + `\([^()]{0,40}\)=>\{[\s\S]{0,400}?origin:([a-zA-Z_$][a-zA-Z0-9_$]*)[\s\S]{0,400}?\x60\$\{([a-zA-Z_$][a-zA-Z0-9_$]*)\}/api\.php\x60`)
+		if err != nil || origin == "" {
+			continue
+		}
+		if match := sameOrigin.FindStringSubmatch(script); match != nil && match[1] == match[2] {
+			if base, err := yeguoValidAPIBase(origin + "/api.php"); err == nil {
 				return base
 			}
 		}
@@ -443,6 +460,9 @@ func (client *yeguoAPIClient) discoverConfiguration(ctx context.Context) (*yeguo
 	}
 	add(client.site)
 	add(yeguoBaseURL)
+	for _, backup := range yeguoBackupSites {
+		add(backup)
+	}
 	var lastErr error
 	for index := 0; index < len(sites); index++ {
 		site := sites[index]
@@ -467,6 +487,11 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 		return nil, err
 	}
 	apiBase, baseErr := yeguoAPIBase(document, d.cfg.YeguoAPIURL, site)
+	pageAddress, pageErr := url.Parse(pageURL)
+	if pageErr != nil {
+		return nil, pageErr
+	}
+	origin := providerMediaOrigin(pageAddress)
 	entry := ""
 	for _, script := range providerHTMLNodes(document, func(node *html.Node) bool {
 		return node.Data == "script" && providerHTMLAttr(node, "type") == "module"
@@ -484,7 +509,7 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 	}
 	// 页面不再直供 apiBaseURL 时，先试 entry 脚本里的 baseURL 反查。
 	if apiBase == "" {
-		apiBase = yeguoScriptAPIBase(entryBody)
+		apiBase = yeguoScriptAPIBase(entryBody, origin)
 	}
 	imports := yeguoModuleImport.FindAllStringSubmatch(entryBody, 64)
 	sort.SliceStable(imports, func(i, j int) bool {
@@ -519,7 +544,7 @@ func (client *yeguoAPIClient) discoverConfigurationAt(ctx context.Context, site 
 		}
 		// 入口脚本没有 baseURL 定义时，import 的模块脚本里继续反查。
 		if apiBase == "" {
-			apiBase = yeguoScriptAPIBase(body)
+			apiBase = yeguoScriptAPIBase(body, origin)
 		}
 		if access == nil {
 			access = parseYeguoPublicConfiguration(body)

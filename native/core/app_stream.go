@@ -47,6 +47,13 @@ type nativeStreamSession struct {
 	renewing    map[string]chan nativeRenewResult
 	// caches 是本集媒体各资产的本地预读缓存（直链媒体才有），见 app_stream_cache.go。
 	caches map[string]*nativeStreamCache
+	// manifests 复用清单改写结果（同会话内上游校验符未变就直接回放），
+	// 见 app_stream_manifest_cache.go；改写会向 assets 注册资产，
+	// 缓存只存在于会话内，资产的生命周期与之一致。
+	manifestMu    sync.Mutex
+	manifests     map[string]nativeManifestCache
+	manifestBytes int
+	manifestSeq   int64
 }
 
 // nativeRenewResult 是一次后台重签的结果。
@@ -754,11 +761,21 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 			http.Error(writer, "播放列表无效", http.StatusBadGateway)
 			return
 		}
-		rewritten, err := stream.nativeRewrite(parts[0], session, text, finalURL.String())
+		manifestURL := finalURL.String()
+		validator := nativeManifestValidator(response.Header)
+		if cached, hit := session.nativeCachedManifest(manifestURL, validator); hit {
+			// 上游校验符未变：改写输出逐字节相同，资产也已在首次改写时
+			// 注册完毕，直接回放省掉两趟逐行解析。
+			writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = io.WriteString(writer, cached)
+			return
+		}
+		rewritten, err := stream.nativeRewrite(parts[0], session, text, manifestURL)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadGateway)
 			return
 		}
+		session.nativeStoreManifest(manifestURL, validator, rewritten)
 		writer.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		_, _ = io.WriteString(writer, rewritten)
 		return

@@ -33,6 +33,7 @@ class PlayerMenu extends StatefulWidget {
     this.preloadStatus = '',
     this.enhancement,
     this.onCompareEnhancement,
+    this.videoDiagnostics,
   });
 
   final PlayerMenuSection section;
@@ -50,6 +51,8 @@ class PlayerMenu extends StatefulWidget {
   final String preloadStatus;
   final VideoEnhancementController? enhancement;
   final VoidCallback? onCompareEnhancement;
+  /// 视频输出诊断（实际解码方式 / 视频输出 / 像素格式），仅设置面板拉取。
+  final Future<String> Function()? videoDiagnostics;
   final ValueChanged<int> onEpisode;
   final Future<void> Function(PlaybackPreferences) onPreferences;
   final Future<void> Function() onFavorite;
@@ -61,6 +64,21 @@ class PlayerMenu extends StatefulWidget {
 class _PlayerMenuState extends State<PlayerMenu> {
   bool _busy = false;
   String? _error;
+  String? _diagnostics;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDiagnostics();
+  }
+
+  void _loadDiagnostics() {
+    final load = widget.videoDiagnostics;
+    if (widget.section != PlayerMenuSection.settings || load == null) return;
+    load().then((value) {
+      if (mounted) setState(() => _diagnostics = value);
+    });
+  }
 
   Future<void> _run(Future<void> Function() action) async {
     if (_busy) return;
@@ -262,6 +280,45 @@ class _PlayerMenuState extends State<PlayerMenu> {
             ),
             onCompare: widget.onCompareEnhancement ?? () {},
           ),
+        // 电视端解码方式切换：部分盒子硬解「有声无画」，切软解（兼容）
+        // 或硬解（兼容）排查。auto 不下发、跟随平台默认。
+        if (all) ...[
+          const Text('解码方式'),
+          const SizedBox(height: 8),
+          Text('部分电视盒子硬解会有声无画，可切换排查。', style: helperStyle),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final decode in playbackDecodeModes)
+                ChoiceChip(
+                  key: ValueKey('menu-decode-$decode'),
+                  label: Text(playbackDecodeLabel(decode)),
+                  selected: preferences.decode == decode,
+                  onSelected: _busy
+                      ? null
+                      : (_) => _run(
+                          () => widget.onPreferences(
+                            preferences.copyWith(decode: decode),
+                          ),
+                        ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+        ],
+        // 视频输出诊断（播放日记增强）：记录实际解码方式、视频输出与像素格式。
+        if (all && widget.videoDiagnostics != null) ...[
+          const Text('视频输出诊断'),
+          const SizedBox(height: 8),
+          Text(
+            _diagnostics ?? '读取中…',
+            key: const ValueKey('player-video-diagnostics'),
+            style: helperStyle,
+          ),
+          const SizedBox(height: 20),
+        ],
         if (all && widget.showDanmaku) ...[
           _CapsuleRow(
             padding: const EdgeInsets.symmetric(horizontal: 12),

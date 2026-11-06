@@ -68,7 +68,8 @@ class AppDevice {
     AppDevice fallback = const AppDevice(),
   }) async {
     if (defaultTargetPlatform != TargetPlatform.android &&
-        defaultTargetPlatform != TargetPlatform.windows) {
+        defaultTargetPlatform != TargetPlatform.windows &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
       return const AppDevice();
     }
     try {

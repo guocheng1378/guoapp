@@ -1296,6 +1296,9 @@ class NativeRepository extends AppRepository {
       file,
       () => _call({'action': 'prepareCover', 'drama': drama.toJson()}),
       force: force,
+      // 屏幕渲染走前台仓库，预取/巡检走 background 仓库——后台任务排在
+      // 未启动队列尾部，保证当前屏幕上的 HEIC 海报优先转码
+      priority: !background,
     );
     _authorize(drama.source);
     if (epoch != access?.profileEpoch) throw AppFailure('用户已切换，请重新操作');

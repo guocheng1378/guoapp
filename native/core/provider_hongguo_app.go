@@ -43,15 +43,16 @@ type hongguoAppClient struct {
 	catalogMu           sync.Mutex
 	baseURL             string
 	registerPausedUntil time.Time
+	registerPauseErr    error
 	state               hongguoCatalogState
-	details        map[string]hongguoDetailEntry
-	pending        map[string]*hongguoDetailCall
-	searches       map[string]hongguoSearchEntry
-	searchPending  map[string]*hongguoSearchCall
-	suggestions    map[string]hongguoSuggestionEntry
-	suggestPending map[string]*hongguoSuggestionCall
-	danmaku        map[string]hongguoDanmakuCacheEntry
-	danmakuPending map[string]*hongguoDanmakuCall
+	details             map[string]hongguoDetailEntry
+	pending             map[string]*hongguoDetailCall
+	searches            map[string]hongguoSearchEntry
+	searchPending       map[string]*hongguoSearchCall
+	suggestions         map[string]hongguoSuggestionEntry
+	suggestPending      map[string]*hongguoSuggestionCall
+	danmaku             map[string]hongguoDanmakuCacheEntry
+	danmakuPending      map[string]*hongguoDanmakuCall
 }
 
 func (downloader *Downloader) hongguoClient() *hongguoAppClient {

@@ -265,6 +265,9 @@ func registerNativeEngine(directory string, engine *nativeEngine) {
 			// 不再进合并窗（否则旧快照可能晚到一步把新引擎的数据盖回去）。
 			previous.retired.Store(true)
 			previous.stopCatalogWrites()
+			// 跳过预设/跨源映射与剧库同生命周期：换引擎前把合并窗里
+			// 的待写数据冲掉，避免旧数据晚到把新引擎的目录读旧。
+			flushDongpiandiSkipPresets()
 		}
 	}
 }
@@ -305,6 +308,7 @@ func flushPendingCatalogWrite(directory string, exclude *nativeEngine) {
 func (engine *nativeEngine) ensureLoaded() {
 	engine.ensureSettingsLoaded()
 	engine.loadOnce.Do(func() {
+		loadDongpiandiSkipPresets(engine.directory)
 		if engine.downloader == nil {
 			// 手工拼装的引擎（测试用）没有 downloader，只加载引擎自己的缓存。
 			engine.mu.Lock()
@@ -395,7 +399,7 @@ func nativeNormalize(drama Drama) nativeDrama {
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
 		Area: drama.Area, Year: drama.Year, Score: drama.Score,
 		Duration: flexDurationSeconds(drama.Duration),
-		Tags: tags, Actors: actors, ReleaseStatus: provider.SanitizeText(drama.ReleaseStatus)}
+		Tags:     tags, Actors: actors, ReleaseStatus: provider.SanitizeText(drama.ReleaseStatus)}
 }
 
 // flexDurationSeconds 把 provider 层的时长松散值统一为秒（单集时长）：

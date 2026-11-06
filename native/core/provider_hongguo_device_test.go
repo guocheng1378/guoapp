@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -146,12 +147,54 @@ func TestHongguoRegisterFailurePausesRetries(t *testing.T) {
 	if plays.Load() < 3 {
 		t.Fatalf("plays=%d want >=3", plays.Load())
 	}
+	// 暂停期内 ensureHongguoDevice 直接拦下，且错误带注册失败原因（HTTP 500）。
+	if err := d.ensureHongguoDevice(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("paused registration should surface reason, got %v", err)
+	}
 	// 第二个请求在暂停期内：不再打注册接口，直接用随机号继续请求。
 	if _, err := d.hongguoAppRequest(context.Background(), http.MethodPost, "/novel/player/video_detail/v1/", nil, map[string]string{"video_id": "1"}); err == nil {
 		t.Fatal("second request should still hit empty packets in tests")
 	}
 	if registrations.Load() != 1 {
 		t.Fatalf("registrations=%d want 1 (pause window must suppress registration)", registrations.Load())
+	}
+}
+
+func TestHongguoRegisterNetworkFailureRetriesNextRequest(t *testing.T) {
+	var registrations, plays atomic.Int32
+	d := rankingTestDownloaderRaw(t, func(request *http.Request) (*http.Response, error) {
+		if strings.Contains(request.URL.Host, "snssdk.com") {
+			registrations.Add(1)
+			if registrations.Load() == 1 {
+				// 传输层故障（连接被重置）：响应都没拿到，不算明确拒绝。
+				return nil, errors.New("connection reset by peer")
+			}
+			return rankingHTTPResponse(request, 200, hongguoDeviceRegistrationBody("7355555555555555501", "7355555555555555502")), nil
+		}
+		plays.Add(1)
+		return rankingHTTPResponse(request, 200, `{"code":0,"data":{}}`), nil
+	})
+	// 第一次：注册被网络故障打断；请求本身成败不论（会用随机号继续）。
+	_, _ = d.hongguoAppRequest(context.Background(), http.MethodPost, "/novel/player/video_model/v1/", nil, map[string]string{"video_id": "1"})
+	if registrations.Load() != 1 {
+		t.Fatalf("registrations=%d want 1", registrations.Load())
+	}
+	client := d.hongguoClient()
+	client.mu.Lock()
+	paused := !client.registerPausedUntil.IsZero()
+	client.mu.Unlock()
+	if paused {
+		t.Fatal("network failure must not pause registration")
+	}
+	// 第二个请求：未暂停，重新尝试注册并成功。
+	if _, err := d.hongguoAppRequest(context.Background(), http.MethodPost, "/novel/player/video_detail/v1/", nil, map[string]string{"video_id": "1"}); err != nil {
+		t.Fatalf("second request should re-register and succeed: %v", err)
+	}
+	if registrations.Load() != 2 {
+		t.Fatalf("registrations=%d want 2", registrations.Load())
+	}
+	if plays.Load() < 2 {
+		t.Fatalf("plays=%d want >=2", plays.Load())
 	}
 }
 

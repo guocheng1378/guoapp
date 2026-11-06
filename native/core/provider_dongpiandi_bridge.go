@@ -83,14 +83,19 @@ func dongpiandiBridgeCooldownUntil(norm string) (time.Time, bool) {
 
 func dongpiandiBridgeStoreEntry(norm string, entry dongpiandiBridgeEntry) {
 	dongpiandiBridgeMu.Lock()
-	defer dongpiandiBridgeMu.Unlock()
-	if _, exists := dongpiandiBridgeCache[norm]; !exists && len(dongpiandiBridgeCache) >= dongpiandiBridgeCacheLimit {
+	existing, existed := dongpiandiBridgeCache[norm]
+	if !existed && len(dongpiandiBridgeCache) >= dongpiandiBridgeCacheLimit {
 		for key := range dongpiandiBridgeCache {
 			delete(dongpiandiBridgeCache, key)
 			break
 		}
 	}
 	dongpiandiBridgeCache[norm] = entry
+	dongpiandiBridgeMu.Unlock()
+	if !existed || existing != entry {
+		// 映射也是剧级常量：与跳过预设同走合并窗落盘（冷却表不落）。
+		dongpiandiScheduleSkipFlush()
+	}
 }
 
 func dongpiandiBridgeStoreCooldown(norm string, coolFor time.Duration) {

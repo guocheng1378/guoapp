@@ -280,26 +280,6 @@ func TestHongguoPublicVideoPath(t *testing.T) {
 	}
 }
 
-func TestHongguoPlaybackAPIDirectURLFallback(t *testing.T) {
-	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		return sourceFixtureResponse(request, 200, `{"parse":0,"url":"https://media.example.test/direct.mp4"}`), nil
-	})
-	media, err := d.resolveHongguoPlaybackAPI(context.Background(), "700001", "800001")
-	if err != nil || media.URL != "https://media.example.test/direct.mp4" {
-		t.Fatalf("direct url fallback failed: %+v %v", media, err)
-	}
-	if len(media.Variants) != 1 || media.Variants[0].URL != media.URL {
-		t.Fatalf("missing direct variant: %+v", media.Variants)
-	}
-
-	d = sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
-		return sourceFixtureResponse(request, 200, `{"parse":0,"url":"javascript:alert(1)"}`), nil
-	})
-	if _, err := d.resolveHongguoPlaybackAPI(context.Background(), "700001", "800001"); err == nil {
-		t.Fatal("unsafe direct url accepted")
-	}
-}
-
 func TestHongguoDetailCacheEvictsOldestEntries(t *testing.T) {
 	details := map[string]hongguoDetailEntry{}
 	now := time.Now()

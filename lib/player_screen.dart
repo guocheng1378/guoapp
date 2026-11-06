@@ -42,6 +42,7 @@ import 'sources_screen.dart';
 import 'lan_controller.dart';
 import 'lan_screen.dart';
 import 'video_enhancement.dart';
+import 'video_enhancement_mpv.dart';
 import 'video_enhancement_settings.dart';
 import 'video_output_size.dart';
 import 'app_icons.dart';
@@ -117,6 +118,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final PlaybackPreloader _preloader;
   bool _preloadEnabled = true;
   late final DanmakuController _danmaku;
+  /// 解码方式偏好（auto/hw/sw），电视端「有声无画」排查用
+  String _decodeMode = playbackDecodeAuto;
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
   late final PlayerInteractions _interactions;
@@ -310,6 +313,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _autoAdvance = preferences.autoAdvance;
     _danmakuEnabled = preferences.danmaku;
     _preloadEnabled = preferences.preload;
+    _decodeMode = preferences.decode;
     _skipMarks = widget.store.skipMarksOf(_skipMarksId);
     _loader = PlaybackLoader(widget.repository);
     _preloader = PlaybackPreloader(widget.repository);
@@ -332,6 +336,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             _player,
             configuration: VideoControllerConfiguration(
               enableHardwareAcceleration: !Platform.isIOS,
+              // 解码方式偏好：auto 传 null 走平台默认（Android=auto-safe），
+              // hw=auto-safe / sw=no 在控制器创建时一并下发，避免竞态。
+              hwdec: playbackDecodeHwdec(_decodeMode),
             ),
           )
         : null;
@@ -1892,6 +1899,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted || _closed || widget.store.profileEpoch != _profileEpoch)
       return;
     final qualityChanged = nextPreferences.quality != _requestedQuality;
+    final decodeChanged = nextPreferences.decode != _decodeMode;
     _enhancement.setPreferences(nextPreferences.enhancement);
     setState(() {
       _speed = nextPreferences.speed;
@@ -1899,15 +1907,63 @@ class _PlayerScreenState extends State<PlayerScreen>
       _autoAdvance = true;
       _danmakuEnabled = nextPreferences.danmaku;
       _preloadEnabled = true;
+      _decodeMode = nextPreferences.decode;
     });
     _danmaku.setEnabled(_danmakuEnabled);
     _syncDanmaku();
     if (qualityChanged) _preloader.clear();
     _syncPreload();
+    if (decodeChanged) unawaited(_applyDecodeMode());
     _menuRevision.value++;
     await _interactions.applySpeed();
     if (qualityChanged && _plan?.local != true) {
       await _retry(quality: nextPreferences.quality);
+    }
+  }
+
+  /// 播放中切换解码方式：改 mpv `hwdec`，mpv 会即时重建视频解码器。
+  /// `auto` 恢复为控制器创建时的平台默认（Android=auto-safe / iOS=no / 桌面=auto）。
+  Future<void> _applyDecodeMode() async {
+    try {
+      final native = _player.platform;
+      if (native is! NativePlayer || _closed) return;
+      final hwdec = playbackDecodeHwdec(_decodeMode) ?? _platformDefaultHwdec();
+      await native.setProperty('hwdec', hwdec);
+    } catch (_) {
+      // 下发失败不打断播放；下次换集/重启会按偏好重新生效。
+    }
+  }
+
+  String _platformDefaultHwdec() {
+    if (Platform.isAndroid) return 'auto-safe';
+    if (Platform.isIOS) return 'no';
+    return 'auto';
+  }
+
+  /// 视频输出诊断：实际解码方式 / 视频输出 / 像素格式（播放日记增强）。
+  Future<String> _videoDiagnostics() async {
+    try {
+      final native = _player.platform;
+      if (native is! NativePlayer || _closed) return '当前播放引擎不支持诊断';
+      final mpv = VideoEnhancementMpv(native);
+      await mpv.initialize();
+      String read(String property) {
+        try {
+          return mpv.read(property)?.toString() ?? '';
+        } catch (_) {
+          return '';
+        }
+      }
+
+      String part(String label, String value) =>
+          '$label：${value.isEmpty ? '未知' : value}';
+      return [
+        part('实际解码', read('hwdec-current')),
+        part('视频输出', read('current-vo')),
+        part('像素格式', read('video-params/pixelformat')),
+      ].join('\n');
+    } catch (_) {
+      return '读取诊断失败';
     }
   }
 
@@ -2146,6 +2202,7 @@ class _PlayerScreenState extends State<PlayerScreen>
               unawaited(_enhancement.toggleCompare());
               Navigator.pop(menuContext);
             },
+            videoDiagnostics: _videoDiagnostics,
             onFavorite: () => widget.store.toggleFavorite(widget.detail.drama),
           ),
         ),
@@ -2346,6 +2403,12 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void dispose() {
+    // 防抖窗内退页：补落一笔亮度/音量（_persistMediaMemory 会看 _closed，
+    // 必须赶在置位前同步发起，否则最后一次手势调整会丢）
+    if (_mediaMemoryTimer?.isActive ?? false) {
+      _mediaMemoryTimer?.cancel();
+      unawaited(_persistMediaMemory());
+    }
     _closed = true;
     final enhancementClosed = _enhancement.close();
     LanController.current?.detachPlayback(_lanIdentity);

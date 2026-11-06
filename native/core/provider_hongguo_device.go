@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+// hongguoRegisterRejection 表示注册接口明确拒绝了本次注册（HTTP 非 200、
+// 响应异常或未返回设备号），区别于网络层故障——只有前者才值得暂停重试。
+type hongguoRegisterRejection struct{ error }
+
 const (
 	hongguoDeviceRegisterURL   = "https://log.snssdk.com/service/2/device_register/"
 	hongguoDeviceRotations     = 3
@@ -21,25 +25,28 @@ const (
 // ensureHongguoDevice 保证签名请求使用已向红果设备注册接口登记的设备号。
 // rejected 为空表示「请求前的常规检查」（已注册则跳过）；rejected 传请求中
 // 撞到空包的设备号，表示「该号疑似落进坏桶，请换一个」——仅当 rejected 等
-// 于当前号时才真正重新注册。注册失败会暂停 10 分钟，避免每个请求都白打一次。
+// 于当前号时才真正重新注册。接口明确拒绝（HTTP 非 200、响应异常、未返回
+// 设备号）才会暂停 10 分钟；网络层故障不暂停，下一个请求立即重试注册。
 func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, rejected string) error {
 	client := downloader.hongguoClient()
 	client.deviceMu.Lock()
 	defer client.deviceMu.Unlock()
 	client.mu.Lock()
 	current, registered := client.state.DeviceID, client.state.Registered
+	pausedUntil, pauseErr := client.registerPausedUntil, client.registerPauseErr
 	client.mu.Unlock()
 	if rejected == "" && registered || rejected != "" && rejected != current {
 		return nil
 	}
-	if time.Now().Before(client.registerPausedUntil) {
-		return errors.New("红果设备注册暂不可用")
+	if time.Now().Before(pausedUntil) {
+		return fmt.Errorf("红果设备注册暂不可用：%v", pauseErr)
 	}
 	deviceID, installID, err := downloader.registerHongguoDevice(ctx)
 	if err != nil {
-		if ctx.Err() == nil {
+		var rejection hongguoRegisterRejection
+		if errors.As(err, &rejection) {
 			client.mu.Lock()
-			client.registerPausedUntil = time.Now().Add(hongguoDeviceRegisterPause)
+			client.registerPausedUntil, client.registerPauseErr = time.Now().Add(hongguoDeviceRegisterPause), err
 			client.mu.Unlock()
 		}
 		return err
@@ -89,17 +96,17 @@ func (downloader *Downloader) registerHongguoDevice(ctx context.Context) (string
 		return "", "", err
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("红果设备注册 HTTP %d", response.StatusCode)
+		return "", "", hongguoRegisterRejection{fmt.Errorf("红果设备注册 HTTP %d", response.StatusCode)}
 	}
 	var result map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.UseNumber()
 	if err := decoder.Decode(&result); err != nil {
-		return "", "", errors.New("红果设备注册返回格式异常")
+		return "", "", hongguoRegisterRejection{errors.New("红果设备注册返回格式异常")}
 	}
 	deviceID, installID := mapString(result, "device_id_str", "device_id"), mapString(result, "install_id_str", "install_id")
 	if !hongguoNumericID.MatchString(deviceID) || !hongguoNumericID.MatchString(installID) || deviceID == "0" || installID == "0" {
-		return "", "", errors.New("红果设备注册未返回设备号")
+		return "", "", hongguoRegisterRejection{errors.New("红果设备注册未返回设备号")}
 	}
 	return deviceID, installID, nil
 }

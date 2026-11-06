@@ -62,10 +62,14 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 		t.Fatalf("unexpected default yeguo endpoint: %s", got)
 	}
 	if !isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") ||
-		!isYeguoActiveSite("https://adviser.awlaxemk.cc/") || !isYeguoActiveSite("https://dsf23.vuenadqi.cc/") {
+		!isYeguoActiveSite("https://adviser.awlaxemk.cc/") || !isYeguoActiveSite("https://dsf23.vuenadqi.cc/") ||
+		!isYeguoActiveSite("https://attract.vgbyziuz.cc/") {
 		t.Fatal("yeguo active-site whitelist lost the current line families")
 	}
 	for _, address := range []string{
+		"https://attract.vgbyziuz.cc/",
+		"https://as.vgbyziuz.cc/",
+		"https://anyway.vgbyziuz.cc/drama/video/1/",
 		"https://analyze.buxefaex.cc/",
 		"https://some-line.buxefaex.cc/drama/video/1/",
 		"https://some-backup.fzchosdi.cc/drama/video/1/",
@@ -82,6 +86,7 @@ func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
 		}
 	}
 	for _, alias := range []string{
+		"attract.vgbyziuz.cc",
 		"analyze.buxefaex.cc",
 		"delta.ygrwdsgt.cc",
 		"yeguodj.com",

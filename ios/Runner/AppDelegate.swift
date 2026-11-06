@@ -18,6 +18,14 @@ import CFNetwork
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "DeviceSettings") {
       let channel = FlutterMethodChannel(name: "duanju/device", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
+        if call.method == "deviceInfo" {
+          let info = Bundle.main.infoDictionary ?? [:]
+          let name = info["CFBundleShortVersionString"] as? String ?? ""
+          let build = info["CFBundleVersion"] as? String ?? ""
+          let version = build.isEmpty ? name : "\(name)+\(build)"
+          result(["television": false, "version": version])
+          return
+        }
         guard call.method == "systemProxy" else {
           result(FlutterMethodNotImplemented)
           return

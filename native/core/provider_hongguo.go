@@ -263,12 +263,7 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if err := ctx.Err(); err != nil {
 		return providerMedia{}, err
 	}
-	// 兜底三：Playback API（第三方聚合，已停止服务该批内容）。
-	media, apiErr := d.resolveHongguoPlaybackAPI(ctx, seriesID, videoID)
-	if apiErr == nil {
-		return media, nil
-	}
-	return providerMedia{}, fmt.Errorf("红果取流失败：App %v；受保护接口 %v；网页 %v；备用 %w", publicError(appErr), publicError(protectedErr), publicError(pageErr), apiErr)
+	return providerMedia{}, fmt.Errorf("红果取流失败：App %v；受保护接口 %v；网页 %w", publicError(appErr), publicError(protectedErr), pageErr)
 }
 
 // hongguoWebUserAgent 站点网页路由（详情/播放页）只放行桌面浏览器 UA，

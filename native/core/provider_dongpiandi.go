@@ -816,7 +816,7 @@ type dongpiandiLine struct {
 }
 
 // dongpiandiSkipCache 按 detail ID 记社区跳过预设。预设是剧级常量（社区
-// 中位数不会频繁变），只存内存，进程重启后随下一次详情拉取自然回填。
+// 中位数不会频繁变），写入后随合并窗落盘到 skip_presets.json，重启即回填。
 var (
 	dongpiandiSkipMu    sync.Mutex
 	dongpiandiSkipCache = map[string]dongpiandiSkipPreset{}
@@ -828,7 +828,8 @@ func dongpiandiCacheSkipPreset(detailID string, preset dongpiandiSkipPreset) {
 		return
 	}
 	dongpiandiSkipMu.Lock()
-	if len(dongpiandiSkipCache) >= 512 {
+	existing, existed := dongpiandiSkipCache[detailID]
+	if !existed && len(dongpiandiSkipCache) >= dongpiandiSkipCacheLimit {
 		// 容量护栏：塞满时逐出一条（Go map 遍历无序，缓存逐出无需公平）。
 		for key := range dongpiandiSkipCache {
 			delete(dongpiandiSkipCache, key)
@@ -837,6 +838,9 @@ func dongpiandiCacheSkipPreset(detailID string, preset dongpiandiSkipPreset) {
 	}
 	dongpiandiSkipCache[detailID] = preset
 	dongpiandiSkipMu.Unlock()
+	if !existed || existing != preset {
+		dongpiandiScheduleSkipFlush()
+	}
 }
 
 // dongpiandiCachedSkipPreset 取某部剧的社区跳过预设。

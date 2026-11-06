@@ -11,12 +11,18 @@ class CoverDecoder {
     : _createExecutor = createExecutor ?? FFmpegExecutor.new;
   final MediaExecutor Function() _createExecutor;
   final _pending = <String, Future<String>>{};
-  Future<void> _tail = Future.value();
+
+  /// HEIC 转码并发上限：单线程 ffmpeg 进程开销小，但串行会让排队的
+  /// 屏幕内海报等满前面所有任务；3 路并发足够摊平积压又不挤爆低端机。
+  static const _maxActive = 3;
+  var _active = 0;
+  final _waiting = <_DecodeTask>[];
 
   Future<String> convert(
     String original,
     Future<Map<String, dynamic>> Function() prepare, {
     bool force = false,
+    bool priority = false,
   }) async {
     final stat = await File(original).stat();
     if (stat.type != FileSystemEntityType.file || stat.size <= 0) {
@@ -34,16 +40,39 @@ class CoverDecoder {
     }
     if (_pending.containsKey(key)) return _pending[key]!;
     if (_pending.length >= 96) throw AppFailure('海报正在处理，请稍后重试');
-    final result = _tail.then((_) => _convert(original, target, prepare));
-    _tail = result.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stack) {},
-    );
-    _pending[key] = result;
+    final completer = Completer<String>();
+    final task = _DecodeTask(key, original, target, prepare, completer);
+    // 屏幕内的海报（priority）插到未启动队列最前，后台预取排尾
+    if (priority) {
+      _waiting.insert(0, task);
+    } else {
+      _waiting.add(task);
+    }
+    _pending[key] = completer.future;
+    _pump();
     try {
-      return await result;
+      return await completer.future;
     } finally {
-      if (identical(_pending[key], result)) _pending.remove(key);
+      if (identical(_pending[key], completer.future)) _pending.remove(key);
+    }
+  }
+
+  void _pump() {
+    while (_active < _maxActive && _waiting.isNotEmpty) {
+      final task = _waiting.removeAt(0);
+      _active++;
+      unawaited(
+        () async {
+          try {
+            task.completer.complete(await _convert(task.original, task.target, task.prepare));
+          } catch (error, stack) {
+            task.completer.completeError(error, stack);
+          } finally {
+            _active--;
+            _pump();
+          }
+        }(),
+      );
     }
   }
 
@@ -165,4 +194,19 @@ class CoverDecoder {
       size -= entry.$2.size;
     }
   }
+}
+
+class _DecodeTask {
+  _DecodeTask(
+    this.key,
+    this.original,
+    this.target,
+    this.prepare,
+    this.completer,
+  );
+  final String key;
+  final String original;
+  final File target;
+  final Future<Map<String, dynamic>> Function() prepare;
+  final Completer<String> completer;
 }
