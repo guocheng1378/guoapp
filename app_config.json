@@ -10,15 +10,17 @@
   },
   "update": {
     "enabled": true,
-    "build": 2259,
-    "version": "v0.2.96-2259",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2259/zhenguojian-0.2.96+2259-arm64-v8a.apk",
-    "notes": "真果·鉴：跳过片头/片尾预设本地保存（重启不丢），跨源播放同样生效；播放中换引擎/重开应用预设即时恢复\n播放链路：HLS 清单改写缓存（校验符未变直接复用，重复进同一集不再反复转写）\n红果：移除备用播放接口降级路径；注册失败仅在站点明确拒绝时暂停\n野果：新增备用镜像域名，域名被墙时自动切换\n播放器：新增解码方式偏好（自动/硬解兼容/软解兼容，应对部分电视盒有声无画）与视频诊断入口；封面加载提速（转码三路并发、屏幕内条目优先）"
+    "build": 2260,
+    "version": "v0.2.96-2260",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2260/zhenguojian-0.2.96+2260-arm64-v8a.apk",
+    "notes": "TVBox 配置导入：一键导入 CMS 站源与 m3u/txt/JSON 直播订阅；站源支持自定义 UA/请求头（防盗链），直播订阅支持请求头与内嵌频道，备份/恢复纳入直播源与自定义站源\n黄果AI 镜像表更新（edge 域名），提升可达性\n页面转场类去重，回退/进场玻璃降级更稳定\n其他：搜索模块、封面转码三路并发、榜单与目录若干修复"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
+      "https://www.agdkczeyx.cc",
       "https://huangguoai.io",
-      "https://9a82a2.jxqgmx5ga.cc"
+      "https://thu.lbvrhyir.cc",
+      "https://thu.agdkczeyx.cc"
     ]
   }
 }
