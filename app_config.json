@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2260,
-    "version": "v0.2.96-2260",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2260/zhenguojian-0.2.96+2260-arm64-v8a.apk",
-    "notes": "TVBox 配置导入：一键导入 CMS 站源与 m3u/txt/JSON 直播订阅；站源支持自定义 UA/请求头（防盗链），直播订阅支持请求头与内嵌频道，备份/恢复纳入直播源与自定义站源\n黄果AI 镜像表更新（edge 域名），提升可达性\n页面转场类去重，回退/进场玻璃降级更稳定\n其他：搜索模块、封面转码三路并发、榜单与目录若干修复"
+    "build": 2268,
+    "version": "v0.2.96-2268",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2268/zhenguojian-0.2.96+2268-arm64-v8a.apk",
+    "notes": "直播：新增节目单 EPG——频道列表显示「正在播」，播放页 OSD 与长按可查看当天节目单；直播源条目与 TVBox 直播订阅统一\n回退转场：修复页面返回时整屏重绘卡顿，玻璃降级不再抖动\n封面：修复部分剧集封面偶发空白（解码缓存被并发提前清理）\n筛选排序：修复上万条目录筛选卡顿（改为本地缓存判定）、排序面板点选后状态不刷新\n首页：切换分类不再整批重播入场动画，滚动更顺"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
