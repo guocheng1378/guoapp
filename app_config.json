@@ -10,17 +10,17 @@
   },
   "update": {
     "enabled": true,
-    "build": 2269,
-    "version": "v0.2.96-2269",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2269/zhenguojian-0.2.96+2269-arm64-v8a.apk",
-    "notes": "本地配置包：导入 TVBox 配置时可直接打开手机里的 .json/.txt 配置文件包离线导入，站源独立归入「本地类」\nTVBox 接口地址：导入框可直接填 https://…/tvbox.json 由 App 拉取解析，失败给出具体原因\n站源分类：站源菜单与管理页新增「本地类」分区，手工添加站源不可选该分类"
+    "build": 2270,
+    "version": "v0.2.96-2270",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2270/zhenguojian-0.2.96+2270-arm64-v8a.apk",
+    "notes": "黄果AI：修复「能看列表、点开没画面」——站点改了播放地址接口，改为按集取新地址并保留旧接口兜底；失效镜像自动降权\n交互振动：下拉刷新、切换分组/站源、切换剧集（含最后一集）都有反馈；刷新失败给明确提示\n竖屏全屏：滑动切集画面跟手，显示下一集预览，到第一/最后一集改橡皮筋阻尼\n全剧播完：新增「全剧已看完」卡片（重播/返回），置灰的上一集/下一集按钮点按会解释原因\n相关目录的下拉刷新统一为雾面样式；离开首页时停掉下载汇总轮询"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
       "https://www.agdkczeyx.cc",
       "https://huangguoai.io",
-      "https://thu.lbvrhyir.cc",
-      "https://thu.agdkczeyx.cc"
+      "https://thu.agdkczeyx.cc",
+      "https://thu.lbvrhyir.cc"
     ]
   }
 }
