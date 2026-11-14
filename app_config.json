@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2273,
-    "version": "v0.2.96-2273",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2273/zhenguojian-0.2.96+2273-arm64-v8a.apk",
-    "notes": "笔盒源：修复搜索不生效——站内搜索接口此前未接线，关键词只会匹配本地剧库\n笔盒源：搜索现按页请求站内接口，可向下翻页\n笔盒为成人源，仍需在「关于」页连点 5 次解锁后可见"
+    "build": 2274,
+    "version": "v0.2.96-2274",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2274/zhenguojian-0.2.96+2274-arm64-v8a.apk",
+    "notes": "笔盒源：修复封面不显示——封面文件是做了逐字节异或的 data URL 文本，之前被当成无效海报丢弃，列表全是占位图；现已按站点规则还原并解码"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
