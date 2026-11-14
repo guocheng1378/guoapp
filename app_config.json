@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2275,
-    "version": "v0.2.96-2275",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2275/zhenguojian-0.2.96+2275-arm64-v8a.apk",
-    "notes": "网络韧性：当域名被 DNS 污染或劫持到 0.0.0.0 导致连接被拒时，自动改用备用 DNS(DoH) 解析出的地址重试；笔盒源新增线路记忆，冷启动优先复用上次可用线路，失效才重新发现域名"
+    "build": 2276,
+    "version": "v0.2.96-2276",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2276/zhenguojian-0.2.96+2276-arm64-v8a.apk",
+    "notes": "可重建缓存（封面/剧库/榜单/直播清单）改落系统缓存目录：系统「清除缓存」可一次清干净，不再连带清掉下载、追剧与设置；升级后首次启动自动搬迁旧缓存，不用重新拉封面和剧库。另含近期在途修复。"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
