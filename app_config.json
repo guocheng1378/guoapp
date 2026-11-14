@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2274,
-    "version": "v0.2.96-2274",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2274/zhenguojian-0.2.96+2274-arm64-v8a.apk",
-    "notes": "笔盒源：修复封面不显示——封面文件是做了逐字节异或的 data URL 文本，之前被当成无效海报丢弃，列表全是占位图；现已按站点规则还原并解码"
+    "build": 2275,
+    "version": "v0.2.96-2275",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2275/zhenguojian-0.2.96+2275-arm64-v8a.apk",
+    "notes": "网络韧性：当域名被 DNS 污染或劫持到 0.0.0.0 导致连接被拒时，自动改用备用 DNS(DoH) 解析出的地址重试；笔盒源新增线路记忆，冷启动优先复用上次可用线路，失效才重新发现域名"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
