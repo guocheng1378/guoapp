@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
@@ -19,6 +20,7 @@ import 'source_status.dart';
 import 'ranking_models.dart';
 import 'home_feed_models.dart';
 import 'live_models.dart';
+import 'live_source_entry.dart';
 import 'cover_decoder.dart';
 import 'catalog_updates.dart';
 import 'download_collections.dart';
@@ -34,6 +36,16 @@ typedef _DartFree = void Function(Pointer<Utf8>);
 /// 必须限定类型名」的分析器报错。
 const String _expensiveDetailSource = 'dongpiandi';
 const int _expensiveDetailPrefetchLimit = 2;
+
+/// 详情请求载荷。后台预取（[background] = true）额外带 `background` 标记，
+/// 原生侧据此把该请求的失败记进独立冷却表，不污染前台冷却——预取被上游
+/// 限流时，用户点播同源剧不会被自己的预取卡住。
+/// 键名与原生 `nativeInput.Background` 的 json tag 一致，改名即失效。
+Map<String, dynamic> buildDetailInput(Drama drama, {required bool background}) {
+  final input = <String, dynamic>{'action': 'detail', 'drama': drama.toJson()};
+  if (background) input['background'] = true;
+  return input;
+}
 
 String _nativeRequest(String body) {
   final DynamicLibrary library;
@@ -93,9 +105,12 @@ class _NativeCallError implements Exception {
 }
 
 class _NativeJob {
-  _NativeJob(this.body, this.timeout);
+  _NativeJob(this.body, this.timeout, this.label);
   final String body;
   final Duration timeout;
+  final String label;
+  final DateTime queuedAt = DateTime.now();
+  DateTime? startedAt;
   final Completer<String> _completer = Completer<String>();
   Timer? timer;
 
@@ -185,7 +200,9 @@ class _NativeWorker {
 /// 迟到结果丢弃。超时语义与 `Future.timeout` 时代一致，且随后的 `cancelRead`
 /// 会落在新 worker 上真正生效。
 class _NativeCallPool {
-  static const int limit = 6;
+  final int limit;
+
+  _NativeCallPool(this.limit);
 
   final List<_NativeWorker> _workers = <_NativeWorker>[];
   final List<_NativeJob> _pending = <_NativeJob>[];
@@ -193,13 +210,23 @@ class _NativeCallPool {
   bool _spawnBlocked = false;
   Object? _spawnError;
 
-  Future<String> send(String body, Duration timeout) {
+  Future<String> send(String body, Duration timeout, {String label = ''}) {
     final Object? blocked = _spawnError;
     if (_spawnBlocked && _workers.isEmpty && blocked != null) {
       return Future<String>.error(blocked);
     }
-    final job = _NativeJob(body, timeout);
+    final job = _NativeJob(body, timeout, label);
     _pending.add(job);
+    // 排队超时：`_dispatch` 的计时只在真正派发后生效，而原生调用无法被打断
+    // ——worker 全被卡住的调用占满时，排队里的请求没有任何超时兜底，Future
+    // 永不完成。封面渲染层拿不到结果也拿不到错误，就会永远停在占位图
+    // （用户看到「新卡片一直不出图」）。这里给排队本身一个上限。
+    job.timer = Timer(timeout, () {
+      if (!_pending.remove(job)) return; // 已派发：执行期由 _dispatch 负责
+      debugPrint('[DBG] pool QUEUE_TIMEOUT $label');
+      job.fail(TimeoutException('本地核心排队超时', timeout));
+      _pump();
+    });
     _pump();
     return job.future;
   }
@@ -250,6 +277,9 @@ class _NativeCallPool {
 
   void _dispatch(_NativeWorker worker, _NativeJob job) {
     worker.job = job;
+    job.startedAt = DateTime.now();
+    // 换掉排队计时：不 cancel 的话旧计时到点会误杀正在执行、尚未超时的请求。
+    job.timer?.cancel();
     job.timer = Timer(job.timeout, () {
       if (job.finished) return;
       _retire(worker);
@@ -272,7 +302,10 @@ class _NativeCallPool {
   }
 }
 
-final _NativeCallPool _nativeCallPool = _NativeCallPool();
+final _NativeCallPool _nativeCallPool = _NativeCallPool(6);
+// 封面是小图、高频 UI 资源，独立成 12 并发池，避免与 detail/resolve 等
+// 重操作争抢全局 6 worker，导致列表首屏批量海报长时间停在占位态。
+final _NativeCallPool _coverCallPool = _NativeCallPool(12);
 
 /// 远程站源配置热更（config.source）：把 app_config.json 的 sourceConfig 段
 /// 转发核心应用（黄果AI 镜像表 / 真果·鉴根地址）。核心侧权威校验（scheme、
@@ -342,6 +375,10 @@ abstract class AppRepository {
     Map<String, dynamic> payload,
   ) async => throw AppFailure('当前环境不支持云备份');
 
+  /// 本机代理转发到播放器的实时速率（字节/秒），供播放页状态栏显示。
+  /// 默认 0 表示没有数据源（测试替身/纯 Dart 环境不显示网速）。
+  Future<int> streamSpeed() async => 0;
+
   Future<PlaybackPlan?> prepareHandoff(
     Drama drama,
     Episode episode, {
@@ -372,8 +409,18 @@ abstract class AppRepository {
       ? _detailTtlDongpiandi
       : _detailTtl;
 
+  /// 丢弃该剧的详情缓存：站源偶发空包后强制走一次真实请求。
+  void invalidateDetail(Drama drama) {
+    final key = _detailKey(drama);
+    _detailCache.remove(key);
+    _detailCacheAt.remove(key);
+  }
+
   /// 子类用包壳方式接入缓存：命中/在途复用，否则走 [fetch] 并落缓存，
-  /// 失败不缓存。测试 fake 直接覆写 detail() 即可完全绕开缓存。
+  /// 失败与「空集数」都不缓存。测试 fake 直接覆写 detail() 即可绕开缓存。
+  ///
+  /// 红果 play_info 限流/空包时详情会返回 0 集但它本身是一次「成功」，
+  /// 缓存 30 分钟就等于这半小时内从追剧/最近再点这部剧一直「没有视频」。
   Future<DramaDetail> detailCached(
     Drama drama,
     Future<DramaDetail> Function() fetch,
@@ -381,16 +428,20 @@ abstract class AppRepository {
     final key = _detailKey(drama);
     final at = _detailCacheAt[key];
     if (at != null) {
-      if (DateTime.now().difference(at) >= _detailTtlFor(key)) {
+      final cached = _detailCache[key];
+      if (DateTime.now().difference(at) >= _detailTtlFor(key) ||
+          cached == null ||
+          cached.episodes.isEmpty) {
         _detailCache.remove(key);
         _detailCacheAt.remove(key);
       } else {
-        return Future.value(_detailCache[key]!);
+        return Future.value(cached);
       }
     }
     final pending = _detailPending[key];
     if (pending != null) return pending;
     final future = fetch().then((result) {
+      if (result.episodes.isEmpty) return result;
       _detailCache[key] = result;
       _detailCacheAt[key] = DateTime.now();
       if (_detailCache.length > _detailCacheLimit) {
@@ -469,6 +520,26 @@ abstract class AppRepository {
     List<String> liveUrls = const [],
     bool force = false,
   }) async => throw AppFailure('当前环境不支持直播');
+
+  /// 带 UA/请求头/内联正文的直播订阅通道。基类默认退化成 URL 列表，
+  /// 这样所有既有测试仓库无需适配新参数。
+  Future<LivePage> liveChannelsWithSources({
+    String listId = '',
+    List<LiveSourceEntry> liveSources = const [],
+    bool force = false,
+  }) => liveChannels(
+    listId: listId,
+    liveUrls: [for (final entry in liveSources) entry.url],
+    force: force,
+  );
+
+  /// 电子节目单（xmltv）：源只来自 TVBox 的 lives[].epg 或用户手填，因此没有
+  /// 配置时不产生任何网络请求，直接返回 [LiveEpg.empty]（UI 静默降级）。
+  Future<LiveEpg> liveEpg({
+    List<LiveSourceEntry> epgSources = const [],
+    List<LiveChannel> channels = const [],
+  }) async => LiveEpg.empty;
+
   Future<List<CatalogCategory>> categories(
     String source, {
     bool force = false,
@@ -663,6 +734,18 @@ class NativeRepository extends AppRepository {
     String action,
     Map<String, dynamic> payload,
   ) => _call({'action': 'webdav', 'command': action, 'webdav': payload});
+
+  @override
+  Future<int> streamSpeed() async {
+    // 状态栏每秒拉一次：核心算的是本机代理的转发速率，失败就当没有读数，
+    // 不抛错打断播放界面。
+    try {
+      final result = await _call({'action': 'streamStats'});
+      return intValue(result['bytesPerSecond']);
+    } on Object {
+      return 0;
+    }
+  }
 
   @override
   Future<PlaybackPlan?> prepareHandoff(
@@ -948,6 +1031,42 @@ class NativeRepository extends AppRepository {
   );
 
   @override
+  Future<LivePage> liveChannelsWithSources({
+    String listId = '',
+    List<LiveSourceEntry> liveSources = const [],
+    bool force = false,
+  }) async => LivePage.fromJson(
+    await _call({
+      'action': 'live.channels',
+      'listId': listId,
+      'liveUrls': const <String>[],
+      'liveSources': [for (final entry in liveSources) entry.toPayload()],
+      'force': force,
+    }),
+  );
+
+  @override
+  Future<LiveEpg> liveEpg({
+    List<LiveSourceEntry> epgSources = const [],
+    List<LiveChannel> channels = const [],
+  }) async {
+    if (epgSources.isEmpty || channels.isEmpty) return LiveEpg.empty;
+    return LiveEpg.fromJson(
+      await _call({
+        'action': 'live.epg',
+        'liveEpg': [for (final entry in epgSources) entry.toPayload()],
+        'epgChannels': [
+          for (final channel in channels)
+            <String, dynamic>{
+              'name': channel.name,
+              if (channel.tvgId.isNotEmpty) 'tvgId': channel.tvgId,
+            },
+        ],
+      }),
+    );
+  }
+
+  @override
   Future<SourceStatus> sourceStatus(String source) async =>
       SourceStatus.fromJson(
         await _call({'action': 'sourceStatus', 'source': source}),
@@ -1076,6 +1195,10 @@ class NativeRepository extends AppRepository {
     }))['count'],
   );
   int _playbackSequence = DateTime.now().microsecondsSinceEpoch;
+  // 下载列表轮询缓存：(核心回传的内容指纹, 上一次解析出来的完整列表)。
+  // 指纹未变时核心不回 jobs，这里直接复用上次结果，避免每 2 秒重建整张列表。
+  (String, List<DownloadJob>) _downloadCache = ('', const []);
+  List<DownloadJob> _visibleDownloads = const [];
 
   Future<Map<String, dynamic>> _call(Map<String, dynamic> input) async {
     try {
@@ -1160,7 +1283,10 @@ class NativeRepository extends AppRepository {
       // 播放解析只按调用方显式传入的 force（用户主动刷新/换清晰度）走。
       // 真正需要重新签发的路径由各方法显式传 force（如 online 预载）。
       final body = jsonEncode(input);
-      final encoded = await _nativeCallPool.send(
+      final pool = (action == 'cover' || action == 'prepareCover')
+          ? _coverCallPool
+          : _nativeCallPool;
+      final encoded = await pool.send(
         body,
         Duration(
           seconds: action == 'moveDownloads'
@@ -1169,8 +1295,14 @@ class NativeRepository extends AppRepository {
               ? 15
               : action == 'preload'
               ? 20
+              // 封面：核心侧单次下载 10s、地址补齐 15s，最坏 35s 内必有结果。
+              // 原来统一 70s 会让「卡住的封面」把 12 个 worker 占满一分钟，
+              // 后续新卡片只能排队——用户看到的就是「新图标一直不出现」。
+              : (action == 'cover' || action == 'prepareCover')
+              ? 40
               : 70,
         ),
+        label: action,
       );
       final response = jsonDecode(encoded) as Map<String, dynamic>;
       if (response['ok'] != true) {
@@ -1222,9 +1354,14 @@ class NativeRepository extends AppRepository {
   @override
   Future<void> initialize() async {
     final directory = await getApplicationSupportDirectory();
+    // 可重建缓存（封面/剧库/榜单/直播清单）单独落到系统缓存目录：用户在
+    // 系统设置里「清除缓存」能一次清干净，空间紧张时也由系统自行回收，
+    // 不会连带清掉下载、追剧、设置这些真正的用户数据。
+    final cache = await _cacheDirectoryOrNull();
     final build = await _call({
       'action': 'initialize',
       'directory': directory.path,
+      'cache': ?cache,
     });
     if (build['allSources'] != allSourcesEnabled) {
       throw AppFailure('应用与原生核心的站源版本不一致，请使用完整安装包重新安装');
@@ -1234,6 +1371,19 @@ class NativeRepository extends AppRepository {
       SystemProxyMonitor.start((value) async {
         await _call({'action': 'updateSystemProxy', 'systemProxy': value});
       });
+    }
+  }
+
+  /// 系统缓存目录（Android 是 getCacheDir，Windows 是 LOCALAPPDATA 下的
+  /// cache）：只放封面/剧库/榜单这类可重建的缓存。取不到就返回 null，
+  /// 原生侧会回落到数据目录，行为与旧版一致。
+  Future<String?> _cacheDirectoryOrNull() async {
+    try {
+      final directory = await getApplicationCacheDirectory();
+      if (directory.path.isEmpty) return null;
+      return directory.path;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -1306,12 +1456,27 @@ class NativeRepository extends AppRepository {
   }
 
   @override
-  Future<DramaDetail> detail(Drama drama) => detailCached(
-    drama,
-    () async => DramaDetail.fromJson(
-      await _call({'action': 'detail', 'drama': drama.toJson()}),
-    ),
-  );
+  Future<DramaDetail> detail(Drama drama) async => _detail(drama, background: false);
+
+  /// [background] = true 供后台预取使用：原生侧把该请求的失败记进独立冷却表，
+  /// 不污染前台冷却——预取被上游限流时，用户点播同源剧不会被自己的预取卡住。
+  /// 缓存键与 TTL 与前台完全一致，预取到的详情仍能被前台点按直接命中。
+  ///
+  /// 授权放在入口而不是只靠 `_call` 内部的动作白名单：详情有 30min 的本地
+  /// 缓存，命中缓存时根本不会发请求，若只在 `_call` 校验，关掉站源后仍能
+  /// 读到该剧的缓存详情（与目录/封面/下载的拒绝口径不一致）。这里提前拒绝，
+  /// 受限源未开启时预取也不会去打扰它。
+  Future<DramaDetail> _detail(Drama drama, {required bool background}) async {
+    _authorize(drama.source);
+    return detailCached(
+      drama,
+      () async {
+        return DramaDetail.fromJson(
+          await _call(buildDetailInput(drama, background: background)),
+        );
+      },
+    );
+  }
 
   final _prefetchQueue = <Drama>[];
   bool _prefetchPumping = false;
@@ -1356,7 +1521,9 @@ class NativeRepository extends AppRepository {
         while (_prefetchQueue.isNotEmpty) {
           final drama = _prefetchQueue.removeAt(0);
           try {
-            await detail(drama);
+            // 走后台标记：预取的失败（429/403）只进独立冷却表，
+            // 不污染前台冷却，用户点播同源剧不会被预取卡住。
+            await _detail(drama, background: true);
           } catch (_) {}
         }
       } finally {
@@ -1457,16 +1624,37 @@ class NativeRepository extends AppRepository {
 
   @override
   Future<List<DownloadJob>> downloads() async {
-    final result = await _call({'action': 'downloads'});
-    return (result['jobs'] as List? ?? [])
-        .whereType<Map>()
-        .map((value) => DownloadJob.fromJson(Map<String, dynamic>.from(value)))
+    final result = await _call({
+      'action': 'downloads',
+      'since': _downloadCache.$1,
+    });
+    final jobs = result['jobs'];
+    if (jobs is List) {
+      _downloadCache = (
+        result['fingerprint'] as String? ?? '',
+        jobs
+            .whereType<Map>()
+            .map(
+              (value) => DownloadJob.fromJson(Map<String, dynamic>.from(value)),
+            )
+            .toList(),
+      );
+    }
+    final visible = _downloadCache.$2
         .where(
           (job) =>
               SourceSite.isAvailable(job.drama.source) &&
               (access == null || access!.allowsSource(job.drama.source)),
         )
         .toList();
+    final previous = _visibleDownloads;
+    if (visible.length == previous.length &&
+        visible.indexed.every(
+          (entry) => identical(entry.$2, previous[entry.$1]),
+        )) {
+      return previous;
+    }
+    return _visibleDownloads = List.unmodifiable(visible);
   }
 
   @override

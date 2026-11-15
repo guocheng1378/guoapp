@@ -56,7 +56,8 @@ func (d *Downloader) catalogResponseError(request *http.Request, response *http.
 	if d.limiter != nil && (response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests || reason != "") {
 		d.limiter.mu.Lock()
 		backoffs := d.limiter.backoffs
-		if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode != http.StatusTooManyRequests {
+		if isolatedBackoff(request.Context()) &&
+			!(response.StatusCode == http.StatusTooManyRequests && rateLimitBackoffShared(request.Context())) {
 			backoffs = d.limiter.backgroundBackoffs
 		}
 		if previous := backoffs[host]; previous != nil && previous.status == response.StatusCode {
@@ -91,7 +92,36 @@ type requestLimiter struct {
 
 type backgroundCatalogKey struct{}
 
+// backgroundBackoffKey 标记「冷却隔离」车道：请求失败只记进自己的冷却表，
+// 不污染前台冷却表。给详情后台预取用——预取的失败不该让用户点播同源剧时挨罚。
+// 与 backgroundCatalogKey 的区别：本车道不让位给前台（低优先级会让预取被
+// 滚屏时的封面请求饿死），仍正常排队，只隔离冷却表。
+type backgroundBackoffKey struct{}
+
 type probeBackoffSkipKey struct{}
+
+// isolatedBackoff：请求失败是否只记进自己的冷却表。
+//   - backgroundCatalogKey（预载/补齐/弹幕等纯后台）：记进后台表；
+//   - backgroundBackoffKey（详情预取）：同样记进后台表；
+//   - 其余（前台请求）：记进前台表。
+func isolatedBackoff(ctx context.Context) bool {
+	if v, _ := ctx.Value(backgroundBackoffKey{}).(bool); v {
+		return true
+	}
+	v, _ := ctx.Value(backgroundCatalogKey{}).(bool)
+	return v
+}
+
+// rateLimitBackoffShared：限流（429）是否要让前台一起冷却。
+// 纯后台请求（预载/补齐/弹幕）遇 429 仍冷却所有人，避免继续加压；
+// 详情预取只隔离自己的冷却——预取被限流不该把用户点播一起卡住。
+func rateLimitBackoffShared(ctx context.Context) bool {
+	if v, _ := ctx.Value(backgroundBackoffKey{}).(bool); v {
+		return false
+	}
+	v, _ := ctx.Value(backgroundCatalogKey{}).(bool)
+	return v
+}
 
 func withoutBackoffRecording(ctx context.Context) context.Context {
 	return context.WithValue(ctx, probeBackoffSkipKey{}, true)
@@ -144,7 +174,7 @@ func (limiter *requestLimiter) acquire(ctx context.Context, request *http.Reques
 			limiter.mu.Unlock()
 			return nil, backoff
 		}
-		if backoff := limiter.backgroundBackoffs[host]; background && backoff != nil && time.Now().Before(backoff.until) {
+		if backoff := limiter.backgroundBackoffs[host]; isolatedBackoff(ctx) && backoff != nil && time.Now().Before(backoff.until) {
 			limiter.mu.Unlock()
 			return nil, backoff
 		}
@@ -218,8 +248,8 @@ func (limiter *requestLimiter) observeBlock(request *http.Request, response *htt
 	host := strings.ToLower(request.URL.Hostname())
 	limiter.mu.Lock()
 	backoffs := limiter.backoffs
-	if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && response.StatusCode != http.StatusTooManyRequests {
-
+	if isolatedBackoff(request.Context()) &&
+		!(response.StatusCode == http.StatusTooManyRequests && rateLimitBackoffShared(request.Context())) {
 		backoffs = limiter.backgroundBackoffs
 	}
 	backoffs[host] = &requestBackoff{host: host, until: time.Now().Add(delay), status: response.StatusCode}
