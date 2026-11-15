@@ -34,7 +34,7 @@ func (d *Downloader) doMediaRequestWithClient(request *http.Request, client *htt
 		}
 		client = credentials.client(client)
 	}
-	response, err := client.Do(request)
+	response, err := d.mediaRequestRefererless(client, request)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +43,78 @@ func (d *Downloader) doMediaRequestWithClient(request *http.Request, client *htt
 	}
 	observeSourceResponse(request.Context(), response)
 	return response, nil
+}
+
+// mediaRequestRefererless retries once without the Referer header when the
+// server answers 403 because of a hotlink guard. A successful retry marks
+// the host as refusing Referer, later requests to it go out bare.
+//
+// Background: hotlink policies differ per CDN. Under one host the API
+// domain, the media domain and the main site domain can each accept or
+// reject the same Referer (yunzhui rejects every non-empty one). A
+// hardcoded Referer breaks as soon as a site tightens its policy, so the
+// fallback is measured at runtime and every source recovers on its own.
+func (d *Downloader) mediaRequestRefererless(client *http.Client, request *http.Request) (*http.Response, error) {
+	host := ""
+	if request.URL != nil {
+		host = strings.ToLower(request.URL.Hostname())
+	}
+	referer := request.Header.Get("Referer")
+	if host != "" && referer != "" && d.mediaHostRefererless(host) {
+		// The host was measured as refusing the Referer header: send it bare
+		// right away instead of paying a rejected request first.
+		stripped := request.Clone(request.Context())
+		stripped.Header.Del("Referer")
+		stripped.Header.Del("Origin")
+		return client.Do(stripped)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusForbidden || referer == "" || host == "" {
+		return response, nil
+	}
+	// Only a hotlink page counts as a Referer problem: a bare 403 without an
+	// HTML body is an expired address or a permission error, and those must
+	// keep going through the renewal path instead of spending one more
+	// request on every hit.
+	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/html") {
+		return response, nil
+	}
+	retry := request.Clone(request.Context())
+	retry.Header.Del("Referer")
+	retry.Header.Del("Origin")
+	second, err := client.Do(retry)
+	if err != nil {
+		return response, nil
+	}
+	if second.StatusCode == http.StatusForbidden {
+		second.Body.Close()
+		return response, nil
+	}
+	response.Body.Close()
+	d.markMediaHostRefererless(host)
+	return second, nil
+}
+
+// mediaHostRefererless reports whether the host was measured as refusing
+// the Referer header.
+func (d *Downloader) mediaHostRefererless(host string) bool {
+	d.refererlessMu.Lock()
+	defer d.refererlessMu.Unlock()
+	return d.refererlessHosts[host]
+}
+
+// markMediaHostRefererless remembers that the host refuses Referer, so the
+// following requests to it go out without the header.
+func (d *Downloader) markMediaHostRefererless(host string) {
+	d.refererlessMu.Lock()
+	defer d.refererlessMu.Unlock()
+	if d.refererlessHosts == nil {
+		d.refererlessHosts = map[string]bool{}
+	}
+	d.refererlessHosts[host] = true
 }
 
 func (d *Downloader) fetchMediaPlaylist(ctx context.Context, address, referer string) (string, string, error) {

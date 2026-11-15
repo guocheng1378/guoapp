@@ -65,6 +65,26 @@ func probeGet(t *testing.T, ctx context.Context, url, referer, agent string) (in
 	return response.StatusCode, len(body), strings.ReplaceAll(head, "\n", "|")
 }
 
+func TestYunzhuiHotlinkContentTypeLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live")
+	}
+	media, _ := yunzhuiLiveMedia(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, media.URL, nil)
+	request.Header.Set("Referer", "http://u.gslock.com/")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+	t.Logf("status=%d content-type=%q len=%d head=%q", response.StatusCode,
+		response.Header.Get("Content-Type"), len(body), string(body[:min2(len(body), 120)]))
+}
+
+// TestYunzhuiMediaProbeLive probes the CDN policy of the yunzhui media host.
 func TestYunzhuiMediaProbeLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live")

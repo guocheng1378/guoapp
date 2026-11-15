@@ -78,6 +78,8 @@ type Downloader struct {
 	dongpiandiDanmakuStore *dongpiandiDanmakuCache
 	jinguoDuanjuOnce       sync.Once
 	jinguoDuanju           *jinguoDuanjuAPIClient
+	refererlessMu          sync.Mutex
+	refererlessHosts       map[string]bool
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -143,9 +145,9 @@ type nativeInput struct {
 	OfficialOnly     bool                    `json:"officialOnly"`
 	// Background：后台预取标记。预取的失败只记进独立冷却表，不污染前台冷却，
 	// 用户点播同源剧不会被自己的预取卡住（详见 network_limiter.go）。
-	Background bool   `json:"background"`
-	Since      string `json:"since"`
-	WebDAV           json.RawMessage         `json:"webdav"`
+	Background bool            `json:"background"`
+	Since      string          `json:"since"`
+	WebDAV     json.RawMessage `json:"webdav"`
 }
 
 type nativeCatalogResult struct {
@@ -1434,7 +1436,7 @@ func nativeResolveCacheKey(task Task, input nativeInput) string {
 	// 稳定标识（官方直链每次重兑都会变，本来也不适合当缓存键）。
 	// 其它源保持原语义：红果 CENC 地址会变，改用 ID 会把旧地址粘住。
 	if src, _, valid := splitProviderDramaID(task.Chapter.ID); valid &&
-		src == sourceDongpiandi {
+		(src == sourceDongpiandi || src == provider.SourceYunzhui) {
 		reference = task.Chapter.ID
 	}
 	if reference == "" {
