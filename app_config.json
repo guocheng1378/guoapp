@@ -10,10 +10,10 @@
   },
   "update": {
     "enabled": true,
-    "build": 2276,
-    "version": "v0.2.96-2276",
-    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2276/zhenguojian-0.2.96+2276-arm64-v8a.apk",
-    "notes": "可重建缓存（封面/剧库/榜单/直播清单）改落系统缓存目录：系统「清除缓存」可一次清干净，不再连带清掉下载、追剧与设置；升级后首次启动自动搬迁旧缓存，不用重新拉封面和剧库。另含近期在途修复。"
+    "build": 2277,
+    "version": "v0.2.96-2277",
+    "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2277/zhenguojian-0.2.96+2277-arm64-v8a.apk",
+    "notes": "详情预取不再拖累前台：预取撞 429/403 只记进独立冷却表，用户点播同源剧不会被自己的预取卡住；站源被关闭后详情一并拒绝（命中本地缓存也拦下）。另含近期在途修复。"
   },
   "sourceConfig": {
     "huangguoAIMirrors": [
