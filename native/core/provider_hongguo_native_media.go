@@ -24,16 +24,38 @@ func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoI
 	if err != nil {
 		return providerMedia{}, err
 	}
-	data := nestedMap(result, "data")
+	model, err := hongguoVideoModel(nestedMap(result, "data"))
+	if err != nil {
+		return providerMedia{}, err
+	}
+	return selectHongguoAppMedia(model)
+}
+
+// hongguoVideoModel 从 play-info 的 data 里取出 video_model，兼容三种形态：
+// 直接的对象、base64 编码的 JSON 串、以及没有 video_model 包裹时把
+// video_list / 时长直接放在顶层。站点偶发改包时靠后两者兜底。
+func hongguoVideoModel(data map[string]any) (map[string]any, error) {
 	model, _ := data["video_model"].(map[string]any)
-	if encoded, ok := data["video_model"].(string); ok {
+	if encoded, ok := data["video_model"].(string); ok && encoded != "" {
+		if decoded, err := decodeHongguoBase64(encoded); err == nil && len(decoded) > 0 {
+			encoded = string(decoded)
+		}
 		decoder := json.NewDecoder(strings.NewReader(encoded))
 		decoder.UseNumber()
 		if err := decoder.Decode(&model); err != nil {
-			return providerMedia{}, errors.New("红果 App 播放信息格式异常")
+			return nil, errors.New("红果 App 播放信息格式异常")
 		}
 	}
-	return selectHongguoAppMedia(model)
+	if len(model) == 0 {
+		if rows := anyList(data["video_list"]); len(rows) > 0 {
+			model = map[string]any{
+				"video_list":     data["video_list"],
+				"video_duration": data["video_duration"],
+				"duration":       data["duration"],
+			}
+		}
+	}
+	return model, nil
 }
 
 func selectHongguoAppMedia(model map[string]any) (providerMedia, error) {

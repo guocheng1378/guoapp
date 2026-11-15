@@ -30,11 +30,15 @@ type hongguoCatalogCursor struct {
 }
 
 type hongguoCatalogState struct {
-	Version    int                             `json:"version"`
-	DeviceID   string                          `json:"deviceId"`
-	InstallID  string                          `json:"installId"`
-	Registered bool                            `json:"registered,omitempty"`
-	Feeds      map[string]hongguoCatalogCursor `json:"feeds"`
+	Version    int    `json:"version"`
+	DeviceID   string `json:"deviceId"`
+	InstallID  string `json:"installId"`
+	Registered bool   `json:"registered,omitempty"`
+	// 辅助设备：仅供 feed 双列并发预取使用，与主设备相互独立。
+	HelperDeviceID   string                          `json:"helperDeviceId,omitempty"`
+	HelperInstallID  string                          `json:"helperInstallId,omitempty"`
+	HelperRegistered bool                            `json:"helperRegistered,omitempty"`
+	Feeds            map[string]hongguoCatalogCursor `json:"feeds"`
 }
 
 type hongguoAppClient struct {
@@ -49,6 +53,8 @@ type hongguoAppClient struct {
 	pending             map[string]*hongguoDetailCall
 	searches            map[string]hongguoSearchEntry
 	searchPending       map[string]*hongguoSearchCall
+	searchIDs           map[string]string
+	tagCursors          map[string]hongguoTagCursor
 	suggestions         map[string]hongguoSuggestionEntry
 	suggestPending      map[string]*hongguoSuggestionCall
 	danmaku             map[string]hongguoDanmakuCacheEntry
@@ -59,9 +65,10 @@ func (downloader *Downloader) hongguoClient() *hongguoAppClient {
 	downloader.hongguoOnce.Do(func() {
 		downloader.hongguo = &hongguoAppClient{
 			baseURL: hongguoAppBaseURL,
-			state:   hongguoCatalogState{Version: 1, DeviceID: newHongguoDeviceID(), InstallID: newHongguoDeviceID(), Feeds: map[string]hongguoCatalogCursor{}},
+			state:   hongguoCatalogState{Version: 1, DeviceID: newHongguoDeviceID(), InstallID: newHongguoDeviceID(), HelperDeviceID: newHongguoDeviceID(), HelperInstallID: newHongguoDeviceID(), Feeds: map[string]hongguoCatalogCursor{}},
 			details: map[string]hongguoDetailEntry{}, pending: map[string]*hongguoDetailCall{},
-			searches: map[string]hongguoSearchEntry{}, searchPending: map[string]*hongguoSearchCall{},
+			searches: map[string]hongguoSearchEntry{}, searchPending: map[string]*hongguoSearchCall{}, searchIDs: map[string]string{},
+			tagCursors:  map[string]hongguoTagCursor{},
 			suggestions: map[string]hongguoSuggestionEntry{}, suggestPending: map[string]*hongguoSuggestionCall{},
 		}
 	})
@@ -85,6 +92,10 @@ func (downloader *Downloader) restoreHongguoCatalog(state *hongguoCatalogState) 
 		return
 	}
 	cloned := cloneHongguoCatalogState(state)
+	// 辅助设备号缺失或损坏时重新生成，避免恢复出不可用的半成品状态。
+	if !hongguoNumericID.MatchString(cloned.HelperDeviceID) || !hongguoNumericID.MatchString(cloned.HelperInstallID) {
+		cloned.HelperDeviceID, cloned.HelperInstallID, cloned.HelperRegistered = newHongguoDeviceID(), newHongguoDeviceID(), false
+	}
 	for name, cursor := range cloned.Feeds {
 		known := false
 		for _, genre := range hongguoAppGenres {
@@ -143,9 +154,11 @@ func hongguoAppQuery(deviceID, installID string) url.Values {
 
 func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, path string, extra url.Values, payload any) (map[string]any, error) {
 	client := downloader.hongguoClient()
+	helper, _ := ctx.Value(hongguoHelperDeviceKey{}).(bool)
 	client.mu.Lock()
-	base, deviceID, installID := client.baseURL, client.state.DeviceID, client.state.InstallID
+	base := client.baseURL
 	client.mu.Unlock()
+	deviceID, installID, _ := client.device(helper)
 	query := hongguoAppQuery(deviceID, installID)
 	for key, values := range extra {
 		query[key] = append([]string(nil), values...)
@@ -155,14 +168,19 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 	// 未注册的随机设备号极易落进坏桶（实测该状态下 App 接口全灭、兜底路径
 	// 拿到的加密媒体没有 CENC 密钥，播放器无法解密）。签名请求前先向设备注册
 	// 接口登记设备号，把号码挪进正常设备池；空包时再换号重试兜底。
-	signed := !comment
+	// bookmall tab 与上游一致走免签；辅助设备请求（feed 双列预取）只走签名路径。
+	signed := !comment && path != hongguoBookmallTabPath
 	if signed {
-		_ = downloader.ensureHongguoDevice(ctx, "")
-		client.mu.Lock()
-		deviceID, installID = client.state.DeviceID, client.state.InstallID
-		client.mu.Unlock()
+		_ = downloader.ensureHongguoDevice(ctx, helper, "")
+		deviceID, installID, _ = client.device(helper)
 		query.Set("device_id", deviceID)
 		query.Set("iid", installID)
+	}
+	if helper {
+		if deviceID == "" || !signed {
+			return nil, errors.New("红果辅助设备不可用")
+		}
+		ctx = context.WithValue(ctx, requestLaneKey{}, "hongguo-helper")
 	}
 	var body []byte
 	var err error
@@ -259,11 +277,9 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			// 换号重试不消耗 attempt（attempt-- 抵消 for 的 ++），由
 			// rotations 上限 3 兜住，避免注册接口一直放号时死循环。
 			lastErr = errors.New("红果 App 接口未返回有效数据")
-			if signed && rotations < hongguoDeviceRotations && downloader.ensureHongguoDevice(ctx, deviceID) == nil {
+			if signed && rotations < hongguoDeviceRotations && downloader.ensureHongguoDevice(ctx, helper, deviceID) == nil {
 				rotations++
-				client.mu.Lock()
-				deviceID, installID = client.state.DeviceID, client.state.InstallID
-				client.mu.Unlock()
+				deviceID, installID, _ = client.device(helper)
 				query.Set("device_id", deviceID)
 				query.Set("iid", installID)
 				attempt--

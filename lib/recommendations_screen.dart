@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'catalog_filters.dart';
 import 'app_layout.dart';
@@ -11,6 +10,7 @@ import 'folme.dart';
 import 'glass.dart';
 import 'local_store.dart';
 import 'models.dart';
+import 'motion_tokens.dart';
 import 'playback_launch_screen.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
@@ -37,6 +37,9 @@ class RecommendationsScreen extends StatefulWidget {
 
 class _RecommendationsScreenState extends State<RecommendationsScreen> {
   static const _genres = [
+    // 信息流推荐（红果 bookmall 首页/发现页），与题材分类共用同一通道。
+    CatalogCategory('home_feed', '为你推荐'),
+    CatalogCategory('find_drama', '发现'),
     CatalogCategory('short_play', '真人剧'),
     CatalogCategory('comic_series', '漫剧'),
     CatalogCategory('ai_series', 'AI 剧'),
@@ -231,7 +234,18 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
   }
 
   void _select(String genre) {
-    if (_genre == genre) return;
+    if (_genre == genre) {
+      // 再点当前分类回到顶部（上游 #55）：已经贴顶就不动，避免无意义的动画。
+      if (!_scroll.hasClients || _scroll.offset <= 0) return;
+      unawaited(
+        _scroll.animateTo(
+          0,
+          duration: MotionDurations.page,
+          curve: MotionCurves.standard,
+        ),
+      );
+      return;
+    }
     setState(() {
       _genre = genre;
       _items = [];
@@ -354,10 +368,8 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                       );
                     }
                     return FogRefresh(
-                    onRefresh: () {
-                      HapticFeedback.mediumImpact();
-                      return _load(force: true);
-                    },
+                    onRefresh: () => _load(force: true),
+                    refreshFailed: () => _error != null,
                     // 胶囊停在视口顶 6px：独立页视口在顶栏之下、内嵌主页时
                     // 在分类条之下，视口顶都已是内容上缘，小间隙即可。
                     displacement: 6,

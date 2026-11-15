@@ -66,6 +66,12 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 		pageLimit = 200
 	}
 	headLimit := min(pageLimit, 3)
+	// 非 head 扫描的前台深度保持 1 页（与既有行为一致），仅在后台预取时
+	// 加深到 pageLimit 页，避免前台冷加载凭空多打请求。
+	nonHeadPageLimit := 1
+	if background, _ := ctx.Value(backgroundCatalogKey{}).(bool); background {
+		nonHeadPageLimit = pageLimit
+	}
 	roundLimit := pageLimit
 	if update {
 		roundLimit += headLimit
@@ -95,7 +101,7 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 		active := false
 		for index, genre := range genres {
 			scan := &scans[index]
-			if scan.done || !scan.head && scan.pages >= 1 {
+			if scan.done || !scan.head && scan.pages >= nonHeadPageLimit {
 				continue
 			}
 			if err := ctx.Err(); err != nil {

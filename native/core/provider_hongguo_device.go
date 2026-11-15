@@ -16,23 +16,45 @@ import (
 // 响应异常或未返回设备号），区别于网络层故障——只有前者才值得暂停重试。
 type hongguoRegisterRejection struct{ error }
 
+// hongguoHelperDeviceKey 标记该请求使用辅助设备。feed 双列并发预取时，
+// 辅助单元格请求走独立设备号，避免与主设备请求争抢同一分桶/会话。
+type hongguoHelperDeviceKey struct{}
+
+// requestLaneKey 标记请求所属通道，便于网络层区分辅助通道的配额与限流。
+type requestLaneKey struct{}
+
 const (
 	hongguoDeviceRegisterURL   = "https://log.snssdk.com/service/2/device_register/"
 	hongguoDeviceRotations     = 3
 	hongguoDeviceRegisterPause = 10 * time.Minute
 )
 
+// deviceLocked 读取主设备（helper=false）或辅助设备（helper=true）的注册信息。
+func (client *hongguoAppClient) deviceLocked(helper bool) (string, string, bool) {
+	if helper {
+		return client.state.HelperDeviceID, client.state.HelperInstallID, client.state.HelperRegistered
+	}
+	return client.state.DeviceID, client.state.InstallID, client.state.Registered
+}
+
+func (client *hongguoAppClient) device(helper bool) (string, string, bool) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.deviceLocked(helper)
+}
+
 // ensureHongguoDevice 保证签名请求使用已向红果设备注册接口登记的设备号。
+// helper 为 true 时维护辅助设备（与主设备相互独立、各自注册与轮换）。
 // rejected 为空表示「请求前的常规检查」（已注册则跳过）；rejected 传请求中
 // 撞到空包的设备号，表示「该号疑似落进坏桶，请换一个」——仅当 rejected 等
 // 于当前号时才真正重新注册。接口明确拒绝（HTTP 非 200、响应异常、未返回
 // 设备号）才会暂停 10 分钟；网络层故障不暂停，下一个请求立即重试注册。
-func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, rejected string) error {
+func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, helper bool, rejected string) error {
 	client := downloader.hongguoClient()
 	client.deviceMu.Lock()
 	defer client.deviceMu.Unlock()
+	current, _, registered := client.device(helper)
 	client.mu.Lock()
-	current, registered := client.state.DeviceID, client.state.Registered
 	pausedUntil, pauseErr := client.registerPausedUntil, client.registerPauseErr
 	client.mu.Unlock()
 	if rejected == "" && registered || rejected != "" && rejected != current {
@@ -52,7 +74,11 @@ func (downloader *Downloader) ensureHongguoDevice(ctx context.Context, rejected 
 		return err
 	}
 	client.mu.Lock()
-	client.state.DeviceID, client.state.InstallID, client.state.Registered = deviceID, installID, true
+	if helper {
+		client.state.HelperDeviceID, client.state.HelperInstallID, client.state.HelperRegistered = deviceID, installID, true
+	} else {
+		client.state.DeviceID, client.state.InstallID, client.state.Registered = deviceID, installID, true
+	}
 	client.mu.Unlock()
 	return nil
 }

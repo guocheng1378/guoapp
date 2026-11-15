@@ -71,15 +71,15 @@ func TestHongguoEnsureDeviceSkipsWhenRegistered(t *testing.T) {
 		}
 		return rankingHTTPResponse(request, 200, `{"code":0,"data":{}}`), nil
 	})
-	if err := d.ensureHongguoDevice(context.Background(), ""); err != nil {
+	if err := d.ensureHongguoDevice(context.Background(), false, ""); err != nil {
 		t.Fatalf("first register failed: %v", err)
 	}
 	// 已注册：常规检查（rejected=""）不再注册。
-	if err := d.ensureHongguoDevice(context.Background(), ""); err != nil {
+	if err := d.ensureHongguoDevice(context.Background(), false, ""); err != nil {
 		t.Fatalf("skip check failed: %v", err)
 	}
 	// 换号场景中 rejected 与当前号不同（别的调用已换过号）：跳过。
-	if err := d.ensureHongguoDevice(context.Background(), "999"); err != nil {
+	if err := d.ensureHongguoDevice(context.Background(), false, "999"); err != nil {
 		t.Fatalf("stale rejected check failed: %v", err)
 	}
 	if registrations.Load() != 1 {
@@ -148,7 +148,7 @@ func TestHongguoRegisterFailurePausesRetries(t *testing.T) {
 		t.Fatalf("plays=%d want >=3", plays.Load())
 	}
 	// 暂停期内 ensureHongguoDevice 直接拦下，且错误带注册失败原因（HTTP 500）。
-	if err := d.ensureHongguoDevice(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+	if err := d.ensureHongguoDevice(context.Background(), false, ""); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("paused registration should surface reason, got %v", err)
 	}
 	// 第二个请求在暂停期内：不再打注册接口，直接用随机号继续请求。

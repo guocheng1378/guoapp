@@ -20,6 +20,7 @@ import (
 
 type Config struct {
 	dataDir         string
+	cacheDir        string
 	MaxPagesPerSort int
 	PageSize        int
 	Retries         int
@@ -32,6 +33,9 @@ type Config struct {
 	YeguoURL        string
 	YeguoAPIURL     string
 	SoraniAPIURL    string
+	HeitaoURL       string
+	JinguoDuanjuURL string
+	BeaboxURL       string
 	Token           string
 	AESKeyHex       string
 	InterfaceKey    string
@@ -44,6 +48,8 @@ type Config struct {
 type Downloader struct {
 	rankings               rankingCache
 	live                   liveCache
+	liveEpgMu              sync.Mutex
+	liveEpg                map[string]liveEpgCacheEntry
 	cfg                    Config
 	client                 *http.Client
 	huangdouDetails        map[string]huangdouDetailEntry
@@ -70,6 +76,8 @@ type Downloader struct {
 	legacy                 *legacyAPIClient
 	dongpiandiDanmakuOnce  sync.Once
 	dongpiandiDanmakuStore *dongpiandiDanmakuCache
+	jinguoDuanjuOnce       sync.Once
+	jinguoDuanju           *jinguoDuanjuAPIClient
 }
 
 func defaultConfig() Config { return Config{MaxPagesPerSort: 50, PageSize: 30, Retries: 2} }
@@ -109,12 +117,16 @@ type nativeInput struct {
 	Board            string                  `json:"board"`
 	ListID           string                  `json:"listId"`
 	LiveURLs         []string                `json:"liveUrls"`
+	LiveSources      []liveSourceInput       `json:"liveSources"` // 带 UA/请求头/内联正文；非空时优先于 LiveURLs
+	LiveEPG          []liveSourceInput       `json:"liveEpg"`     // EPG（xmltv）源，只来自 TVBox lives[].epg 或用户手填
+	EpgChannels      []liveEpgRef            `json:"epgChannels"` // 需要节目单的频道（台名 + 可选 tvg-id）
 	Entries          []nativeDownloadEpisode `json:"entries"`
 	JobID            string                  `json:"jobId"`
 	Command          string                  `json:"command"`
 	Action           string                  `json:"action"`
 	SourceConfig     map[string]any          `json:"sourceConfig,omitempty"`
 	Directory        string                  `json:"directory"`
+	Cache            string                  `json:"cache,omitempty"`
 	Source           string                  `json:"source"`
 	Page             int                     `json:"page"`
 	Query            string                  `json:"query"`
@@ -129,6 +141,10 @@ type nativeInput struct {
 	Sequence         int64                   `json:"sequence"`
 	Force            bool                    `json:"force"`
 	OfficialOnly     bool                    `json:"officialOnly"`
+	// Background：后台预取标记。预取的失败只记进独立冷却表，不污染前台冷却，
+	// 用户点播同源剧不会被自己的预取卡住（详见 network_limiter.go）。
+	Background bool   `json:"background"`
+	Since      string `json:"since"`
 	WebDAV           json.RawMessage         `json:"webdav"`
 }
 
@@ -167,17 +183,20 @@ type nativePlan struct {
 }
 
 type nativeEngine struct {
-	lanMu            sync.Mutex
-	lan              *nativeLANServer
-	settingsMu       sync.Mutex
-	settings         nativeResourceSettings
-	readMu           sync.Mutex
-	reads            map[string]nativeReadRequest
-	readCount        int
-	work             map[string]bool
-	downloads        *nativeDownloads
-	downloader       *Downloader
-	directory        string
+	lanMu      sync.Mutex
+	lan        *nativeLANServer
+	settingsMu sync.Mutex
+	settings   nativeResourceSettings
+	readMu     sync.Mutex
+	reads      map[string]nativeReadRequest
+	readCount  int
+	work       map[string]bool
+	downloads  *nativeDownloads
+	downloader *Downloader
+	directory  string
+	// cacheDirectory 是封面/剧库/榜单等可重建缓存的落盘目录（系统缓存目录）；
+	// 老引擎或测试直接构造时为空，此时回退到 directory。
+	cacheDirectory   string
 	mu               sync.Mutex
 	catalogs         map[string][]nativeDrama
 	catalogStates    map[string]nativeCatalogState
@@ -203,7 +222,7 @@ type nativeEngine struct {
 	// retired 标记这个引擎已被同目录的新引擎接管：它不再进合并窗，
 	// 变更直接同步落盘，避免旧引擎的内存快照晚到一步把新数据盖回去。
 	retired atomic.Bool
-	// loadOnce 磁盘缓存懒加载：构造引擎不再同步读 catalogs.json（上限 32 MiB），
+	// loadOnce 磁盘缓存懒加载：构造引擎不再同步读 catalogs.json（体积安全阀），
 	// 改由第一次真正用到剧库/榜单/直播/站源记录时按需加载。
 	loadOnce sync.Once
 	// settingsOnce 只负责那份小文件（网络与下载设置）。
@@ -301,7 +320,7 @@ func flushPendingCatalogWrite(directory string, exclude *nativeEngine) {
 
 // ensureLoaded 磁盘缓存懒加载。
 //
-// 构造引擎时同步读 catalogs.json（上限 32 MiB）会把首帧前的启动链路拖长：
+// 构造引擎时同步读 catalogs.json（体积安全阀）会把首帧前的启动链路拖长：
 // 解析整份 JSON 的代价与库大小成正比，而这份数据在首页真正请求目录之前
 // 用不上。改成按需加载——第一次真正访问剧库/榜单/直播/站源记录时再读。
 // 语义不变：首次 cached() 依旧直接返回磁盘目录（Fresh 判定照旧）。
@@ -456,18 +475,114 @@ func nativeDramaCategory(drama Drama) string {
 	return ""
 }
 
-func newNativeEngine(directory string) (*nativeEngine, error) {
+// cacheDir 返回剧库/封面/榜单/直播清单这些「丢了能重建」的缓存的落盘目录。
+// 手工拼装的引擎（测试、老调用点）没有填 cacheDirectory，回退到数据目录，
+// 与旧版行为一致。
+func (engine *nativeEngine) cacheDir() string {
+	if engine.cacheDirectory != "" {
+		return engine.cacheDirectory
+	}
+	return engine.directory
+}
+
+// cachePath 是 cacheDir 在 Downloader 侧的对应物：榜单、直播清单这些缓存
+// 由 Downloader 落盘，同样「配置了系统缓存目录就用它，否则跟着数据目录」。
+func (cfg Config) cachePath() string {
+	if cfg.cacheDir != "" {
+		return cfg.cacheDir
+	}
+	return cfg.dataDir
+}
+
+// nativeCacheArtifacts 是全部可以整体丢弃重建的缓存产物：封面目录与几份
+// JSON 快照。用户「清除缓存」清的就是这些，因此它们跟着系统缓存目录走。
+var nativeCacheArtifacts = []string{"covers-v1", "catalogs.json", "rankings.json", "live_cache.json"}
+
+// nativeMoveLegacyCache 把旧版落在数据目录里的缓存产物搬到系统缓存目录。
+// 只在两个目录不同、且目标还不存在时搬；下载、追剧、设置这类用户数据一律
+// 不碰。搬迁失败既不回滚也不报错——缓存本来就可重建，最坏是重新拉一遍。
+func nativeMoveLegacyCache(dataDir, cacheDir string) {
+	if dataDir == "" || cacheDir == "" || filepath.Clean(dataDir) == filepath.Clean(cacheDir) {
+		return
+	}
+	for _, name := range nativeCacheArtifacts {
+		source := filepath.Join(dataDir, name)
+		if _, err := os.Stat(source); err != nil {
+			continue
+		}
+		target := filepath.Join(cacheDir, name)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		}
+		if os.Rename(source, target) == nil {
+			continue
+		}
+		// 跨分区（数据目录与缓存目录不在同一个卷）时 rename 会失败，
+		// 退化成复制；原文件留给系统的「清除数据」去回收。
+		nativeCopyCacheArtifact(source, target)
+	}
+}
+
+// nativeCopyCacheArtifact 是 nativeMoveLegacyCache 的复制兜底。
+func nativeCopyCacheArtifact(source, target string) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return
+	}
+	if !info.IsDir() {
+		if data, readErr := os.ReadFile(source); readErr == nil {
+			_ = writeNativeCacheFile(target, data)
+		}
+		return
+	}
+	_ = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		relative, relErr := filepath.Rel(source, path)
+		if relErr != nil {
+			return nil
+		}
+		destination := filepath.Join(target, relative)
+		if entry.IsDir() {
+			_ = os.MkdirAll(destination, 0700)
+			return nil
+		}
+		if data, readErr := os.ReadFile(path); readErr == nil {
+			_ = writeNativeCacheFile(destination, data)
+		}
+		return nil
+	})
+}
+
+// newNativeEngine 建引擎。cache 可选（移植自上游 4e26845）：给了就把封面、
+// 剧库、榜单这些可重建的缓存放到系统缓存目录，用户「清除缓存」能一次清干净；
+// 不给（测试与旧调用点）时回退到数据目录，行为与旧版一致。
+func newNativeEngine(directory string, cache ...string) (*nativeEngine, error) {
 	if !filepath.IsAbs(directory) {
 		return nil, errors.New("应用数据目录无效")
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, err
 	}
+	provider.SetStore(fileStore{dir: filepath.Join(directory, "provider")})
+	cacheDirectory := directory
+	if len(cache) > 0 && strings.TrimSpace(cache[0]) != "" {
+		if !filepath.IsAbs(cache[0]) {
+			return nil, errors.New("应用缓存目录无效")
+		}
+		cacheDirectory = filepath.Clean(cache[0])
+		if err := os.MkdirAll(cacheDirectory, 0700); err != nil {
+			return nil, err
+		}
+		nativeMoveLegacyCache(directory, cacheDirectory)
+	}
 	// 上次运行学到的优选域名先播种进包级表，随后 providerHostsSeed 交给新引擎；
 	// 远程 sourceConfig.providerHosts 到达时仍会整表替换（远程优先）。
 	seedProviderHostsFromDisk(directory)
 	cfg := defaultConfig()
 	cfg.dataDir = directory
+	cfg.cacheDir = cacheDirectory
 	router := &proxyRouter{}
 	d := &Downloader{cfg: cfg, providerHosts: providerHostsSeed(), proxyRouter: router,
 		limiter: newRequestLimiter(3, 250*time.Millisecond), diagnostics: newDiagnosticLog(directory)}
@@ -484,8 +599,9 @@ func newNativeEngine(directory string) (*nativeEngine, error) {
 			}
 			return nil
 		}}
-	engine := &nativeEngine{downloader: d, directory: directory, catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
-	engine.covers = newNativeCoverCache(directory, d)
+	engine := &nativeEngine{downloader: d, directory: directory, cacheDirectory: cacheDirectory,
+		catalogs: map[string][]nativeDrama{}, catalogStates: map[string]nativeCatalogState{}}
+	engine.covers = newNativeCoverCache(cacheDirectory, d)
 	engine.downloads = newNativeDownloads(engine)
 	registerNativeEngine(directory, engine)
 	return engine, nil
@@ -550,7 +666,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 	nativeState.Lock()
 	if input.Action == "initialize" {
 		if nativeState.engine == nil {
-			engine, err := newNativeEngine(input.Directory)
+			engine, err := newNativeEngine(input.Directory, input.Cache)
 			if err != nil {
 				nativeState.Unlock()
 				return nil, err
@@ -565,7 +681,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 	if engine == nil {
 		return nil, errors.New("应用核心尚未就绪，请重新打开应用")
 	}
-	// 磁盘缓存懒加载：第一次真正用到时再读盘（首帧不必等 32 MiB 的 JSON）。
+	// 磁盘缓存懒加载：第一次真正用到时再读盘（首帧不必等整份剧库 JSON）。
 	// flush 只冲刷合并窗里已有的待写快照，不必为此把整份目录读进内存。
 	if input.Action != "flush" {
 		engine.ensureLoaded()
@@ -599,6 +715,9 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return true, engine.updateSystemProxy(input.SystemProxy)
 	case "resourceSettings":
 		return engine.resourceSettings(), nil
+	case "streamStats":
+		// 播放页状态栏的「网速」读数：本机代理转发到播放器的字节速率。
+		return engine.nativeStreamStats(), nil
 	case "config.source":
 		return applySourceConfig(input.SourceConfig)
 	case "dongpiandi.officialOnly":
@@ -631,6 +750,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.nativeRecommendations(ctx, input)
 	case "cachedRecommendations":
 		return engine.cachedRecommendations(input.Category)
+	case "hongguoDevices":
+		return engine.hongguoDevices(ctx, input.Command == "register")
 	case "rankingBoards":
 		boards := []rankingBoard{}
 		for _, board := range rankingBoards {
@@ -643,6 +764,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.nativeRanking(ctx, input)
 	case "live.channels":
 		return engine.nativeLive(ctx, input)
+	case "live.epg":
+		return engine.nativeLiveEpg(ctx, input)
 	case "suggestions":
 		items, err := engine.suggestions(ctx, input.Query)
 		return map[string]any{"items": items}, err
@@ -658,19 +781,26 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return map[string]any{"items": items}, nil
 	case "downloadDirectory":
 		engine.downloads.mu.Lock()
-		root := engine.downloads.root
+		root, leftover := engine.downloads.root, engine.downloads.migrationLeftover
 		engine.downloads.mu.Unlock()
-		return map[string]string{"directory": root}, nil
+		return map[string]string{"directory": root, "leftover": leftover}, nil
 	case "storage":
 		return engine.storage()
 	case "moveDownloads":
-		return true, engine.moveDownloads(ctx, input.Directory)
+		if err := engine.moveDownloads(ctx, input.Directory); err != nil {
+			return nil, err
+		}
+		engine.downloads.mu.Lock()
+		leftover := engine.downloads.migrationLeftover
+		engine.downloads.mu.Unlock()
+		return map[string]string{"leftover": leftover}, nil
 	case "workLease":
 		count, err := engine.workLease(input.JobID, input.Command)
 		return map[string]int{"count": count}, err
 	case "downloads":
-		jobs, err := engine.downloads.snapshot()
-		return map[string]any{"jobs": jobs}, err
+		// 界面每 2 秒轮询一次下载列表：内容没变时只回指纹，省掉序列化、
+		// 跨语言传输与 Dart 侧重建。
+		return engine.downloads.snapshotSince(input.Since)
 	case "enqueueDownloads":
 		added, err := engine.downloads.enqueueContext(ctx, input)
 		return map[string]int{"added": added}, err
@@ -706,6 +836,11 @@ func nativeDispatch(input nativeInput) (any, error) {
 	case "prepareCover":
 		return engine.prepareCover(ctx, input.Drama)
 	case "detail":
+		if input.Background {
+			// 后台预取：只隔离冷却表，不让位给前台。标成 backgroundCatalogKey
+			// 会让预取等「前台全空闲」——滚屏时封面请求不断，预取会被饿死。
+			ctx = context.WithValue(ctx, backgroundBackoffKey{}, true)
+		}
 		return engine.nativeDetail(ctx, input.Drama)
 	case "metadata":
 		return engine.nativeMetadata(ctx, input.Drama)
@@ -909,17 +1044,22 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	d := engine.downloader
 	result := nativeCatalogResult{Items: []nativeDrama{}, Page: page}
 	if query != "" && source == sourceHongguo {
-		entry, err := d.searchHongguoDramas(ctx, query)
+		var entry hongguoSearchEntry
+		var err error
+		if page == 1 {
+			entry, err = d.searchHongguoDramas(ctx, query)
+		} else if keyword, keywordErr := hongguoSearchKeyword(query); keywordErr != nil {
+			err = keywordErr
+		} else {
+			entry, err = d.fetchHongguoSearchPage(ctx, keyword, page)
+		}
 		if err != nil {
 			return result, err
 		}
 		for _, drama := range entry.Dramas {
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
-		result.Warning, result.Page = entry.Warning, 1
-		if entry.Limited && result.Warning == "" {
-			result.Warning = "已显示当前可获取的匹配结果，使用更完整的剧名可继续查找"
-		}
+		result.Warning, result.HasMore = entry.Warning, entry.HasMore
 		return result, nil
 	}
 	if query != "" && source == sourceHuangju {
@@ -944,17 +1084,78 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && isDuanjuProviderSource(source) {
-		if !duanjuSupportsSearch(source) {
-			return result, fmt.Errorf("%s 暂不支持在线搜索，可在已加载内容中筛选", duanjuSourceName(source))
-		}
-		items, err := d.searchDuanju(ctx, source, query)
+	// 在线搜索与目录共用同一套 page/hasMore：实现 PagedSearcher 的视频源
+	// 按页拉 wd 结果，未实现分页的源保持单页。不支持在线搜索的源落到下方
+	// 本地剧库匹配——聚合搜索会向同类所有源发 query，抛错只会变成无意义的
+	// 错误横幅，而本地筛选正是它的预期行为。
+	if query != "" && source == sourceHuangguoAI {
+		items, more, err := d.searchHuangguoAI(ctx, page, query)
 		if err != nil {
 			return result, err
 		}
 		for _, drama := range items {
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
+		result.HasMore = more
+		return result, nil
+	}
+	if query != "" && source == sourceHeitao {
+		items, more, err := d.fetchHeitaoCatalogPage(ctx, page, "", query)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
+		return result, nil
+	}
+	if query != "" && source == sourceHanxiaoquan {
+		items, more, err := d.fetchHanxiaoquanCatalogPage(ctx, page, "", query)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
+		return result, nil
+	}
+	if query != "" && source == sourceJinguoduanju {
+		items, more, err := d.fetchJinguoDuanjuCatalogPage(ctx, page, "", query)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
+		return result, nil
+	}
+	// 笔盒是单视频源，不在 duanju provider 注册表里，走不到下面的
+	// isDuanjuProviderSource 分派；漏了这条分支就会掉进末尾的本地剧库
+	// 匹配，搜索词永远换不出站内结果。它的 /vod/search 与目录共用
+	// page/hasMore 语义，直接按页请求。
+	if query != "" && source == sourceBeabox {
+		items, more, err := d.fetchBeaboxCatalogPage(ctx, page, "", query)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
+		return result, nil
+	}
+	if query != "" && isDuanjuProviderSource(source) && duanjuSupportsSearch(source) {
+		items, more, err := d.searchDuanjuPage(ctx, source, query, page)
+		if err != nil {
+			return result, err
+		}
+		for _, drama := range items {
+			result.Items = append(result.Items, nativeNormalize(drama))
+		}
+		result.HasMore = more
 		return result, nil
 	}
 	if query != "" {
@@ -986,6 +1187,10 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	var err error
 	switch source {
 	case sourceHongguo:
+		if strings.HasPrefix(category, hongguoTagPrefix) {
+			items, result.HasMore, err = d.fetchHongguoTagPage(ctx, category, page)
+			break
+		}
 		engine.mu.Lock()
 		known := make(map[string]bool, len(engine.catalogs[cacheKey]))
 		for _, drama := range engine.catalogs[cacheKey] {
@@ -1023,6 +1228,14 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		}
 	case sourceHuangguoAI:
 		items, result.HasMore, err = d.fetchHuangguoAICatalogPage(ctx, page, category)
+	case sourceHeitao:
+		items, result.HasMore, err = d.fetchHeitaoCatalogPage(ctx, page, category, "")
+	case sourceHanxiaoquan:
+		items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, query)
+	case sourceJinguoduanju:
+		items, result.HasMore, err = d.fetchJinguoDuanjuCatalogPage(ctx, page, category, query)
+	case sourceBeabox:
+		items, result.HasMore, err = d.fetchBeaboxCatalogPage(ctx, page, category, query)
 	case sourceHuangju:
 		// 服务端排序：剧果「全部」页默认 sort=hot（热度），上线日期映射到「最新」
 		// 通道 sort=new；views/name/season 留客户端排序。sort 与分类互斥，
@@ -1044,7 +1257,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	if err != nil && len(items) == 0 {
 		return result, err
 	}
-	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && !isDuanjuProviderSource(source) {
+	if len(items) == 0 && page == 1 && source != sourceHuangju && source != sourceYeguo && source != sourceHeitao && source != sourceBeabox && !isDuanjuProviderSource(source) {
 		return result, errors.New("站源暂未返回剧集，请稍后刷新")
 	}
 	if err != nil {
@@ -1080,6 +1293,14 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchHuangjuDetail(ctx, sourceID)
 	case sourceYeguo:
 		raw, chapters, err = engine.downloader.fetchYeguoDetail(ctx, sourceID)
+	case sourceHeitao:
+		raw, chapters, err = engine.downloader.fetchHeitaoDetail(ctx, sourceID)
+	case sourceHanxiaoquan:
+		raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
+	case sourceJinguoduanju:
+		raw, chapters, err = engine.downloader.fetchJinguoDuanjuDetail(ctx, sourceID)
+	case sourceBeabox:
+		raw, chapters, err = engine.downloader.fetchBeaboxDetail(ctx, sourceID)
 	default:
 		if isDuanjuProviderSource(source) {
 			raw, chapters, err = engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)
