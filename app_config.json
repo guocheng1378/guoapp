@@ -3,7 +3,7 @@
     "announcement": {
         "enabled": true,
         "title": "欢迎使用真果鉴",
-        "message": "遇到问题或有建议？点「了解详情」进反馈区发帖（无需登录），大家一起互助，也欢迎闲聊。也可以加 QQ：963484350 找到我们。",
+        "message": "遇到问题或有建议？点「了解详情」进反馈区发帖（无需登录），大家一起互助，也欢迎闲聊。",
         "button": "我知道了",
         "link": "https://guoapp.dpdns.org/forum.html",
         "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
