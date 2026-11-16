@@ -10,10 +10,10 @@
                      },
     "update":  {
                    "enabled":  true,
-                   "build":  2279,
-                   "version":  "v0.2.96-2279",
-                   "url":  "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2279/zhenguojian-0.2.96+2279-arm64-v8a.apk",
-                   "notes":  "云追接入播放地址缓存：切集不再重复请求站源 API，命中缓存秒开；新增媒体层通用降级——遇到防盗链 403（HTML 防盗链页）自动去掉 Referer 重试，其它站源若收紧防盗链策略也能自动恢复。"
+                   "build":  2280,
+                   "version":  "v0.2.96-2280",
+                   "url":  "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2280/zhenguojian-0.2.96+2280-arm64-v8a.apk",
+                   "notes":  "多项稳定性修复：下载目录更新改为先备份旧文件再替换，避免中途失败导致旧文件丢失；批量下载改为统一一次写盘，减少卡顿；HLS 清单改写缓存只服务点播、直播不再缓存，避免直播时间轴错乱；修复弹幕空窗口与片头跳过范围异常回退；局域网投屏事件串行处理，修复取消后同集重试失败；本地备份恢复与灾难导出增加管理员口令校验；WebDAV 备份增加超时与非加密外网地址拦截。"
                },
     "sourceConfig":  {
                          "huangguoAIMirrors":  [
