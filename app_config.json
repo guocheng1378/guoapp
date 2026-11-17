@@ -1,26 +1,26 @@
 {
-    "_说明":  "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；image 为可选配图 URL（仅支持 http/https，留空或非法则不显示，加载失败自动隐藏）；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。sourceConfig 为可选的站源热更配置（改后无需发版，用户启动时静默热更站源地址）：huangguoAIMirrors 为字符串数组（黄果AI 镜像表，http/https 根地址，去重后 1-8 个，尾斜杠自动规范化，任一项非法整段拒绝）；dongpiandiBaseURL 为字符串（真果·鉴根地址，http/https 根地址）；providerHosts 为对象映射（源站 id → http/https 根地址，仅限已注册站源，黄果剧/野果/豆瓣等不可覆盖，最多 32 条，任一条目非法整段拒绝，空对象为合法=清空覆盖回落内置地址）；任一字段非法则整段丢弃并保留当前生效值；保持空对象 {} 即不生效、不产生任何请求。",
-    "announcement":  {
-                         "enabled":  true,
-                         "title":  "欢迎使用真果鉴",
-                         "message":  "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可复制反馈内容；购码、续费与反馈也可访问网页反馈区。",
-                         "button":  "我知道了",
-                         "link":  "https://guoapp.dpdns.org/forum.html",
-                         "image":  "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
-                     },
-    "update":  {
-                   "enabled":  true,
-                   "build":  2281,
-                   "version":  "v0.2.96-2281",
-                   "url":  "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2281/zhenguojian-0.2.96+2281-arm64-v8a.apk",
-                   "notes":  "去掉激活页的卖家 QQ 联系卡，购码 / 续费 / 反馈统一走网页反馈区；设置里的反馈卡改为「前往反馈区」并可一键复制反馈内容；修复红果在 DNS 被污染网络下设备注册失败（改用 DoH 重连并重建请求体）；更新弹窗长说明支持上下滑动，按钮固定可见。"
-               },
-    "sourceConfig":  {
-                         "huangguoAIMirrors":  [
-                                                   "https://www.agdkczeyx.cc",
-                                                   "https://huangguoai.io",
-                                                   "https://thu.agdkczeyx.cc",
-                                                   "https://thu.lbvrhyir.cc"
-                                               ]
-                     }
+    "_说明": "真果鉴 启动弹窗远程配置：在 GitHub 网页编辑本文件并提交，即对全部装机下次启动生效（无需发版，改动经 CDN 同步约需 5 分钟）。announcement.enabled=true 时每次启动弹公告；image 为可选配图 URL（仅支持 http/https，留空或非法则不显示，加载失败自动隐藏）；update 仅当 build 大于用户当前安装包构建号时弹「发现新版本」；enabled=false 或整段删除即关闭对应弹窗；字符串字段都可留空；解析器忽略未知键。sourceConfig 为可选的站源热更配置（改后无需发版，用户启动时静默热更站源地址）：huangguoAIMirrors 为字符串数组（黄果AI 镜像表，http/https 根地址，去重后 1-8 个，尾斜杠自动规范化，任一项非法整段拒绝）；dongpiandiBaseURL 为字符串（真果·鉴根地址，http/https 根地址）；providerHosts 为对象映射（源站 id → http/https 根地址，仅限已注册站源，黄果剧/野果/豆瓣等不可覆盖，最多 32 条，任一条目非法整段拒绝，空对象为合法=清空覆盖回落内置地址）；任一字段非法则整段丢弃并保留当前生效值；保持空对象 {} 即不生效、不产生任何请求。",
+    "announcement": {
+        "enabled": true,
+        "title": "欢迎使用真果鉴",
+        "message": "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可复制反馈内容；购码、续费与反馈也可访问网页反馈区。",
+        "button": "我知道了",
+        "link": "https://guoapp.dpdns.org/forum.html",
+        "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
+    },
+    "update": {
+        "enabled": true,
+        "build": 2281,
+        "version": "0.2.96-2281",
+        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2281-arm64-v8a.apk",
+        "notes": "真果鉴 v0.2.96 (2281)\r\n\r\n- 去掉激活页的卖家 QQ 联系卡；购码 / 续费 / 反馈统一走网页反馈区 https://guoapp.dpdns.org/forum.html\r\n- 设置里的「反馈 Bug」卡改为「前往反馈区」，并可一键复制附带版本/系统/时间的反馈内容\r\n- 修复红果在 DNS 被污染到 0.0.0.0/环回的网络下设备注册失败（改用 DoH 重连并重建请求体）\r\n- 更新弹窗长说明支持上下滑动，按钮固定底部始终可见\r\n- 本版含此前在途的直播 EPG、站源扩展、性能与稳定性修复\r\n\r\n下载对应架构的 APK 安装即可，三版功能一致。"
+    },
+    "sourceConfig": {
+        "huangguoAIMirrors": [
+            "https://www.agdkczeyx.cc",
+            "https://huangguoai.io",
+            "https://thu.agdkczeyx.cc",
+            "https://thu.lbvrhyir.cc"
+        ]
+    }
 }
