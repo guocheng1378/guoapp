@@ -12,7 +12,7 @@
         "enabled": true,
         "build": 2281,
         "version": "0.2.96-2281",
-        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2281-arm64-v8a.apk",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2281-arm64-v8a.apk",
         "notes": "真果鉴 v0.2.96 (2281)\r\n\r\n- 去掉激活页的卖家 QQ 联系卡；购码 / 续费 / 反馈统一走网页反馈区 https://guoapp.dpdns.org/forum.html\r\n- 设置里的「反馈 Bug」卡改为「前往反馈区」，并可一键复制附带版本/系统/时间的反馈内容\r\n- 修复红果在 DNS 被污染到 0.0.0.0/环回的网络下设备注册失败（改用 DoH 重连并重建请求体）\r\n- 更新弹窗长说明支持上下滑动，按钮固定底部始终可见\r\n- 本版含此前在途的直播 EPG、站源扩展、性能与稳定性修复\r\n\r\n下载对应架构的 APK 安装即可，三版功能一致。"
     },
     "sourceConfig": {
