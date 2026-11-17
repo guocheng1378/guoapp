@@ -7,8 +7,6 @@ import 'package:duanju_app/activation/activation_gate.dart';
 import 'package:duanju_app/activation/activation_screen.dart';
 import 'package:duanju_app/activation/license.dart';
 import 'package:duanju_app/activation/license_codec.dart';
-import 'package:duanju_app/activation/qq_launch.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -431,98 +429,6 @@ void main() {
   });
 
   group('ActivationScreen seller contact', () {
-    const deviceChannel = MethodChannel('duanju/device');
-
-    test('kSellerContact filled with QQ number', () {
-      expect(kSellerContact, contains('963484350'));
-      expect(qqNumberFrom(kSellerContact), '963484350');
-    });
-
-    testWidgets('tap opens QQ via device channel', (tester) async {
-      debugIsWindows = false; // 测试主机是 Windows，强制走通道分支
-      addTearDown(() => debugIsWindows = null);
-      Object? uin;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        deviceChannel,
-        (call) async {
-          if (call.method == 'openQQ') {
-            uin = (call.arguments as Map)['uin'];
-            return true;
-          }
-          return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(deviceChannel, null),
-      );
-
-      await tester.pumpWidget(
-        const MaterialApp(home: ActivationScreen(deviceCode: _device)),
-      );
-
-      await tester.tap(find.text(kSellerContact));
-      await tester.pump();
-
-      expect(uin, '963484350');
-      expect(find.text('正在打开 QQ...'), findsOneWidget);
-    });
-
-    testWidgets('tap falls back to copy when QQ unavailable', (tester) async {
-      debugIsWindows = false;
-      addTearDown(() => debugIsWindows = null);
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        deviceChannel,
-        (call) async => false,
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(deviceChannel, null),
-      );
-
-      await tester.pumpWidget(
-        const MaterialApp(home: ActivationScreen(deviceCode: _device)),
-      );
-
-      await tester.tap(find.text(kSellerContact));
-      await tester.pump();
-
-      // 复制分支的专属提示（剪贴板内容即 sellerContact，代码直接传值）
-      expect(find.text('未检测到 QQ，已复制联系方式'), findsOneWidget);
-    });
-
-    testWidgets('copy button copies without launching QQ', (tester) async {
-      debugIsWindows = false;
-      addTearDown(() => debugIsWindows = null);
-      var openQQCalled = false;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        deviceChannel,
-        (call) async {
-          if (call.method == 'openQQ') openQQCalled = true;
-          return false;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(deviceChannel, null),
-      );
-
-      await tester.pumpWidget(
-        const MaterialApp(home: ActivationScreen(deviceCode: _device)),
-      );
-
-      await tester.tap(
-        find.descendant(
-          of: find.byType(ListTile),
-          matching: find.byIcon(Icons.copy),
-        ),
-      );
-      await tester.pump();
-
-      expect(openQQCalled, isFalse);
-      expect(find.text('联系方式已复制'), findsOneWidget);
-    });
-
     testWidgets('hidden when contact empty', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(

@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'custom_sources.dart';
+import 'http_headers.dart';
+import 'live_source_entry.dart';
 import 'local_profiles.dart';
 import 'local_snapshot.dart';
 import 'local_snapshot_files.dart';
@@ -15,6 +17,7 @@ import 'catalog_sort.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
 import 'lan_sync_models.dart';
+import 'ui_scale.dart';
 
 part 'local_store_sync.dart';
 
@@ -48,7 +51,7 @@ class LocalStore extends ChangeNotifier {
   final Map<String, FollowCheck> _followChecks = {};
   final Map<String, Drama> _seriesCandidates = {};
   final Map<String, bool> _sourceSwitches = {};
-  final List<String> _liveSources = [];
+  final List<LiveSourceEntry> _liveSources = [];
   final List<CustomSourceSpec> _customSources = [];
   Future<void> _writes = Future<void>.value();
   List<LocalProfile> _profiles = [];
@@ -56,6 +59,8 @@ class LocalStore extends ChangeNotifier {
   bool _locked = false;
   bool _disposed = false;
   String? _configurationError;
+  /// customSources 原文解析失败：禁止任何写入，否则空表会覆盖用户手写的站源。
+  bool _customSourcesBroken = false;
   int _epoch = 0;
   int _failures = 0;
   DateTime _retryAfter = DateTime(2000);
@@ -98,6 +103,8 @@ class LocalStore extends ChangeNotifier {
       _configurationError = null;
       _locked = forceLogin && profile.protected;
       _loadLibrary();
+      // 界面缩放：把落盘倍率灌进全局通知器（应用外壳监听它重建）。
+      UiScale.current.value = uiScale;
     } catch (_) {
       _block('本地用户配置损坏，已锁定访问。原始记录已保留，请重新读取或从备份恢复。');
     }
@@ -197,36 +204,41 @@ class LocalStore extends ChangeNotifier {
   }
 
   void _loadLiveSources() {
-    try {
-      final raw = _string('liveSources');
-      if (raw != null) {
-        final decoded = jsonDecode(raw) as List;
-        _liveSources
-          ..clear()
-          ..addAll([
-            for (final row in decoded)
-              if (row is String && row.trim().isNotEmpty) row.trim(),
-          ]);
-      }
-    } catch (_) {
-      _liveSources.clear();
-    }
+    // 快照仍是单个 JSON 字符串；元素兼容旧版纯 URL 与新版描述对象。
+    _liveSources
+      ..clear()
+      ..addAll(LiveSourceEntry.decodeList(_string('liveSources')));
   }
 
-  /// 自填直播源列表（设备级）：每项一个 m3u/m3u8/txt 订阅 URL，
-  /// 打开直播页时经 liveUrls 传给 Go 核心与内置双列表合并。
-  List<String> get liveSourceUrls => List.unmodifiable(_liveSources);
+  /// 旧消费点沿用：只取订阅 URL。
+  List<String> get liveSourceUrls =>
+      List.unmodifiable([for (final entry in _liveSources) entry.url]);
 
-  Future<void> setLiveSourceUrls(List<String> urls) {
-    final clean = <String>[
-      for (final url in urls)
-        if (url.trim().isNotEmpty) url.trim(),
+  /// 完整订阅信息（UA / 请求头 / 内联正文），下发给 Go 核心。
+  List<LiveSourceEntry> get liveSourceEntries =>
+      List.unmodifiable(_liveSources);
+
+  Future<void> setLiveSourceUrls(List<String> urls) => setLiveSourceEntries([
+    for (final url in urls)
+      if (url.trim().isNotEmpty) LiveSourceEntry(url: url.trim()),
+  ]);
+
+  Future<void> setLiveSourceEntries(List<LiveSourceEntry> entries) {
+    final clean = <LiveSourceEntry>[
+      for (final entry in entries)
+        if (entry.url.trim().isNotEmpty) entry,
     ];
+    for (final entry in clean) {
+      final error = validateHttpHeaders(
+        mergeUserAgent(entry.headers, entry.agent),
+      );
+      if (error != null) return Future.error(StateError(error));
+    }
     final epoch = _epoch;
     return _queue(() async {
       _requireAdmin();
       if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
-      await _commit({'liveSources': jsonEncode(clean)});
+      await _commit({'liveSources': LiveSourceEntry.encodeList(clean)});
       _liveSources
         ..clear()
         ..addAll(clean);
@@ -249,7 +261,12 @@ class LocalStore extends ChangeNotifier {
           ..addAll(specs);
       }
     } catch (_) {
+      // 原文损坏时不能把内存里的空表当权威：任何一次新增/删除/备份恢复都会
+      // 用空列表覆盖用户手写的站源。这里只锁定写入，原文仍留在快照里等导出
+      // 恢复；也不注册空表，避免站源菜单被顺带清空。
       _customSources.clear();
+      _customSourcesBroken = true;
+      return;
     }
     _syncCustomSites();
   }
@@ -271,12 +288,17 @@ class LocalStore extends ChangeNotifier {
     required String url,
     String category = 'shortDrama',
     String typeId = '',
+    String agent = '',
+    Map<String, String> headers = const <String, String>{},
+    bool localPackage = false,
   }) {
     final error = CustomSourceSpec.validate(
       name: name,
       url: url,
       category: category,
       typeId: typeId,
+      agent: agent,
+      headers: headers,
     );
     if (error != null) {
       return Future.error(StateError(error));
@@ -299,6 +321,9 @@ class LocalStore extends ChangeNotifier {
         url: cleanUrl,
         category: category,
         typeId: typeId.trim(),
+        agent: sanitizeUserAgent(agent),
+        headers: parseHttpHeaders(headers),
+        localPackage: localPackage,
       ),
     ];
     return _commitCustomSources(next);
@@ -314,6 +339,12 @@ class LocalStore extends ChangeNotifier {
   }
 
   Future<void> _commitCustomSources(List<CustomSourceSpec> next) {
+    if (_customSourcesBroken) {
+      // 原文解析失败时不允许写：写入会用「内存里的空/残缺表」覆盖原配置。
+      return Future.error(
+        StateError('自定义站源配置已损坏，无法写入；请从备份恢复或清空后重建'),
+      );
+    }
     final epoch = _epoch;
     return _queue(() async {
       _requireAdmin();
@@ -326,6 +357,20 @@ class LocalStore extends ChangeNotifier {
       _customSources
         ..clear()
         ..addAll(next);
+      _syncCustomSites();
+      _notify();
+    });
+  }
+
+  /// 配置损坏后的唯一出口：管理员显式清空并解除写入锁定。
+  Future<void> clearCustomSources() {
+    final epoch = _epoch;
+    return _queue(() async {
+      _requireAdmin();
+      if (epoch != _epoch) throw StateError('当前用户已变更，请重试');
+      await _commit({'customSources': jsonEncode(const <Object>[])});
+      _customSources.clear();
+      _customSourcesBroken = false;
       _syncCustomSites();
       _notify();
     });
@@ -496,6 +541,94 @@ class LocalStore extends ChangeNotifier {
       : false;
   Future<void> setDongpiandiOfficialOnly(bool value) =>
       _setting('dongpiandiOfficialOnly', value);
+
+  /// 首页「模糊封面」按钮是否显示（移植自 Xanerix/guoapp 29e1afe）。
+  /// 设备级全局开关，默认关闭。
+  bool get blurCoversButton => _configurationError == null
+      ? _bool('blurCoversButton') ?? false
+      : false;
+  Future<void> setBlurCoversButton(bool value) =>
+      _setting('blurCoversButton', value);
+
+  /// 开屏时首页封面先模糊：依赖按钮开关，按钮关掉即视为关闭。
+  bool get blurCoversOnLaunch =>
+      blurCoversButton &&
+      (_configurationError == null ? _bool('blurCoversOnLaunch') ?? false : false);
+  Future<void> setBlurCoversOnLaunch(bool value) {
+    final epoch = _epoch;
+    return _queue(() async {
+      if (locked || epoch != _epoch) throw StateError('当前用户已变更，请重试');
+      // 改开屏设置 = 重置「每个源上次的样子」：用户在这里表达的正是下次
+      // 启动该不该糊，留着旧记忆会把它压过去。
+      await _commit({
+        'blurCoversOnLaunch': value,
+      }, remove: const ['blurCoversBySource']);
+      _notify();
+    });
+  }
+
+  /// 模糊封面按源记忆：源 id → 该源上次眼睛按钮留下的状态（设备级）。
+  /// 不同源各记各的：在红果糊着，切到影视工厂不该跟着糊（用户要求）。
+  Map<String, bool> get blurCoversBySource {
+    if (_configurationError != null) return const {};
+    final raw = _string('blurCoversBySource');
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.value is bool) entry.key.toString(): entry.value as bool,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// 某个源上次是否模糊封面：本源记忆优先，没记忆时回落到「开屏自动模糊」。
+  bool blurCoversFor(String source) {
+    if (!blurCoversButton) return false;
+    return blurCoversBySource[source] ?? blurCoversOnLaunch;
+  }
+
+  Future<void> setBlurCoversFor(String source, bool value) {
+    if (source.isEmpty) return Future.value();
+    final epoch = _epoch;
+    return _queue(() async {
+      if (locked || epoch != _epoch) return;
+      final next = {...blurCoversBySource, source: value};
+      await _commit({'blurCoversBySource': jsonEncode(next)});
+      _notify();
+    });
+  }
+
+  /// 界面缩放倍率（1.0 = 系统默认）。存字符串：本地快照校验只认布尔与
+  /// 字符串两类值，用 double 落盘会整份拒绝。
+  double get uiScale {
+    if (_configurationError != null) return 1;
+    final parsed = double.tryParse(_string('uiScale') ?? '');
+    if (parsed == null || !parsed.isFinite) return 1;
+    return parsed.clamp(0.85, 1.3).toDouble();
+  }
+
+  Future<void> setUiScale(double value) {
+    final scale = value.isFinite ? value.clamp(0.85, 1.3) : 1.0;
+    // 先通知再落盘：调用方（设置页/电视档位）不必各自记得 preview，
+    // 界面也不会出现「已经写盘但画面没变」的中间态。
+    UiScale.current.value = scale;
+    return _setting('uiScale', scale.toStringAsFixed(2));
+  }
+
+  /// 电视播放页标题行右侧的实时网速（移植自上游 64688c8），默认开。
+  bool get showNetworkSpeed =>
+      _configurationError == null ? _bool('showNetworkSpeed') ?? true : true;
+  Future<void> setShowNetworkSpeed(bool value) =>
+      _setting('showNetworkSpeed', value);
+
+  /// 电视播放页标题行右侧的时钟，默认开。
+  bool get showClock =>
+      _configurationError == null ? _bool('showClock') ?? true : true;
+  Future<void> setShowClock(bool value) => _setting('showClock', value);
   String get displayMode {
     final value = _configurationError == null ? _string('displayMode') : null;
     return {'auto', 'television', 'standard'}.contains(value) ? value! : 'auto';
@@ -514,6 +647,46 @@ class LocalStore extends ChangeNotifier {
     return sources.any((site) => site.id == value)
         ? value
         : sources.firstOrNull?.id ?? '';
+  }
+
+  /// 分组记忆：分组 id（如 `cat-short`/`cat-video`）→ 上次在该分组里
+  /// 选中的站源 id。切走再切回分组要回到原来那个源，而不是该组第一个。
+  Map<String, String> get groupSources {
+    if (locked) return const {};
+    final raw = _string(_key('groupSources'));
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.value is String) entry.key.toString(): entry.value as String,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// 某分组上次选中的站源；不记得（或该源已不可用）返回 null，
+  /// 由调用方回落到该组首个可用源。
+  String? sourceForGroup(String groupId) {
+    final remembered = groupSources[groupId];
+    if (remembered == null || !allowsSource(remembered)) return null;
+    return remembered;
+  }
+
+  Future<void> rememberGroupSource(String groupId, String sourceId) {
+    if (groupId.isEmpty) return Future.value();
+    final epoch = _epoch;
+    return _queue(() async {
+      if (locked || epoch != _epoch) return;
+      final current = groupSources;
+      if (current[groupId] == sourceId) return;
+      await _commit({
+        _key('groupSources'): jsonEncode({...current, groupId: sourceId}),
+      });
+      _notify();
+    });
   }
 
   DownloadPreferences get downloadPreferences {
@@ -1300,6 +1473,9 @@ class LocalStore extends ChangeNotifier {
       'autoExport': autoExport,
       'exportPosters': exportPosters,
       'forceLogin': forceLogin,
+      // 设备级全局键：旧版备份没有这两段，恢复时用当前值兜底，避免被 replace 清空。
+      'liveSources': _string('liveSources') ?? '[]',
+      'customSources': _string('customSources') ?? '[]',
       'libraries': {
         for (final profile in _profiles)
           profile.id: {
@@ -1357,6 +1533,11 @@ class LocalStore extends ChangeNotifier {
     }
     if (data.containsKey('forceLogin') && data['forceLogin'] is! bool) {
       throw const FormatException('备份登录设置无效');
+    }
+    for (final key in const ['liveSources', 'customSources']) {
+      if (data.containsKey(key) && data[key] is! String) {
+        throw const FormatException('备份站源配置无效');
+      }
     }
     final libraries = data['libraries'] as Map;
     for (final profile in profiles) {
@@ -1450,6 +1631,12 @@ class LocalStore extends ChangeNotifier {
       'forceLogin': data['forceLogin'] is bool
           ? data['forceLogin'] as bool
           : profiles.firstWhere((profile) => profile.admin).protected,
+      'liveSources': data['liveSources'] is String
+          ? data['liveSources'] as String
+          : (_string('liveSources') ?? '[]'),
+      'customSources': data['customSources'] is String
+          ? data['customSources'] as String
+          : (_string('customSources') ?? '[]'),
     };
     final libraries = data['libraries'] as Map;
     for (final profile in profiles) {
@@ -1494,14 +1681,52 @@ class LocalStore extends ChangeNotifier {
     _configurationError = null;
     _locked = forceLogin && profile.protected;
     _loadLibrary();
+    _loadLiveSources();
+    _loadCustomSources();
     _epoch++;
     _notify();
   }
 
-  Future<void> importBackup(String content) => _queue(() async {
-    _requireAdmin();
-    await _installBackup(validateBackup(content));
-  });
+  Future<void> importBackup(String content, {String pin = ''}) =>
+      _queue(() async {
+        _requireAdmin();
+        await _requireAdminPin(pin);
+        await _installBackup(validateBackup(content));
+      });
+
+  /// 覆盖式操作（云端覆盖恢复、损坏态导出）要求管理员口令：只查 admin 身份
+  /// 不够——设备未锁屏被借走时，任何管理员会话都能一键覆盖/导出整机数据。
+  ///
+  /// 管理员未设密码时无法验证，按「未设密码的档位不设防」的既有语义放行
+  /// （与登录/切档一致）；一旦设了密码就必须校验。
+  Future<void> _requireAdminPin(String pin, {LocalProfile? verifier}) async {
+    final admin = verifier ?? _profiles.firstWhere((p) => p.admin);
+    if (!admin.protected) return;
+    await _checkPin(admin, pin);
+  }
+
+  /// 从磁盘原文解析原管理员（配置损坏时 [_profiles] 不可用）。
+  LocalProfile? _recoveryAdmin() {
+    try {
+      final raw = preferences.getString(LocalSnapshot.storageKey);
+      final values = raw == null
+          ? null
+          : (jsonDecode(raw) as Map)['values'] as Map;
+      final records =
+          jsonDecode(
+                (values?['profiles'] as String?) ??
+                    preferences.getString('profiles') ??
+                    '[]',
+              )
+              as List;
+      for (final row in records) {
+        if (row is Map && row['admin'] == true) {
+          return LocalProfile.fromJson(Map<String, dynamic>.from(row));
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
 
   Future<void> recoverBackup(String content, {required String pin}) =>
       _queue(() async {
@@ -1540,8 +1765,14 @@ class LocalStore extends ChangeNotifier {
         await _installBackup(data);
       });
 
-  String exportRecoveryData() {
+  Future<String> exportRecoveryData({String pin = ''}) async {
     if (_configurationError == null) throw StateError('请从设置中导出备份');
+    final verifier = _recoveryAdmin();
+    // 损坏态可能连 profile 表都读不出，此时无法验证身份；只有拿到原文
+    // 且用户真的填了口令才校验——灾难恢复不能因为「忘密码」把数据锁死。
+    if (pin.isNotEmpty && verifier != null && verifier.protected) {
+      await _requireAdminPin(pin, verifier: verifier);
+    }
     // 损坏恢复时重键多半已迁出 blob（prefs 里没有），必须从文件层并回。
     Map<String, String> fileValues = const {};
     if (files.isReady) {

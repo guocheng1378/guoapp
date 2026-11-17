@@ -297,7 +297,7 @@ void main() {
       final target = await newStore();
       await target.toggleFavorite(next);
       final remote = await service.fetch(readyConfig, target);
-      await service.restoreReplace(target, remote!);
+      await service.restoreReplace(target, remote!, pin: '');
       expect(target.favorites.single.id, drama.id);
       expect(target.watched(drama.id)?.episode, 3);
     });

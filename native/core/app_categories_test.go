@@ -5,31 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestNativeCategoryPaginationStaysIndependent(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		if !strings.HasPrefix(request.URL.Path, "/ai-duanju") && !strings.HasPrefix(request.URL.Path, "/ai-manju") {
-			return nil, errors.New("unexpected path: " + request.URL.Path)
+		target := huangguoEdgeTarget(t, request)
+		if !strings.HasPrefix(target.Path, "/api/videos/category/ai-") {
+			return nil, errors.New("unexpected path: " + target.Path)
 		}
-		page := 1
-		if strings.Contains(strings.Trim(request.URL.Path, "/"), "/") {
-			page = 2
+		page, _ := strconv.Atoi(target.Query().Get("page"))
+		if page < 1 {
+			page = 1
 		}
 		count := 35
 		if page != 1 {
 			count = 1
 		}
-		var cards []string
+		rows := make([]map[string]any, 0, count)
 		for index := 0; index < count; index++ {
-			id := fmt.Sprintf("fixture-p%d-%d", page, index)
-			title := "合成分类剧集"
-			cards = append(cards, fmt.Sprintf(`<article class="o5-card"><a href="https://huangguoai.com/d/%s/" class="o5-card__poster"><img src="https://example.test/cover"/></a><div class="o5-card__body"><h3><a href="https://huangguoai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`, id, id, title))
+			rows = append(rows, map[string]any{
+				"id": fmt.Sprintf("fixture-p%d-%d", page, index), "title": "合成分类剧集",
+			})
 		}
-		body := "<html><body><div class='o5-grid'>" + strings.Join(cards, "") + "</div></body></html>"
-		return sourceFixtureResponse(request, 200, body), nil
+		return sourceFixtureResponse(request, 200, huangguoEdgeReply(rows)), nil
 	})
 	for _, input := range []nativeInput{
 		{Source: sourceHuangguoAI, Category: "ai-duanju", Page: 1},

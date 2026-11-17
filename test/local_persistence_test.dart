@@ -249,7 +249,7 @@ void main() {
     final damaged = await restart(platform, files);
     expect(damaged.configurationError, isNotNull);
     // 重键已迁出 blob（prefs 里没有），导出必须从文件层并回。
-    expect(damaged.exportRecoveryData(), contains('旧资料'));
+    expect(await damaged.exportRecoveryData(), contains('旧资料'));
   });
 
   test('directory files load with gzip and plaintext fallback', () async {
@@ -434,7 +434,7 @@ void main() {
         final restored = await restart(platform, files);
         expect(restored.configurationError, isNotNull);
         expect(restored.preferences.get('profiles'), records);
-        expect(store.exportRecoveryData(), contains('旧资料'));
+        expect(await store.exportRecoveryData(), contains('旧资料'));
       },
     );
   }

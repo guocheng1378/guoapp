@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"duanjuapp/native/provider"
@@ -28,6 +29,12 @@ const (
 	sourceHuangju    = provider.SourceHuangju
 	sourceYeguo      = provider.SourceYeguo
 	sourceCloudFront = provider.SourceCloudFront
+	sourceHeitao     = provider.SourceHeitao
+
+	// 上游（Xanerix/guoapp）移植内置源：韩小圈 / 禁果短剧 / 笔盒。
+	sourceHanxiaoquan  = provider.SourceHanxiaoquan
+	sourceJinguoduanju = provider.SourceJinguoduanju
+	sourceBeabox       = provider.SourceBeabox
 
 	providerMaxBodyBytes = 20 * 1024 * 1024
 	providerTimeout      = provider.Timeout
@@ -38,7 +45,13 @@ var (
 	// 2026-10-22 探活：ksb6 连接超时（域名失效，恢复后仍可被轮到），
 	// agdkczeyx/hgai5/pages.dev 存活；agdkczeyx 目录、详情、播放地址齐全，升首位。
 	// pages.dev 历史上是空壳，垫底兜底。可经 config.source（applySourceConfig）远程热更。
-	huangguoAIBaseMirrors = []string{"https://www.agdkczeyx.cc", "https://hgai5.com", "https://ksb6.pu84h97k.cc", "https://huangguoai.pages.dev"}
+	// 2026-11-08 真网探活：主站 huangguoai.com 超时、hgai5 404、ksb6/pages.dev/
+	// ediayikma 全挂；下列域名的 /api/edge/request 实测 200 且返回真数据。
+	// 2026-11-10 真网探活：thu.lbvrhyir.cc 连接超时，降到末位只在兜底时使用；
+	// 前三个域名的 POST playback 均 200 且返回真实 m3u8。
+	huangguoAIBaseMirrors = []string{"https://www.agdkczeyx.cc", "https://huangguoai.io", "https://thu.agdkczeyx.cc", "https://thu.lbvrhyir.cc"}
+	// 动态猜解镜像在这些域名间轮换（上游 00c5498），避免整批挂在单一失效域上。
+	huangguoAIMirrorDomains = []string{"lbvrhyir.cc", "xxbgwypx.cc", "agdkczeyx.cc", "ediayikma.cc"}
 
 	// huangguoWebUserAgent 黄果AI 网页（目录/详情/单集页）只放行桌面浏览器 UA：
 	// 2026-10-20 实测 iPhone UA 会被镜像 301 踢到互相死循环的「移动版」域名
@@ -91,6 +104,61 @@ func cachedPattern(pattern string) *regexp.Regexp {
 
 // huangguoAIMirrorsMu 保护 huangguoAIBaseMirrors：提供方请求并发读，config.source 热更写。
 var huangguoAIMirrorsMu sync.RWMutex
+
+// 镜像健康度：一次失败的 host 在冷却期内排到候选链末尾（不是删掉，
+// 站点镜像经常间歇恢复）。成功后立即清除，避免「上次超时这次仍被优先重试」。
+const huangguoHostFailureCooldown = 10 * time.Minute
+
+var huangguoHostFailures sync.Map // host(string) -> time.Time
+
+func markHuangguoHostFailed(host string) {
+	if host != "" {
+		huangguoHostFailures.Store(host, time.Now().Add(huangguoHostFailureCooldown))
+	}
+}
+
+func clearHuangguoHostFailed(host string) {
+	if host != "" {
+		huangguoHostFailures.Delete(host)
+	}
+}
+
+func huangguoHostDegraded(host string) bool {
+	value, ok := huangguoHostFailures.Load(host)
+	if !ok {
+		return false
+	}
+	until, ok := value.(time.Time)
+	if !ok || time.Now().After(until) {
+		huangguoHostFailures.Delete(host)
+		return false
+	}
+	return true
+}
+
+// huangguoEncryptedChallenge 识别站点「必须走 dx150-edge-v1 加密通道」的响应。
+// 完整加密通道的接入点在 huangguoAIAPICall（当前未强制，单独一批实现并做真网
+// 握手验证更稳妥）；协议要点留在这里备查：
+//
+//	POST /api/playback/request → hello(ECDH P-256 / raw 公钥)
+//	→ HKDF-SHA256 以 protocol/scope/site/kid/sid 为 info 派生 req/res
+//	  两把 AES-GCM-256 密钥
+//	→ call 信封 {v,type:call,kid,sid,seq,ts,ciphertext}（iv 尾 4 字节为 seq，
+//	  AAD 为 info/direction/seq/ts）
+//	→ 解密得 {status,headers,body}
+//
+// 当前站点对未加密的 edge 转发仍放行，故只做识别与可读诊断。
+func huangguoEncryptedChallenge(body []byte) bool {
+	for _, marker := range [][]byte{
+		[]byte("encrypted"), []byte("dx150-edge"), []byte("session_expired"),
+		[]byte("encryptedAPI"),
+	} {
+		if bytes.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // huangguoAIMirrorList 返回镜像表快照，避免调用方持有可变切片。
 func huangguoAIMirrorList() []string {
@@ -248,6 +316,9 @@ func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID s
 	case sourceYeguo:
 		drama, chapters, err := d.fetchYeguoDetail(ctx, sourceID)
 		return drama.DisplayTitle(), chapters, err
+	case sourceHeitao:
+		drama, chapters, err := d.fetchHeitaoDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
 	case sourceCloudFront:
 		return d.fetchLegacyChapters(ctx, sourceID)
 	default:
@@ -264,52 +335,21 @@ func (d *Downloader) fetchHuangguoAIChapters(ctx context.Context, sourceID strin
 	return drama.DisplayTitle(), chapters, err
 }
 
+// 黄果 AI 详情改走站点 /api/edge/request 接口（见 provider_huangguo_api.go）。
+// 旧网页解析链在站点改版后常拿不到分集或播放地址；函数名保持不变，
+// nativeDetail / GetHuangguoChapters / 封面补齐等调用方无需改动。
 func (d *Downloader) fetchHuangguoAIDetail(ctx context.Context, sourceID string) (Drama, []Chapter, error) {
-	sourceID = strings.Trim(strings.TrimSpace(sourceID), "/")
-	sourceID = strings.TrimPrefix(sourceID, "detail/")
-	sourceID = strings.TrimPrefix(sourceID, "d/")
-	if sourceID == "" {
-		return Drama{}, nil, fmt.Errorf("empty huangguoai sourceID")
-	}
-	detailURL := strings.TrimRight(huangguoAIBaseURL, "/") + "/video/" + url.PathEscape(sourceID) + "/"
-	body, err := d.fetchProviderText(ctx, detailURL, huangguoAIBaseURL+"/")
-	if err != nil {
-		return Drama{}, nil, err
-	}
-	drama := huangguoDetailMetadata(body, detailURL, sourceHuangguoAI, sourceID)
-	title := drama.DisplayTitle()
-	episodes := parseHuangguoAIEpisodes(body, detailURL, sourceID)
-	episodes = mergeAIEpisodeMedia(episodes, parseAIEpisodeMediaMap(body, detailURL), detailURL)
-	if len(episodes) == 0 {
-		if media := parseAIVideoURL(body, detailURL); media != "" {
-			episodes = []providerEpisode{{Key: "1", Title: title, URL: detailURL, Index: 1, HLS: media}}
-		}
-	}
-	if len(episodes) == 0 {
-		return drama, nil, nil
-	}
-	var chapters []Chapter
-	for _, ep := range episodes {
-		mediaURL := ep.HLS
-		idx := ep.Index
-		if idx <= 0 {
-			idx = len(chapters) + 1
-		}
-		chapterTitle := strings.TrimSpace(ep.Title)
-		if chapterTitle == "" {
-			chapterTitle = fmt.Sprintf("第%d集", idx)
-		}
-		key := ep.Key
-		if key == "" {
-			key = strconv.Itoa(idx)
-		}
-		chapters = append(chapters, Chapter{ID: providerChapterID(sourceHuangguoAI, sourceID, key), Source: sourceHuangguoAI, Title: chapterTitle, VideoURL: mediaURL, PageURL: ep.URL, CurrentEpisode: rawEpisode(idx)})
-	}
-	sortProviderChapters(chapters)
-	return drama, uniqueChapters(chapters), nil
+	return d.fetchHuangguoAIAPIDetail(ctx, sourceID)
 }
 
 func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer string) (string, error) {
+	return d.fetchProviderRequest(ctx, rawURL, referer, nil)
+}
+
+// fetchProviderRequest 与旧 fetchProviderText 行为一致，额外支持可选的 POST
+// 请求体：黄果 AI 的 /api/edge/request 要把 method/path 包成 JSON 信封 POST，
+// 黑桃播放器页要带年龄确认 Cookie（providerTextCookieKey）。
+func (d *Downloader) fetchProviderRequest(ctx context.Context, rawURL, referer string, payload []byte) (string, error) {
 	retries := d.cfg.Retries
 	if retries <= 0 {
 		retries = 3
@@ -341,9 +381,20 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			if len(candidates) > 1 {
 				timeout = 8 * time.Second
 			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, candidate, nil)
+			method, requestBody := http.MethodGet, io.Reader(nil)
+			if payload != nil {
+				method, requestBody = http.MethodPost, bytes.NewReader(payload)
+			}
+			req, err := http.NewRequestWithContext(ctx, method, candidate, requestBody)
 			if err != nil {
 				return "", err
+			}
+			if payload != nil {
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Accept", "application/json")
+			}
+			if cookie, ok := ctx.Value(providerTextCookieKey{}).(string); ok && cookie != "" {
+				req.Header.Set("Cookie", cookie)
 			}
 			req.Header.Set("User-Agent", huangguoProviderUserAgent(rawURL))
 			if agent, ok := ctx.Value(providerTextUserAgentKey{}).(string); ok && agent != "" {
@@ -360,6 +411,9 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 			}
 			resp, err := d.doCatalogRequestWithTimeout(req, timeout)
 			if err != nil {
+				if providerSourceForURL(rawURL) == sourceHuangguoAI {
+					markHuangguoHostFailed(req.URL.Hostname())
+				}
 				lastErr = err
 				var backoff *requestBackoff
 				if errors.As(err, &backoff) {
@@ -382,6 +436,15 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 				continue
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 || catalogResponseBlockReason(resp, body) != "" {
+				if providerSourceForURL(rawURL) == sourceHuangguoAI {
+					markHuangguoHostFailed(req.URL.Hostname())
+					// 站点全面强制 dx150-edge-v1 加密通道时，换镜像同样拿不到数据：
+					// 直接给出可读指引，别只报「已尝试 N 个域名」。
+					if (resp.StatusCode == 401 || resp.StatusCode == 403) &&
+						huangguoEncryptedChallenge(body) {
+						return "", errors.New("黄果站点已启用接口加密，请更新应用后重试")
+					}
+				}
 				lastErr = d.catalogResponseError(req, resp, body)
 				// 404 视为镜像内容不同步：换下一候选继续（镜像间详情/目录完整度不一致）；
 				// 其余 4xx（401/403/429 等）多为风控或限制，换域名同样无效，保持 break。
@@ -399,6 +462,9 @@ func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer stri
 				d.providerMu.Lock()
 				d.providerHosts[source] = effectiveURL.Scheme + "://" + effectiveURL.Host
 				d.providerMu.Unlock()
+				if source == sourceHuangguoAI {
+					clearHuangguoHostFailed(req.URL.Hostname())
+				}
 			}
 			rememberPlaybackResponseURL(ctx, rawURL, resp)
 			return string(body), nil
@@ -438,7 +504,18 @@ func providerURLCandidates(rawURL string) []string {
 	if len(out) == 0 {
 		return []string{rawURL}
 	}
-	return out
+	// 失败冷却期内的 host 稳定地挪到末尾，不让一次超时拖住整条取址链。
+	healthy := make([]string, 0, len(out))
+	var degraded []string
+	for _, candidate := range out {
+		parsed, err := url.Parse(candidate)
+		if err == nil && huangguoHostDegraded(parsed.Hostname()) {
+			degraded = append(degraded, candidate)
+		} else {
+			healthy = append(healthy, candidate)
+		}
+	}
+	return append(healthy, degraded...)
 }
 
 func rehostProviderURL(u *url.URL, mirror string) string {
@@ -472,7 +549,7 @@ func generatedHuangguoAIMirrors(seed string, n int) []string {
 			continue
 		}
 		seen[sub] = true
-		out = append(out, "https://"+sub+".ediayikma.cc")
+		out = append(out, "https://"+sub+"."+huangguoAIMirrorDomains[len(out)%len(huangguoAIMirrorDomains)])
 	}
 	return out
 }

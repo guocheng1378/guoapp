@@ -1,9 +1,8 @@
 // 反馈 Bug 入口：设置页（手机/电视）进入的轻量玻璃卡。
 //
 // 用户描述问题后，一键生成附带版本 / 系统 / 时间信息的反馈文本：
-// - 提交到 GitHub：用系统浏览器打开仓库 issues/new 并预填标题与正文；
-// - 复制反馈内容：GitHub 打不开时的兜底，可粘贴给开发者
-//   （联系方式复用激活页的卖家 QQ）。
+// - 前往反馈区：用系统浏览器打开网页反馈区（购码 / 续费 / 反馈统一入口）；
+// - 复制反馈内容：浏览器打不开时的兜底，可把文本粘贴到网页反馈区。
 //
 // 无网络依赖（打开浏览器交给系统）、无弹窗内定时器，测试可确定性覆盖。
 import 'dart:io';
@@ -11,16 +10,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'activation/activation_screen.dart' show kSellerContact;
 import 'app_icons.dart';
 import 'app_layout.dart';
 import 'folme.dart';
 import 'glass.dart';
 import 'remote_notice.dart' show openRemoteNoticeLink;
 
-/// 仓库 Issue 新建页（支持 title/body 查询参数预填）。
-const String kBugIssueNewUrl =
-    'https://github.com/guocheng1378/guoapp/issues/new';
+/// 网页反馈区：购码 / 续费 / 反馈统一入口。
+const String kFeedbackSiteUrl = 'https://guoapp.dpdns.org/forum.html';
 
 /// 由描述与运行环境组装完整反馈文本（提交与复制共用同一份）。
 String buildBugReport({
@@ -55,15 +52,6 @@ String bugReportTitle(String description) {
   return firstLine.length <= max
       ? firstLine
       : '${firstLine.substring(0, max)}…';
-}
-
-/// 组装预填 title/body 的 issues/new 地址。
-Uri buildBugIssueUri({required String title, required String body}) {
-  final base = Uri.parse(kBugIssueNewUrl);
-  return base.replace(queryParameters: <String, String>{
-    'title': title,
-    'body': body,
-  });
 }
 
 /// 反馈 Bug 玻璃卡：与公告卡/关于卡同材质（信息卡实档）。
@@ -133,24 +121,20 @@ class _BugReportCardState extends State<_BugReportCard> {
     await Clipboard.setData(ClipboardData(text: _report));
     if (!mounted) return;
     setState(() {
-      _status = '已复制反馈内容，可粘贴到 GitHub，或通过 $kSellerContact 发给开发者';
+      _status = '已复制反馈内容，可粘贴到网页反馈区';
     });
   }
 
   Future<void> _submit() async {
-    final uri = buildBugIssueUri(
-      title: bugReportTitle(_controller.text),
-      body: _report,
-    );
-    if (await openRemoteNoticeLink(uri.toString())) {
+    if (await openRemoteNoticeLink(kFeedbackSiteUrl)) {
       if (mounted) Navigator.of(context).pop();
       return;
     }
-    // 无浏览器 / 被拦截：降级为复制，交给用户走 QQ。
+    // 无浏览器 / 被拦截：降级为复制，交给用户手动粘贴到网页反馈区。
     await _copy();
     if (!mounted) return;
     setState(() {
-      _status = '无法打开浏览器，反馈内容已复制，可通过 $kSellerContact 发给开发者';
+      _status = '无法打开浏览器，反馈内容已复制，可粘贴到网页反馈区';
     });
   }
 
@@ -206,7 +190,7 @@ class _BugReportCardState extends State<_BugReportCard> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '提交时自动附带版本、系统与时间信息。',
+                    '复制时自动附带版本、系统与时间信息；前往反馈区后可粘贴提交。',
                     style: textTheme.bodySmall?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -235,7 +219,7 @@ class _BugReportCardState extends State<_BugReportCard> {
                           child: FilledButton(
                             key: const ValueKey('bug-report-submit'),
                             onPressed: canSubmit ? _submit : null,
-                            child: const Text('提交到 GitHub'),
+                            child: const Text('前往反馈区'),
                           ),
                         ),
                       ),

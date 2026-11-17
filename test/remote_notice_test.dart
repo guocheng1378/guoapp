@@ -360,6 +360,43 @@ void main() {
       expect(find.textContaining('发现新版本'), findsNothing);
     });
 
+    testWidgets('长更新说明可上下滚动且按钮固定可见', (tester) async {
+      // 小视口 + 超长 notes：验证内容区可滚动、按钮不被长文本挤出屏幕。
+      tester.view.physicalSize = const Size(400, 320);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final longNotes = List<String>.generate(40, (i) => '更新说明第 ${i + 1} 行').join('\n');
+      final config = RemoteNoticeConfig(
+        update: RemoteNoticeUpdate(
+          version: '0.2.97',
+          build: 3000,
+          notes: longNotes,
+          url: '',
+        ),
+      );
+      await _pumpToNotice(tester, _host(version: '0.2.96+100', config: config));
+
+      expect(find.textContaining('发现新版本'), findsOneWidget);
+      // 按钮必须仍在屏内可见（长文本不能把它顶出屏幕）。
+      expect(find.text('稍后再说'), findsOneWidget);
+      expect(tester.getRect(find.text('稍后再说')).bottom, lessThan(320));
+
+      // 内容区可滚动：拖动后说明文本整体上移。
+      final scroll = find.byType(SingleChildScrollView);
+      expect(scroll, findsOneWidget);
+      final notesFinder = find.textContaining('更新说明第 1 行');
+      expect(notesFinder, findsOneWidget);
+      final before = tester.getRect(notesFinder);
+      await tester.drag(scroll, const Offset(0, -200));
+      await tester.pumpAndSettle();
+      final after = tester.getRect(notesFinder);
+      expect(after.top, lessThan(before.top));
+
+      await tester.tap(find.text('稍后再说'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('发现新版本'), findsNothing);
+    });
+
     testWidgets('已是最新版本时不弹更新只弹公告', (tester) async {
       const RemoteNoticeConfig config = RemoteNoticeConfig(
         announcement: RemoteNoticeAnnouncement(

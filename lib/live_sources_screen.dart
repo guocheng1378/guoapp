@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 
 import 'app_scaffold.dart';
+import 'core_bridge.dart';
 import 'floating_card.dart';
+import 'live_source_entry.dart';
 import 'local_store.dart';
+import 'tvbox_import.dart';
 
 /// 直播源管理页（2026-10-22）：增删自填 m3u/m3u8/txt 订阅 URL（设备级），
 /// 打开直播页时与内置双列表合并；每次增删即时保存。
 class LiveSourcesScreen extends StatefulWidget {
-  const LiveSourcesScreen({super.key, required this.store});
+  const LiveSourcesScreen({
+    super.key,
+    required this.store,
+    required this.repository,
+  });
   final LocalStore store;
+  final AppRepository repository;
   @override
   State<LiveSourcesScreen> createState() => _LiveSourcesScreenState();
 }
@@ -16,17 +24,19 @@ class LiveSourcesScreen extends StatefulWidget {
 class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
   bool _saving = false;
 
-  List<String> get _urls => widget.store.liveSourceUrls;
+  List<LiveSourceEntry> get _entries => widget.store.liveSourceEntries;
 
-  Future<void> _save(List<String> urls) async {
+  Future<void> _save(List<LiveSourceEntry> entries) async {
     setState(() => _saving = true);
     try {
-      await widget.store.setLiveSourceUrls(urls);
+      await widget.store.setLiveSourceEntries(entries);
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('已保存 ${urls.length} 个直播源')));
+        ..showSnackBar(
+          SnackBar(content: Text('已保存 ${entries.length} 个直播源')),
+        );
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -78,26 +88,121 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
         );
       return;
     }
-    if (_urls.contains(trimmed)) {
+    if (_entries.any((entry) => entry.url == trimmed)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('该直播源已存在')));
       return;
     }
-    await _save([..._urls, trimmed]);
+    await _save([..._entries, LiveSourceEntry(url: trimmed)]);
   }
 
-  Future<void> _remove(String url) async {
-    await _save([for (final row in _urls) if (row != url) row]);
+  /// 给某条订阅设置节目单（EPG）地址；留空即取消关联。
+  ///
+  /// EPG 只挂在订阅上（`lives[].epg` 或这里手填），没有配置时直播页不会
+  /// 发起任何节目单请求。
+  Future<void> _editEpg(LiveSourceEntry target) async {
+    final controller = TextEditingController(text: target.epg);
+    final value = await showFloatingDialog<String>(
+      context: context,
+      barrierLabel: '节目单地址',
+      width: 340,
+      title: const Text('节目单（EPG）'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'xmltv 格式地址（.xml / .xml.gz），留空表示不使用节目单。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const Key('live-epg-input'),
+            controller: controller,
+            autofocus: true,
+            maxLines: 2,
+            minLines: 1,
+            decoration: const InputDecoration(
+              hintText: 'https://…/epg.xml',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const Key('live-epg-confirm'),
+          onPressed: () => Navigator.of(context).pop(controller.text),
+          child: const Text('保存'),
+        ),
+      ],
+    );
+    controller.dispose();
+    if (value == null || !mounted) return;
+    final epg = LiveSourceEntry.sanitizeEpgUrl(value);
+    if (value.trim().isNotEmpty && epg.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('节目单地址需以 http:// 或 https:// 开头')),
+        );
+      return;
+    }
+    await _save([
+      for (final entry in _entries)
+        entry.url == target.url ? entry.copyWith(epg: epg) : entry,
+    ]);
+  }
+
+  Future<void> _remove(LiveSourceEntry target) async {
+    await _save([
+      for (final entry in _entries)
+        if (entry.url != target.url) entry,
+    ]);
+  }
+
+  /// 粘贴 TVBox 配置：直播订阅合并进本页，CMS 站源同时下发 Go 核心。
+  Future<void> _importTvbox() async {
+    final plan = await showTvboxImportDialog(context);
+    if (plan == null || !mounted) return;
+    final outcome = await applyTvboxImport(
+      store: widget.store,
+      publish: (sources) => widget.repository.setCustomSources(sources),
+      plan: plan,
+    );
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            outcome.errors.isEmpty
+                ? outcome.summary
+                : '${outcome.summary}\n${outcome.errors.first}',
+          ),
+        ),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
-    final urls = _urls;
+    final entries = _entries;
     return AppScaffold(
       title: '直播源管理',
       actions: [
+        if (widget.store.profile.admin)
+          IconButton(
+            key: const Key('live-source-import-tvbox'),
+            tooltip: '导入 TVBox 配置（站源 + 直播源）',
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: _saving ? null : _importTvbox,
+          ),
         IconButton(
           key: const Key('live-source-add'),
           tooltip: '添加直播源',
@@ -113,13 +218,14 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
               padding: const EdgeInsets.all(14),
               child: Text(
                 '自填 m3u / m3u8 / txt 直播订阅链接，与内置直播列表合并显示；'
-                '链接失效时自动跳过并提示。',
+                '链接失效时自动跳过并提示。点日历图标可为每条订阅填 xmltv '
+                '节目单地址，直播页会显示「正在播」并可长按看当日节目单。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
           ),
           Expanded(
-            child: urls.isEmpty
+            child: entries.isEmpty
                 ? Center(
                     key: const Key('live-source-empty'),
                     child: Column(
@@ -151,22 +257,49 @@ class _LiveSourcesScreenState extends State<LiveSourcesScreen> {
                       child: ListView.builder(
                         key: const Key('live-source-list'),
                         padding: const EdgeInsets.symmetric(vertical: 4),
-                        itemCount: urls.length,
+                        itemCount: entries.length,
                         itemBuilder: (context, index) {
-                          final url = urls[index];
+                          final entry = entries[index];
+                          final flags = <String>[
+                            if (entry.isInline) '内嵌频道',
+                            if (entry.hasCustomHttp) '自定义请求头',
+                            if (entry.hasEpg) 'EPG',
+                          ];
                           return ListTile(
                             key: Key('live-source-item-$index'),
                             leading: const Icon(Icons.link),
                             title: Text(
-                              url,
+                              entry.displayLabel,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: IconButton(
-                              key: Key('live-source-remove-$index'),
-                              tooltip: '删除',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: _saving ? null : () => _remove(url),
+                            subtitle: flags.isEmpty
+                                ? null
+                                : Text(flags.join(' · ')),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  key: Key('live-source-epg-$index'),
+                                  tooltip: '设置节目单（EPG）',
+                                  icon: Icon(
+                                    entry.hasEpg
+                                        ? Icons.event_available
+                                        : Icons.event_outlined,
+                                  ),
+                                  onPressed: _saving
+                                      ? null
+                                      : () => _editEpg(entry),
+                                ),
+                                IconButton(
+                                  key: Key('live-source-remove-$index'),
+                                  tooltip: '删除',
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: _saving
+                                      ? null
+                                      : () => _remove(entry),
+                                ),
+                              ],
                             ),
                           );
                         },

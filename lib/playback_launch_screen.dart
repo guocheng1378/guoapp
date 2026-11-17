@@ -69,6 +69,9 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
   int _generation = 0;
   String? _error;
   bool _awaitingVip = false;
+  /// 站源偶发返回 0 集时自动重取一次，别把「暂时没有可播放的集数」
+  /// 直接甩给用户（追剧/最近里点老剧最常见的「没有视频」）。
+  bool _retriedEmpty = false;
 
   @override
   void initState() {
@@ -114,6 +117,13 @@ class _PlaybackLaunchScreenState extends State<PlaybackLaunchScreen> {
         return;
       }
       if (merged.episodes.isEmpty) {
+        if (!_retriedEmpty) {
+          _retriedEmpty = true;
+          // 绕开详情页内存缓存（可能就是上一次的空结果）再取一次。
+          widget.repository.invalidateDetail(widget.drama);
+          unawaited(_load());
+          return;
+        }
         setState(() => _error = '暂时没有可播放的集数');
         return;
       }

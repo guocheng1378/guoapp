@@ -5,10 +5,16 @@ import (
 	"strings"
 )
 
-const nativeCatalogMaxBytes = 32 << 20
+// nativeCatalogMaxBytes 剧库（catalogs.json）落盘体积安全阀，不是用户配额。
+//
+// 原值 32 MiB：多源全开 + 上万条目 + 长简介的重度用户会撞到，撞到之后核心
+// 拒绝保存并暂停继续翻页——用户看到的就是「新内容一直不出现、库停在旧的一页」。
+// 提到 512 MiB 后常规使用不会再触碰，同时仍留一道防爆闸，避免单个 JSON 无限
+// 增长拖垮落盘与冷启动解析。变量而非常量：测试可注入极小值验证超限分支。
+var nativeCatalogMaxBytes = 512 << 20
 const nativeSourceMaxBytes = 4 << 20
 
-var errNativeCatalogLimit = errors.New("剧库超过本地保存上限（32 MiB），新内容尚未保存，已暂停继续加载")
+var errNativeCatalogLimit = errors.New("剧库超过本地保存上限，新内容尚未保存，已暂停继续加载")
 var errNativeSourceLimit = errors.New("站源任务记录超过本地保存上限（4 MiB），最新记录尚未保存")
 
 type nativePersistenceError struct {

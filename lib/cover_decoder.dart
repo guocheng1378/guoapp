@@ -18,6 +18,10 @@ class CoverDecoder {
   var _active = 0;
   final _waiting = <_DecodeTask>[];
 
+  /// 正在转码的产物路径：`_prune` 必须跳过它们，否则 A 的清理会删掉
+  /// B 刚写好、还没交给 Image 的文件（并发转码时的自杀式删除）。
+  final _running = <String>{};
+
   Future<String> convert(
     String original,
     Future<Map<String, dynamic>> Function() prepare, {
@@ -35,8 +39,13 @@ class CoverDecoder {
         '${path.basenameWithoutExtension(original)}-${stat.modified.microsecondsSinceEpoch}-${stat.size}';
     final target = File(path.join(directory.path, '$key.jpg'));
     if (!force && await _isJPEG(target)) {
-      await target.setLastModified(DateTime.now());
-      return target.path;
+      // 并发清理可能刚删掉这个文件：刷新时间失败就当没命中，走转码。
+      try {
+        await target.setLastModified(DateTime.now());
+        return target.path;
+      } on FileSystemException {
+        // fallthrough
+      }
     }
     if (_pending.containsKey(key)) return _pending[key]!;
     if (_pending.length >= 96) throw AppFailure('海报正在处理，请稍后重试');
@@ -61,6 +70,7 @@ class CoverDecoder {
     while (_active < _maxActive && _waiting.isNotEmpty) {
       final task = _waiting.removeAt(0);
       _active++;
+      _running.add(task.target.path);
       unawaited(
         () async {
           try {
@@ -68,6 +78,7 @@ class CoverDecoder {
           } catch (error, stack) {
             task.completer.completeError(error, stack);
           } finally {
+            _running.remove(task.target.path);
             _active--;
             _pump();
           }
@@ -147,7 +158,13 @@ class CoverDecoder {
       ]);
       await work.timeout(const Duration(seconds: 12));
       if (!await _isJPEG(intermediate)) throw AppFailure('海报转换未生成有效图片');
-      if (await target.exists()) await target.delete();
+      // 并发转码下 exists→delete 之间有竞态：目标可能刚被别的任务的清理删掉，
+      // 这种 PathNotFoundException 不该让整张海报失败（真机日志里 9 次全是它）。
+      try {
+        if (await target.exists()) await target.delete();
+      } on FileSystemException {
+        // 已经不存在 = 目标状态达成，继续 rename。
+      }
       await intermediate.rename(target.path);
       await _prune(target.parent, target.path);
       return target.path;
@@ -177,7 +194,11 @@ class CoverDecoder {
       if (entry.path.endsWith('.part')) {
         if (DateTime.now().difference(stat.modified) >
             const Duration(minutes: 1)) {
-          await entry.delete();
+          try {
+            await entry.delete();
+          } on FileSystemException {
+            continue;
+          }
         }
       } else if (entry.path.endsWith('.jpg')) {
         entries.add((entry, stat));
@@ -189,7 +210,15 @@ class CoverDecoder {
     for (final entry in entries) {
       if (count <= 128 && size <= 64 * 1024 * 1024) break;
       if (entry.$1.path == keep) continue;
-      await entry.$1.delete();
+      // 正在转码的产物绝不能删：3 路并发时每个任务结束都跑一次清理，
+      // 旧实现会互相删掉对方刚生成的文件，随后 rename/delete 抛
+      // PathNotFoundException 把整张海报判失败（真机日志实锤）。
+      if (_running.contains(entry.$1.path)) continue;
+      try {
+        await entry.$1.delete();
+      } on FileSystemException {
+        continue; // 已被另一个任务删掉，正常竞态。
+      }
       count--;
       size -= entry.$2.size;
     }

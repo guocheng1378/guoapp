@@ -18,6 +18,7 @@ import 'danmaku_controller.dart';
 import 'danmaku_overlay.dart';
 import 'detail_screen.dart';
 import 'download_picker.dart';
+import 'haptics.dart';
 import 'download_summary.dart';
 import 'downloads_screen.dart';
 import 'follow_state.dart';
@@ -27,6 +28,7 @@ import 'playback_loader.dart';
 import 'playback_preloader.dart';
 import 'playback_recovery.dart';
 import 'playback_preferences.dart';
+import 'player_status.dart';
 import 'related_catalog_screen.dart';
 import 'related_dramas.dart';
 import 'player_controls.dart';
@@ -35,6 +37,7 @@ import 'player_menu.dart';
 import 'player_side_panel.dart';
 import 'player_skip_marks.dart';
 import 'screen_brightness.dart';
+import 'source_search.dart';
 import 'television_controls.dart';
 import 'text_input_dismiss.dart';
 import 'widgets.dart';
@@ -122,6 +125,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   String _decodeMode = playbackDecodeAuto;
   int _seekSequence = 0;
   bool _danmakuEnabled = true;
+  double _danmakuSpeed = 1;
   late final PlayerInteractions _interactions;
   double _savedBrightness = 1;
   double _savedVolume = 100;
@@ -130,6 +134,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   static const advanceCountdownSeconds = 0;
   int _advanceSeconds = 0;
   Timer? _advanceTimer;
+  /// 最后一集播完的终点态：给「全剧已看完」卡片，提供重播/返回出口。
+  bool _finishedAll = false;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
   final _videoPaneKey = GlobalKey();
   final _menuRevision = ValueNotifier<int>(0);
@@ -267,6 +273,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     quality: _requestedQuality,
     autoAdvance: _autoAdvance,
     danmaku: _danmakuEnabled,
+    danmakuSpeed: _danmakuSpeed,
     preload: _preloadEnabled,
     brightness: _interactions.brightness,
     volume: _interactions.volume,
@@ -312,6 +319,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _requestedQuality = preferences.quality;
     _autoAdvance = preferences.autoAdvance;
     _danmakuEnabled = preferences.danmaku;
+    _danmakuSpeed = preferences.danmakuSpeed;
     _preloadEnabled = preferences.preload;
     _decodeMode = preferences.decode;
     _skipMarks = widget.store.skipMarksOf(_skipMarksId);
@@ -362,10 +370,20 @@ class _PlayerScreenState extends State<PlayerScreen>
       onTogglePlayback: _togglePlayback,
       onSeek: _seekTo,
       onFullscreen: _fullscreenSupported ? _rotate : null,
+      episodeAvailable: (direction) => direction > 0
+          ? _index + 1 < widget.detail.episodes.length
+          : _index > 0,
       onEpisode: (direction) {
         final next = _index + direction;
-        if (next < 0) return '已经是第一集';
-        if (next >= widget.detail.episodes.length) return '已经是最后一集';
+        if (next < 0) {
+          AppHaptics.light();
+          return '已经是第一集';
+        }
+        if (next >= widget.detail.episodes.length) {
+          // 到最后一集（再往上滑）也要有反馈：轻一点，与换集成功的中档震动区分。
+          AppHaptics.light();
+          return '已经是最后一集';
+        }
         unawaited(_play(next));
         return '第 ${widget.detail.episodes[next].number} 集';
       },
@@ -423,6 +441,15 @@ class _PlayerScreenState extends State<PlayerScreen>
             _interactions.cancel();
             unawaited(_player.pause());
             unawaited(_saveProgress(flush: true));
+            // 只有「最后一集真的播完」才给终点反馈；后台、开着面板、
+            // 用户关掉连播等情形保持原来的静默收尾，不误弹卡片。
+            if (_autoAdvance &&
+                _foreground &&
+                !_panelOpen &&
+                _index + 1 >= widget.detail.episodes.length &&
+                !_finishedAll) {
+              setState(() => _finishedAll = true);
+            }
           }
         }
       }),
@@ -965,7 +992,11 @@ class _PlayerScreenState extends State<PlayerScreen>
           quality: _requestedQuality,
           autoAdvance: _autoAdvance,
           danmaku: _danmakuEnabled,
+          danmakuSpeed: _danmakuSpeed,
           preload: _preloadEnabled,
+          // 亮度/音量落盘时整份偏好重建，漏掉 decode 会把用户选的
+          // 硬解/软解悄悄改回 auto，这里一并带上当前实际取值。
+          decode: _decodeMode,
           brightness: _savedBrightness,
           volume: _savedVolume,
           enhancement: _enhancement.preferences,
@@ -1278,6 +1309,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         index >= widget.detail.episodes.length) {
       return;
     }
+    // 只有真正换集才震：初始装载、恢复、换清晰度/线路同样走 _play 但
+    // index 不变。竖滑、选集面板、上下集按钮、自动连播（含连播到最后一集）
+    // 与键盘媒体键全部经这里统一反馈，边界提示另在 onEpisode 给轻震。
+    if (index != _index) {
+      AppHaptics.medium();
+    }
     _interactions.cancel();
     if (widget.handoff != null &&
         handoffPlan == null &&
@@ -1318,9 +1355,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 播放推进生效。重置必须发生在 open 之前——media.start 事件在
     // open 内同步入队，早于 open 返回后的任何代码。
     _positionPrimed = false;
-    _showControlsOnPlaybackReady = showControlsOnReady;
+    // 竖屏沉浸靠上下滑切集：切完一集再把控制栏点亮 2.5s，会让用户
+    // 每切一集都重新等一轮。手动换集不再复活 HUD，单击仍可随时唤出。
+    final switching = index != _index;
+    _showControlsOnPlaybackReady = showControlsOnReady &&
+        !(switching && _viewMode == PlaybackViewMode.portraitFullscreen);
     setState(() {
       _index = index;
+      _finishedAll = false;
       _loading = true;
       _swapping = false;
       _error = null;
@@ -1891,10 +1933,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       throw StateError('当前用户已变更');
     }
     _interactions.cancel();
-    final nextPreferences = preferences.copyWith(
-      autoAdvance: true,
-      preload: true,
-    );
+    // 原样透传：以前这里强写 autoAdvance/preload = true，用户在设置里关掉
+    // 连播/预载后，改任何一项播放设置都会被无声改回开启。
+    final nextPreferences = preferences;
     await widget.store.setPlaybackPreferences(nextPreferences);
     if (!mounted || _closed || widget.store.profileEpoch != _profileEpoch)
       return;
@@ -1904,9 +1945,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() {
       _speed = nextPreferences.speed;
       _requestedQuality = nextPreferences.quality;
-      _autoAdvance = true;
+      _autoAdvance = nextPreferences.autoAdvance;
       _danmakuEnabled = nextPreferences.danmaku;
-      _preloadEnabled = true;
+      _danmakuSpeed = nextPreferences.danmakuSpeed;
+      _preloadEnabled = nextPreferences.preload;
       _decodeMode = nextPreferences.decode;
     });
     _danmaku.setEnabled(_danmakuEnabled);
@@ -2383,9 +2425,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         _preferences.copyWith(
           speed: selection.speed,
           quality: selection.quality,
-          autoAdvance: true,
+          autoAdvance: _preferences.autoAdvance,
           danmaku: selection.danmaku,
-          preload: true,
+          preload: _preferences.preload,
           enhancement: selection.enhancement,
         ),
       );
@@ -2494,6 +2536,38 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 电视播放页标题行右侧的「网速 + 时间」（移植自上游 64688c8）。
+  /// 手机端不显示：窄屏标题行放不下，且手机本身有系统状态栏。
+  Widget? _statusExtra(BuildContext context) {
+    if (!AppLayout.isTelevision(context)) return null;
+    final speed = widget.store.showNetworkSpeed;
+    final clock = widget.store.showClock;
+    if (!speed && !clock) return null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (speed)
+          NetworkSpeedText(
+            key: const ValueKey('player-network-speed'),
+            read: widget.repository.streamSpeed,
+            style: _statusStyle,
+          ),
+        if (speed && clock) const SizedBox(width: 10),
+        if (clock)
+          ClockText(key: const ValueKey('player-clock'), style: _statusStyle),
+        const SizedBox(width: 6),
+      ],
+    );
+  }
+
+  static const _statusStyle = TextStyle(
+    color: Colors.white,
+    fontSize: 13,
+    fontWeight: FontWeight.w600,
+    fontFeatures: [FontFeature.tabularFigures()],
+    shadows: [Shadow(blurRadius: 4, color: Colors.black87)],
+  );
+
   Widget _buildPlayer(BuildContext context) {
     final theme = Theme.of(context);
     final title = widget.detail.drama.title;
@@ -2501,10 +2575,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final pictureInPicture = _pictureInPictureVisible;
     return PopScope(
       // 系统返回不再被改写成「旋转」：全屏时先退回内嵌，内嵌时才真的退出页面。
-      canPop:
-          _television ||
-          _viewMode == PlaybackViewMode.inline ||
-          _episodeSheetOpen,
+      // 选集面板不能进 canPop：那会让返回键直接把整个播放页 pop 掉，
+      // 下面「先收起面板」的分支永远走不到。
+      canPop: _television || _viewMode == PlaybackViewMode.inline,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop || _television) return;
         // 选集面板开着时先收起它，再谈退出全屏。
@@ -2516,8 +2589,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       },
       child: CallbackShortcuts(
         bindings: {
+          // 只接管 Esc：返回键走系统 popRoute，否则两条通道各弹一层。
           const SingleActivator(LogicalKeyboardKey.escape): _back,
-          const SingleActivator(LogicalKeyboardKey.goBack): _back,
         },
         child: Focus(
           focusNode: _playerFocus,
@@ -2633,6 +2706,112 @@ class _PlayerScreenState extends State<PlayerScreen>
                       },
                     ),
                   ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 竖屏全屏竖滑切集时，在画面滑走露出的区域预览目标集；
+  /// 到头了直接说明边界，避免「黑一片还以为能切」。
+  Widget _episodeDragPreview(double drag) {
+    if (drag.abs() < 4) return const SizedBox.shrink();
+    final forward = drag > 0;
+    final next = _index + (forward ? 1 : -1);
+    final episodes = widget.detail.episodes;
+    final atEdge = next < 0 || next >= episodes.length;
+    String label;
+    if (atEdge) {
+      label = forward ? '已经是最后一集' : '已经是第一集';
+    } else {
+      final ep = episodes[next];
+      final extra = ep.remoteLabel;
+      label = '${forward ? '下一集' : '上一集'} · 第 ${ep.number} 集'
+          '${extra == null || extra.isEmpty ? '' : ' · $extra'}';
+    }
+    return IgnorePointer(
+      child: Align(
+        alignment: Alignment(0, forward ? 0.86 : -0.86),
+        child: Container(
+          key: const ValueKey('player-episode-drag-preview'),
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: .72),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 全剧播完的终点卡：给明确的收尾与出口，不再只是停在那里。
+  Widget _buildFinishedAllCard() {
+    final total = widget.detail.episodes.length;
+    return Positioned.fill(
+      child: Container(
+        key: const ValueKey('player-finished-all'),
+        color: Colors.black.withValues(alpha: .62),
+        alignment: Alignment.center,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xE6242424),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: .14)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '全剧已看完',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '共 $total 集 · 已播到最后一集',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: .72),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FilledButton(
+                        key: const ValueKey('player-finished-replay'),
+                        onPressed: () => unawaited(_play(0)),
+                        child: const Text('重播'),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton(
+                        key: const ValueKey('player-finished-back'),
+                        onPressed: _back,
+                        child: const Text('返回'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -2867,8 +3046,11 @@ class _PlayerScreenState extends State<PlayerScreen>
               onTogglePlayback: _togglePlayback,
               swipeEnabled: _mobile,
               landscapeChrome: _landscapeChrome,
+              episodeSwipePriority:
+                  _viewMode == PlaybackViewMode.portraitFullscreen,
               compact: !_showFullscreen,
               batteryLevel: _battery.reading?.level,
+              statusExtra: _statusExtra(context),
               onFullscreen: _fullscreenSupported ? _rotate : null,
               forceLandscape: _landscapeChrome,
               onLockChanged: _setScreenLocked,
@@ -2930,7 +3112,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       fit: StackFit.expand,
       children: [
         if (!hideOverlayForPictureInPicture)
-          DanmakuOverlay(controller: _danmaku, aspectRatio: _aspectRatio),
+          DanmakuOverlay(
+            controller: _danmaku,
+            aspectRatio: _aspectRatio,
+            speed: _danmakuSpeed,
+          ),
         controls,
       ],
     );
@@ -2952,12 +3138,34 @@ class _PlayerScreenState extends State<PlayerScreen>
             key: _videoPaneKey,
             fit: StackFit.expand,
             children: [
+              // 竖屏全屏跟手切集时画面滑走，露出的区域保持纯黑，
+              // 不把页面主题色或上一帧残影透出来。
+              if (_viewMode == PlaybackViewMode.portraitFullscreen)
+                const ColoredBox(color: Colors.black),
+              // 跟手预览：滑向哪边就在露出区显示目标集（或「已经是最后一集」）。
+              if (_viewMode == PlaybackViewMode.portraitFullscreen)
+                ValueListenableBuilder<double>(
+                  valueListenable: _interactions.episodeDrag,
+                  builder: (context, drag, _) => _episodeDragPreview(drag),
+                ),
               if (widget.videoBuilder != null)
                 widget.videoBuilder!(layeredControls)
               else ...[
                 // 画面与控件分成两层：比例档会把画面裁进固定形状的框，
                 // 控件层跟着被裁就会只剩一小块可点区域。
-                _videoLayer(),
+                // 竖屏全屏竖滑切集：画面跟随手指上下位移，控件/HUD 留在原位；
+                // ValueListenableBuilder 只重建 Transform，画面 widget 作为 child 复用。
+                if (_viewMode == PlaybackViewMode.portraitFullscreen)
+                  ValueListenableBuilder<double>(
+                    valueListenable: _interactions.episodeDrag,
+                    builder: (context, drag, child) => Transform.translate(
+                      offset: Offset(0, -drag),
+                      child: child,
+                    ),
+                    child: _videoLayer(),
+                  )
+                else
+                  _videoLayer(),
                 layeredControls,
               ],
               // 亮度遮罩模拟：手势亮度只调这层透明度，不修改系统亮度。
@@ -2980,41 +3188,45 @@ class _PlayerScreenState extends State<PlayerScreen>
                   },
                 ),
               if (_loading && !hideOverlayForPictureInPicture)
-                ColoredBox(
-                  // 解析新地址阶段（_swapping=false）画面还停在旧集最后一帧，
-                  // 只垫一层浅遮罩让用户看得到画面；真正换源出首帧前才压黑。
-                  color: Colors.black.withValues(alpha: _swapping ? .78 : .32),
-                  child: Align(
-                    // 进度反馈放画面中下部小胶囊：正中央留给旧集定格画面，
-                    // 别让转圈+文案压住内容
-                    alignment: const Alignment(0, 0.72),
-                    child: Container(
-                      margin: const EdgeInsets.all(16),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: .55),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            _loadingMessage,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
+                IgnorePointer(
+                  // 遮罩压在控制层之上：不忽略指针会吃掉整屏命中，切集解析
+                  // 期间连返回/选集/再滑一次都点不到，看起来就是「卡住等」。
+                  child: ColoredBox(
+                    // 解析新地址阶段（_swapping=false）画面还停在旧集最后一帧，
+                    // 只垫一层浅遮罩让用户看得到画面；真正换源出首帧前才压黑。
+                    color: Colors.black.withValues(alpha: _swapping ? .78 : .32),
+                    child: Align(
+                      // 进度反馈放画面中下部小胶囊：正中央留给旧集定格画面，
+                      // 别让转圈+文案压住内容
+                      alignment: const Alignment(0, 0.72),
+                      child: Container(
+                        margin: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: .55),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 10),
+                            Text(
+                              _loadingMessage,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -3042,6 +3254,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                             drama: widget.detail.drama,
                           )
                         : null,
+                    // 这一集在当前源放不出来（死链/下架）时，按剧名在本
+                    // 分组内换源找——同类其它源往往有同名片且可播。
+                    extraActions: GroupSearchButton(
+                      title: widget.detail.drama.title,
+                      enabled: widget.store.sources.length > 1,
+                    ),
                     icon: AppIcon(AppIcons.playDisabled),
                   ),
                 ),
@@ -3117,6 +3335,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                     return _buildGestureHud();
                   },
                 ),
+              // 全剧播完的终点卡盖在最上层，给重播/返回两个明确出口。
+              if (_finishedAll && !hideOverlayForPictureInPicture)
+                _buildFinishedAllCard(),
             ],
           );
         },

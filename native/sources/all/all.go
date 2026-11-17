@@ -8,4 +8,5 @@ import (
 	_ "duanjuapp/native/sources/maoguo"
 	_ "duanjuapp/native/sources/xingguo"
 	_ "duanjuapp/native/sources/yaguo"
+	_ "duanjuapp/native/sources/yunzhui"
 )

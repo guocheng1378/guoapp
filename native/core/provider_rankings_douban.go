@@ -160,7 +160,13 @@ func parseDoubanRanking(body []byte, board rankingBoard, page int) (rankingPage,
 			rank = (page-1)*doubanPageSize + index + 1
 		}
 		if rank <= previous {
-			continue
+			// 只有「新页从 1 重新开始」才重置基准（否则第 2 页会被整页丢掉）；
+			// 同一页内的非递增脏行仍旧跳过，保持去重与序稳定。
+			if rank == 1 && previous > 1 {
+				previous = 0
+			} else {
+				continue
+			}
 		}
 		previous = rank
 		drama := Drama{

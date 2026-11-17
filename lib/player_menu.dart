@@ -337,6 +337,32 @@ class _PlayerMenuState extends State<PlayerMenu> {
                     ),
             ),
           ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text('滚动速度', style: helperStyle),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final speed in danmakuSpeeds)
+                ChoiceChip(
+                  key: ValueKey('menu-danmaku-speed-$speed'),
+                  label: Text(danmakuSpeedLabel(speed)),
+                  selected: (preferences.danmakuSpeed - speed).abs() < .001,
+                  onSelected: _busy
+                      ? null
+                      : (_) => _run(
+                          () => widget.onPreferences(
+                            preferences.copyWith(danmakuSpeed: speed),
+                          ),
+                        ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
           if (widget.onRetryDanmaku != null)
             TextButton.icon(
               key: const ValueKey('player-danmaku-retry'),

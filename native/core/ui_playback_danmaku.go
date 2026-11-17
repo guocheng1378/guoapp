@@ -162,8 +162,20 @@ func parseHongguoDanmaku(result map[string]any, videoID string, start, duration 
 	data := nestedMap(result, "data")
 	rows, valid := data["data_list"].([]any)
 	next, err := strconv.ParseInt(mapString(nestedMap(data, "extra"), "next_query_danmaku_list_time"), 10, 64)
-	if !valid || err != nil || next <= start || next > danmakuMaxDurationMS {
+	if !valid || err != nil || next > danmakuMaxDurationMS {
 		return hongguoDanmakuPage{}, errors.New("红果弹幕时间段格式无效")
+	}
+	if next <= start {
+		// 该 30s 窗口内确实没有弹幕时，站点会把 next 回成起点：这是正常业务态，
+		// 不是格式错误。以前判错会让客户端进 15s 退避、反复重试同一段，
+		// 表现为「这段暂无弹幕」变成持续报错。
+		next = start + danmakuWindowMS
+		if duration > 0 && next > duration {
+			next = duration
+		}
+		if next <= start {
+			next = start + 1
+		}
 	}
 	page := hongguoDanmakuPage{EpisodeID: videoID, Items: []hongguoDanmakuItem{}, StartMS: start, NextMS: min(next, duration)}
 	var cursor struct {

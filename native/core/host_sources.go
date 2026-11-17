@@ -40,6 +40,19 @@ func (h downloaderHost) JSON(ctx context.Context, request provider.Request) (map
 }
 
 func (h downloaderHost) Text(ctx context.Context, request provider.Request) (string, error) {
+	// 自定义站源的 UA/请求头必须走 duanjuDo：fetchProviderText 只带
+	// 固定 UA 与 Referer，会把 Headers 静默丢掉。
+	if request.Agent != "" || len(request.Headers) > 0 {
+		inner := h.request(request)
+		if inner.Referer == "" {
+			inner.Referer = request.Address
+		}
+		payload, err := h.downloader.duanjuDo(ctx, inner)
+		if err != nil {
+			return "", err
+		}
+		return string(payload), nil
+	}
 	referer := request.Referer
 	if referer == "" {
 		referer = request.Address

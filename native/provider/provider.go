@@ -27,6 +27,7 @@ type Spec struct {
 	Kind               string
 	Agent              string
 	Referer            string
+	Headers            map[string]string // 自定义站源的 UA/防盗链头，随每个 Request 下发
 	Category           Category
 	Family             Family
 	Searcher           bool
@@ -64,6 +65,14 @@ type Searcher interface {
 	Search(ctx context.Context, host Host, query string) ([]Drama, error)
 }
 
+// PagedSearcher 是在线搜索分页的可选扩展：调度层把页码直接透传给源，
+// hasMore 由源站总页数决定，使搜索与目录共用同一套上拉加载语义。
+// 只实现 Searcher 的源仍按单页处理（hasMore=false），不会反复请求第一页。
+type PagedSearcher interface {
+	Provider
+	SearchPage(ctx context.Context, host Host, query string, page int) ([]Drama, bool, error)
+}
+
 type Prober interface {
 	Provider
 	Probe(ctx context.Context, host Host) (string, error)
@@ -83,6 +92,13 @@ type Media struct {
 type MediaResolver interface {
 	Provider
 	ResolveMedia(ctx context.Context, host Host, task Task) (Media, error)
+}
+
+// Ranker 是榜单的可选扩展：实现的源在榜单页直接提供按服务端排序的条目，
+// 由 core 的 fetchProviderRankingPage 统一收口（落盘/缓存/在途去重复用同一套）。
+type Ranker interface {
+	Provider
+	RankingPage(ctx context.Context, host Host, path string, page int) ([]Drama, error)
 }
 
 type Config struct {

@@ -18,7 +18,7 @@ func (d *Downloader) loadRankingCache() {
 func (d *Downloader) loadRankingCacheLocked() {
 	cache := &d.rankings
 	cache.pages, cache.pending = map[string]rankingPage{}, map[string]*rankingCall{}
-	file, err := os.Open(filepath.Join(d.cfg.dataDir, "rankings.json"))
+	file, err := os.Open(filepath.Join(d.cfg.cachePath(), "rankings.json"))
 	if err != nil {
 		return
 	}
@@ -59,7 +59,7 @@ var rankingWriteInterval = 2 * time.Second
 // writeRankingCacheLocked 请求落盘 rankings.json：距上次落盘超过间隔则立即
 // 写，否则只标脏并调度一次延后合并写。须持 cache.mu。
 func (d *Downloader) writeRankingCacheLocked() {
-	if d.cfg.dataDir == "" {
+	if d.cfg.cachePath() == "" {
 		return
 	}
 	cache := &d.rankings
@@ -85,14 +85,14 @@ func (d *Downloader) writeRankingCacheLocked() {
 // 只有成功落盘才推进 lastWrite/清 dirty。须持 cache.mu。
 func (d *Downloader) flushRankingCacheLocked() {
 	cache := &d.rankings
-	if d.cfg.dataDir == "" {
+	if d.cfg.cachePath() == "" {
 		return
 	}
 	body, err := json.Marshal(cache.pages)
 	if err != nil || len(body) > 8<<20 {
 		return
 	}
-	if writeNativeCacheFile(filepath.Join(d.cfg.dataDir, "rankings.json"), body) != nil {
+	if writeNativeCacheFile(filepath.Join(d.cfg.cachePath(), "rankings.json"), body) != nil {
 		// 尾写链不能断：失败后重排一次退避定时器。旧实现保留 dirty 却
 		// 不再排定时器，之后没有新写请求就永远不落盘，重启读到旧页/空页。
 		if cache.writeTimer == nil {
@@ -113,7 +113,7 @@ func (d *Downloader) flushRankingCacheLocked() {
 // flushRankingCache 供切后台/退出时的强制冲刷：榜单也有 2s 合并窗，
 // 只冲 catalogs.json 会让待写的 rankings.json 随进程被杀而丢失。
 func (d *Downloader) flushRankingCache() {
-	if d.cfg.dataDir == "" {
+	if d.cfg.cachePath() == "" {
 		return
 	}
 	d.rankings.mu.Lock()

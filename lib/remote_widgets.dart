@@ -837,7 +837,16 @@ class RemoteListTile extends StatelessWidget {
   final VoidCallback? onFocus;
   final String? label;
 
+  /// 1.0× 文字缩放下的基准行高（历史值）。
   static const double extent = 80;
+
+  /// 按当前文字缩放算行高：原来 80/52 是写死的，系统字号 2.0 或应用内
+  /// 「界面缩放」1.3 叠加后内容（两行 18+14 号字）必然溢出。
+  static double extentFor(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final text = scaler.scale(18) * 1.3 + scaler.scale(14) * 1.3;
+    return text + 40;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -852,7 +861,8 @@ class RemoteListTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       label: label ?? title,
       child: SizedBox(
-        height: 52,
+        // 与 extentFor 同源：1.0× 时 = 80 - 20（上下 padding）= 52。
+        height: extentFor(context) - 20,
         child: Row(
           children: [
             if (leading != null) ...[leading!, const SizedBox(width: 14)],

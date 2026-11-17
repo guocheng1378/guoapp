@@ -91,7 +91,7 @@ void main() {
     expect(find.text('玻璃'), findsOneWidget);
   });
 
-  testWidgets('弹窗转场动画期玻璃降级，动画结束恢复真磨砂', (tester) async {
+  testWidgets('弹窗转场动画期保留磨砂（只降采样），动画结束回满档', (tester) async {
     await GlassPreferences.setEnabled(true);
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
@@ -113,11 +113,47 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 60));
     expect(find.text('弹窗玻璃'), findsOneWidget);
-    // Fade+Scale 动画帧里 N 枚胶囊各自采样背景 → 卡；动画期临时关模糊。
-    expect(find.byType(BackdropFilter), findsNothing);
+    // 弹窗动画期**保留磨砂**（只降 σ + 跳内阴影）：把模糊抹成 0 会让
+    // 弹窗一出现就变成一层实底，用户判定不可接受。
+    expect(find.byType(BackdropFilter), findsOneWidget);
 
     await tester.pumpAndSettle();
     expect(find.byType(BackdropFilter), findsOneWidget);
+  });
+
+  testWidgets('接近度信号只重绘描边，不重建玻璃面（滚动卡顿回归）', (tester) async {
+    await GlassPreferences.setEnabled(true);
+    final prox = ValueNotifier<double>(0);
+    addTearDown(prox.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SoftGlassSurface(
+            edgeProx: prox,
+            edgeFor: (h) => Colors.white.withValues(alpha: 0.2 + 0.5 * h),
+            child: const Text('玻璃'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    SoftGlassPainter painterOf() {
+      final paint = tester.widget<CustomPaint>(
+        find
+            .descendant(
+              of: find.byType(SoftGlassSurface),
+              matching: find.byType(CustomPaint),
+            )
+            .first,
+      );
+      return paint.painter! as SoftGlassPainter;
+    }
+
+    final before = painterOf();
+    prox.value = 1;
+    await tester.pump();
+    // 同一实例 = 没重建子树；描边亮度由 painter 在 paint 时读取。
+    expect(identical(painterOf(), before), isTrue);
   });
 
   testWidgets('材质配方实时生效：改配方后玻璃面立即重建', (tester) async {

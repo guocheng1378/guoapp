@@ -64,10 +64,16 @@ func TestHongguoDanmakuPreservesSourceTimeline(t *testing.T) {
 }
 
 func TestHongguoDanmakuRejectsMalformedWindowsAndBoundsText(t *testing.T) {
-	for _, result := range []map[string]any{nil, {"data": map[string]any{"data_list": []any{}}}, danmakuTestResult(0, []any{}), danmakuTestResult(danmakuMaxDurationMS+1, []any{})} {
+	for _, result := range []map[string]any{nil, {"data": map[string]any{"data_list": []any{}}}, danmakuTestResult(danmakuMaxDurationMS+1, []any{})} {
 		if _, err := parseHongguoDanmaku(result, danmakuTestVideo, 0, 160000); err == nil {
 			t.Fatal("malformed response became a successful empty page")
 		}
+	}
+	// 站点在「该窗口确实没有弹幕」时会把 next 回成起点：这是正常业务态，
+	// 必须返回空页并推进窗口，不能判格式错误（否则客户端 15s 退避反复重试）。
+	stalled, err := parseHongguoDanmaku(danmakuTestResult(0, []any{}), danmakuTestVideo, 0, 160000)
+	if err != nil || len(stalled.Items) != 0 || stalled.NextMS != danmakuWindowMS {
+		t.Fatalf("stalled window should advance instead of failing: %+v %v", stalled, err)
 	}
 	rows := []any{}
 	for i := 0; i < 110; i++ {

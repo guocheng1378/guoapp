@@ -208,4 +208,57 @@ void main() {
     expect(itemTop(tester), moreOrLessEquals(base + 36));
     await tester.pump();
   });
+
+  testWidgets('刷新失败：环收场后仍显示失败文案，成功刷新不显示', (tester) async {
+    final refresh = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FogRefresh(
+            displacement: 120,
+            onRefresh: () => refresh.future,
+            refreshFailed: () => true,
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: 40,
+              itemBuilder: (context, i) => ListTile(title: Text('item $i')),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    tester.state<FogRefreshState>(find.byType(FogRefresh)).show();
+    await tester.pump();
+    expect(find.byKey(const Key('fog-refresh-failed')), findsNothing);
+    refresh.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('fog-refresh-failed')), findsOneWidget);
+    expect(find.text('刷新失败 · 已保留当前内容'), findsOneWidget);
+  });
+
+  testWidgets('刷新回调抛异常：按失败收场且不逃逸成未处理错误', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FogRefresh(
+            displacement: 120,
+            onRefresh: () => Future<void>.error('合成网络故障'),
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: 40,
+              itemBuilder: (context, i) => ListTile(title: Text('item $i')),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    tester.state<FogRefreshState>(find.byType(FogRefresh)).show();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('fog-refresh-failed')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

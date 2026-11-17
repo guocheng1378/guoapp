@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'danmaku_controller.dart';
+import 'haptics.dart';
 import 'lan_controller.dart';
 import 'player_interactions.dart';
 import 'soft_glass.dart';
@@ -53,6 +53,7 @@ class PlayerControls extends StatefulWidget {
     this.hasPrevious = false,
     this.compact = false,
     this.landscapeChrome = false,
+    this.episodeSwipePriority = false,
     this.showQuality = true,
     this.onPortraitFullscreen,
     this.onLandscapeFullscreen,
@@ -60,6 +61,7 @@ class PlayerControls extends StatefulWidget {
     this.onLockChanged,
     this.danmakuStatusText = '',
     this.batteryLevel,
+    this.statusExtra,
   });
 
   final Player player;
@@ -114,6 +116,11 @@ class PlayerControls extends StatefulWidget {
   /// 当前是否横屏全屏（决定上行/下行的按钮组合）。
   final bool landscapeChrome;
 
+  /// 竖屏沉浸（短剧竖屏全屏）：控制栏可见时也要放行中间区域的竖滑切集。
+  /// 旧实现把落在底部 26% 控制带的 pointerDown 整片吞掉，用户必须等
+  /// 2.5s 自动隐藏 + 180ms 淡出 + 200ms 下线之后才能滑下一集。
+  final bool episodeSwipePriority;
+
   /// 清晰度只对红果源开放（用户定调：其他源不要这颗按钮）。
   final bool showQuality;
   final VoidCallback? onPortraitFullscreen;
@@ -129,6 +136,9 @@ class PlayerControls extends StatefulWidget {
   /// 弹幕只读状态文案（本项目无发送能力，替代参考 App 的输入框）。
   final String danmakuStatusText;
   final int? batteryLevel;
+
+  /// 标题行最右侧的附加状态（电视上的网速与时间）；手机端为 null。
+  final Widget? statusExtra;
 
   @override
   State<PlayerControls> createState() => _PlayerControlsState();
@@ -297,7 +307,7 @@ class _PlayerControlsState extends State<PlayerControls> {
     if (widget.interactions.suppressTap) return;
     if (_locked) {
       // 锁定态点击不再静默：轻触感 + 短暂提示解锁入口在哪。
-      HapticFeedback.selectionClick();
+      AppHaptics.selection();
       setState(() => _lockHint = true);
       _lockHintTimer?.cancel();
       _lockHintTimer = Timer(const Duration(milliseconds: 1600), () {
@@ -440,18 +450,22 @@ class _PlayerControlsState extends State<PlayerControls> {
                     if (_locked) return;
                     // 控件显示时，落在底部控制区的手势交给控件自己处理，
                     // 否则裸 Listener 会先启动长按，把按钮长按抢成 2 倍速。
-                    if (visible &&
+                    final inControlBand = visible &&
                         _hitsControlBand(
                           event.localPosition,
                           constraints.biggest,
-                        )) {
-                      return;
-                    }
+                        );
+                    // 竖屏沉浸例外：短剧靠上下滑切集，若控制栏可见时整片
+                    // 底部带吞掉 pointerDown，手势永远起不来、控制栏也永不
+                    // 自动收起，用户只能干等 2.5s。这里照常放行手势，但
+                    // 抑制长按计时，按钮自身的长按/点按不受影响。
+                    if (inControlBand && !widget.episodeSwipePriority) return;
                     widget.interactions.pointerDown(
                       event,
                       swipeEnabled: widget.swipeEnabled,
                       width: constraints.maxWidth,
                       height: constraints.maxHeight,
+                      suppressHold: inControlBand,
                     );
                   },
                   onPointerMove: (event) {
@@ -633,6 +647,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           ),
         ),
         ..._topStatusButtons(landscape, dense: dense),
+        if (widget.statusExtra != null) widget.statusExtra!,
         if (widget.batteryLevel != null) _batteryStatus(dense: dense),
       ],
     );
@@ -884,23 +899,29 @@ class _PlayerControlsState extends State<PlayerControls> {
                 const SizedBox(width: 4),
                 _toolIcon(
                   key: const ValueKey('player-previous-episode'),
-                  tooltip: '上一集',
+                  tooltip: widget.hasPrevious ? '上一集' : '已经是第一集',
                   icon: AppIcon(AppIcons.skipPrevious, size: 22),
-                  onPressed:
-                      widget.enabled && widget.hasPrevious
-                      ? widget.onPrevious
-                      : null,
+                  dimmed: !widget.hasPrevious,
+                  onPressed: !widget.enabled
+                      ? null
+                      : (widget.hasPrevious
+                          ? widget.onPrevious
+                          : () => _explainEpisodeEdge('已经是第一集')),
                 ),
               ],
               // 下一集在左侧播放键旁（用户定调：放回左侧）。
+              // 到最后一集时保持置灰，但点按会给「已经是最后一集」解释，
+              // 不再是「灰了却不知道为什么、点也没反应」。
               _toolIcon(
                 key: const ValueKey('player-next-episode'),
-                tooltip: '下一集',
+                tooltip: widget.hasNext ? '下一集' : '已经是最后一集',
                 icon: AppIcon(AppIcons.skipNext, size: 22),
-                onPressed:
-                    widget.enabled && widget.hasNext && widget.onNext != null
-                    ? widget.onNext
-                    : null,
+                dimmed: !widget.hasNext,
+                onPressed: !widget.enabled
+                    ? null
+                    : (widget.hasNext && widget.onNext != null
+                        ? widget.onNext
+                        : () => _explainEpisodeEdge('已经是最后一集')),
               ),
               if (hasDanmaku) ...[
                 const SizedBox(width: 4),
@@ -1314,12 +1335,14 @@ class _PlayerControlsState extends State<PlayerControls> {
     required VoidCallback? onPressed,
     bool selected = false,
     bool island = false,
+    bool dimmed = false,
   }) => _toolButton(
     key: key,
     tooltip: tooltip,
     onPressed: onPressed,
     selected: selected,
     island: island,
+    dimmed: dimmed,
     child: icon,
   );
 
@@ -1342,6 +1365,13 @@ class _PlayerControlsState extends State<PlayerControls> {
     ),
   );
 
+  /// 到头了的置灰按钮仍可点：轻震 + 走播放器既有提示通道，
+  /// 告诉用户「为什么点不动」，而不是静默无响应。
+  void _explainEpisodeEdge(String message) {
+    AppHaptics.light();
+    widget.interactions.hint(message);
+  }
+
   Widget _toolButton({
     required Key key,
     required String tooltip,
@@ -1349,13 +1379,16 @@ class _PlayerControlsState extends State<PlayerControls> {
     required VoidCallback? onPressed,
     bool selected = false,
     bool island = false,
+    bool dimmed = false,
     double visualWidth = 36,
   }) {
     final scheme = Theme.of(context).colorScheme;
     final enabled = onPressed != null;
+    // dimmed：仍可点（点按给「到头了」的解释），但视觉保持置灰，
+    // 与「彻底不可操作」的 enabled=false 区分开。
     final foreground = selected
         ? scheme.primary
-        : Colors.white.withValues(alpha: enabled ? .92 : .48);
+        : Colors.white.withValues(alpha: enabled && !dimmed ? .92 : .48);
     final targetWidth = visualWidth < 40 ? 44.0 : visualWidth + 8;
     final button = GestureDetector(
       key: key,
@@ -1518,9 +1551,9 @@ class _PlayerControlsState extends State<PlayerControls> {
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
-          // 与按钮同宽（_toolButton visualWidth 36 → 44），不撑开工具行间距
+          // 与按钮同宽（_toolButton visualWidth 36 → 44），不撑开工具行间距。
+          // 高度交给文字本身：界面缩放 1.3× 时固定 12 会竖向裁掉徽标。
           width: 44,
-          height: 12,
           child: Text(
             badge,
             textAlign: TextAlign.center,

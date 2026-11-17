@@ -686,4 +686,43 @@ void main() {
     expect(updates, hasLength(1));
     expect(updates.single.release, 'ongoing');
   });
+
+  // 真机回归：红果「全部」页点 ≡ 完全没反应（6 秒无卡片、日志无异常），
+  // 换成同一源的其它分类就正常。旧实现在锚点拿不到 global rect 时直接
+  // `return` 静默放弃，用户眼里就是「点不了」。现在退到右上角照常弹出。
+  testWidgets('锚点未就位时筛选卡仍然弹出，不能静默失败', (tester) async {
+    final updates = <CatalogView>[];
+    // 从未挂到树上的 key —— 等价于运行时 currentContext 为 null。
+    final anchorKey = GlobalKey(debugLabel: 'missing-anchor');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: FilledButton(
+                onPressed: () => showCatalogFilterMenu(
+                  context: context,
+                  anchorKey: anchorKey,
+                  current: const CatalogView(),
+                  onChanged: updates.add,
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('排序'), findsOneWidget, reason: '锚点缺失也要弹');
+    expect(find.text('源站顺序'), findsOneWidget);
+
+    await tester.tap(find.text('名称'));
+    await tester.pumpAndSettle();
+    expect(updates, hasLength(1));
+    expect(updates.single.sort, CatalogSort.name);
+  });
 }

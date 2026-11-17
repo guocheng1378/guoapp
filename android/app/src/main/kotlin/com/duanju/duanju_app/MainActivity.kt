@@ -9,6 +9,9 @@ import android.os.Bundle
 import android.os.BatteryManager
 import android.os.PowerManager
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -226,6 +229,11 @@ class MainActivity : FlutterActivity() {
                             window.attributes = lp
                             result.success(true)
                         }
+                        "vibrate" -> result.success(
+                            runCatching {
+                                buzz(call.argument<String>("kind").orEmpty())
+                            }.getOrDefault(false)
+                        )
                         "battery" -> {
                             // 播放器状态区电量：BATTERY_PROPERTY_CAPACITY 不需要任何权限，
                             // 取不到（模拟器/极简 ROM）返回 null，Dart 侧整颗图标隐藏。
@@ -248,6 +256,33 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+    }
+
+    // 直调振动器：绕过 View.performHapticFeedback，后者受系统
+    // 「触摸反馈」总开关控制且轻档几乎无感（用户反馈「震动还是没有」）。
+    // 返回 false 时 Dart 侧自动回退 Flutter HapticFeedback。
+    private fun buzz(kind: String): Boolean {
+        val (millis, amplitude) = when (kind) {
+            "light" -> 18L to 90
+            "medium" -> 32L to 170
+            "heavy" -> 55L to VibrationEffect.DEFAULT_AMPLITUDE
+            else -> 12L to 60
+        }
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
+                ?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        } ?: return false
+        if (!vibrator.hasVibrator()) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(millis, amplitude))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(millis)
+        }
+        return true
     }
 
     // 拉起 QQ：先资料卡（含“加好友”按钮），失败再试临时会话聊天；未安装返回 false。

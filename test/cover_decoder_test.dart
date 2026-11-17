@@ -36,7 +36,7 @@ class CoverExecutor implements MediaExecutor {
 
 void main() {
   test(
-    'HEIC conversion serializes work, shares duplicates and reuses JPEG cache',
+    'HEIC conversion limits concurrency, shares duplicates and reuses JPEG cache',
     () async {
       final directory = await Directory.systemTemp.createTemp(
         'synthetic-cover-',
@@ -72,7 +72,9 @@ void main() {
         decoder.convert(originals[0].path, prepare),
         decoder.convert(originals[1].path, prepare),
       ]);
-      expect(peak, 1);
+      // _maxActive=3 限流（不再是串行）：两个不同图（originals[0] 去重后 1 个
+      // + originals[1] 1 个）并发转换，peak=2；同图重复调用共享同一 future。
+      expect(peak, 2);
       expect(conversions, 2);
       expect(preparations, 2);
       expect(outputs[0], outputs[1]);

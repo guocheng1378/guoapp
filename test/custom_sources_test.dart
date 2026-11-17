@@ -24,6 +24,25 @@ void main() {
     SourceSite.registerCustomSites(const []);
   });
 
+  test('corrupted customSources stays read-only instead of being overwritten',
+      () async {
+    final store = await _buildStore({'customSources': '{broken'});
+    expect(store.customSources, isEmpty);
+
+    // 写入必须被拒：否则一次新增/删除就会用空表覆盖用户手写的站源。
+    await expectLater(
+      store.addCustomSource(name: '新源', url: 'https://new.example.com'),
+      throwsA(isA<StateError>()),
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getString('customSources'),
+      '{broken',
+      reason: '解析失败时原文必须保留，留给备份恢复',
+    );
+  });
+
   group('CustomSourceSpec.validate', () {
     test('accepts a valid maccms source', () {
       expect(

@@ -107,9 +107,9 @@ func TestHuangguoRankingStructuredData(t *testing.T) {
 }
 
 func TestRankingBoardsCoverFourCategories(t *testing.T) {
-	// 豆瓣 12 榜 + 站源 22 榜都在册；短剧/视频/黄果三分类各有归属于自己的榜。
-	if len(rankingBoards) != 34 {
-		t.Fatalf("expected 34 boards, got %d", len(rankingBoards))
+	// 豆瓣 12 榜 + 站源 30 榜（含云追 8 榜）都在册；短剧/视频/黄果三分类各有归属于自己的榜。
+	if len(rankingBoards) != 42 {
+		t.Fatalf("expected 42 boards, got %d", len(rankingBoards))
 	}
 	doubanBoards, stationBoards := 0, 0
 	for _, board := range rankingBoards {
@@ -119,8 +119,8 @@ func TestRankingBoardsCoverFourCategories(t *testing.T) {
 			stationBoards++
 		}
 	}
-	if doubanBoards != 12 || stationBoards != 22 {
-		t.Fatalf("expected 12 douban + 22 station boards, got %d + %d", doubanBoards, stationBoards)
+	if doubanBoards != 12 || stationBoards != 30 {
+		t.Fatalf("expected 12 douban + 30 station boards, got %d + %d", doubanBoards, stationBoards)
 	}
 	for _, id := range []string{
 		"douban-top250", "hongguo-hot", "huangdou-all", "huangguo-hot",

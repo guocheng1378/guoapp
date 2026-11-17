@@ -58,10 +58,13 @@ func TestProviderSourceParsesTextFixturesAndRejectsMismatchedIdentity(t *testing
 }
 
 func TestYeguoDomainAliasesAndDefaultEndpoint(t *testing.T) {
-	if got := (&Downloader{cfg: defaultConfig()}).providerBaseURL(sourceYeguo); got != "https://www.yeguodj.com" {
+	// 默认入口必须是真网仍存活的线路：2026-11-14 实测 www.yeguodj.com
+	// 已无 DNS 解析，冷启动若从它起步，整轮自发现会被死线路耗尽预算。
+	if got := (&Downloader{cfg: defaultConfig()}).providerBaseURL(sourceYeguo); got != "https://analyze.buxefaex.cc" {
 		t.Fatalf("unexpected default yeguo endpoint: %s", got)
 	}
-	if !isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") ||
+	if !isYeguoActiveSite("https://analyze.buxefaex.cc/") || !isYeguoActiveSite("https://delta.ygrwdsgt.cc/") ||
+		!isYeguoActiveSite("https://www.yeguodj.com/") || !isYeguoActiveSite("https://line.ocdjlxow.cc/") ||
 		!isYeguoActiveSite("https://adviser.awlaxemk.cc/") || !isYeguoActiveSite("https://dsf23.vuenadqi.cc/") ||
 		!isYeguoActiveSite("https://attract.vgbyziuz.cc/") {
 		t.Fatal("yeguo active-site whitelist lost the current line families")

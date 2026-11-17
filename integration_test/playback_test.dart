@@ -20,13 +20,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const fixtureBase = String.fromEnvironment('FIXTURE_BASE_URL');
 
-class       final color = (element.widget as ColoredBox).color;
-      // r/g/b 是 0..1 的 double（旧 red/green/blue 的 0..255 整型已废弃）。
-      // 0 通道映射后精确等于 0.0，所以判纯黑仍然可以用 == 0。
-      if (color.r == 0 && color.g == 0 && color.b == 0 && color.a < 1) {
-        return color.a;
-      }
- extends AppRepository {
+// 2026-11 审查修复：此处的辅助函数残片（class 声明被写坏）会让整个
+// integration_test 无法编译、CI 的 flutter analyze 永久红；残片正文已删除。
+class DeviceFixtureRepository extends AppRepository {
   final native = NativeRepository();
   final resolved = <int>[];
   final released = <String>[];

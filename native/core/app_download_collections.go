@@ -9,10 +9,19 @@ import (
 )
 
 func (manager *nativeDownloads) jobDirectory(job nativeDownloadJob) string {
-	if job.Folder != "" {
-		return filepath.Join(manager.root, filepath.FromSlash(job.Folder))
+	base := filepath.Join(manager.root, job.ID)
+	if job.Folder == "" {
+		return base
 	}
-	return filepath.Join(manager.root, job.ID)
+	// 安全审查修复：Folder 由「源 id + 任务 id」拼出，而源 id 可能来自站源
+	// 返回的 JSON（不可信）。这里做归一化 + 前缀断言，穿越值一律回落到
+	// 任务 id 目录，避免 os.RemoveAll 删除下载根目录之外的东西。
+	candidate := filepath.Clean(filepath.Join(manager.root, filepath.FromSlash(job.Folder)))
+	prefix := filepath.Clean(manager.root) + string(os.PathSeparator)
+	if !strings.HasPrefix(candidate, prefix) {
+		return base
+	}
+	return candidate
 }
 
 func (manager *nativeDownloads) localFilesValid(record nativeDownloadRecord) bool {
@@ -83,6 +92,21 @@ func (manager *nativeDownloads) controlBatchExpected(ctx context.Context, ids []
 	default:
 		return result, errors.New("批量下载操作无效")
 	}
+	// 批量路径统一落盘一次：单条 controlExpected 会逐条 Marshal + Sync 整份索引，
+	// 500 条能把界面卡十几秒。批量期间只改内存，循环结束后统一写。
+	manager.mu.Lock()
+	if manager.batchSave {
+		manager.mu.Unlock()
+		return result, errors.New("已有批量操作正在进行，请稍后重试")
+	}
+	manager.batchSave = true
+	manager.mu.Unlock()
+	defer func() {
+		manager.mu.Lock()
+		manager.batchSave = false
+		manager.mu.Unlock()
+	}()
+
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if seen[id] {
@@ -102,6 +126,12 @@ func (manager *nativeDownloads) controlBatchExpected(ctx context.Context, ids []
 		} else {
 			result.Completed = append(result.Completed, id)
 		}
+	}
+	manager.mu.Lock()
+	saveErr := manager.saveLocked()
+	manager.mu.Unlock()
+	if saveErr != nil {
+		return result, saveErr
 	}
 	return result, nil
 }

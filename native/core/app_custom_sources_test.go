@@ -134,6 +134,46 @@ func TestApplyCustomSourcesRejectsInvalidEntries(t *testing.T) {
 	}
 }
 
+func TestNormalizeCustomSourceBase(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://host.example/api.php/provide/vod/?ac=videolist", "https://host.example"},
+		{"https://host.example/api.php/provide/vod?at=json", "https://host.example"},
+		{"https://host.example/cms/api.php/provide/vod", "https://host.example/cms"},
+		{"https://host.example/provide/vod/", "https://host.example"},
+		{"https://host.example/maccms/", "https://host.example/maccms"},
+		{"https://host.example/", "https://host.example"},
+		{"http://host.example:8080/api.php/provide/vod?ac=list", "http://host.example:8080"},
+		{"ftp://host.example/api.php/provide/vod", "ftp://host.example/api.php/provide/vod"},
+	}
+	for _, tc := range cases {
+		if got := normalizeCustomSourceBase(tc.in); got != tc.want {
+			t.Fatalf("normalize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if got := normalizeCustomSourceBase(tc.want); got != tc.want {
+			t.Fatalf("normalize must be idempotent: normalize(%q) = %q", tc.want, got)
+		}
+	}
+}
+
+func TestApplyCustomSourcesNormalizesFullAPIURL(t *testing.T) {
+	t.Cleanup(clearCustomSources)
+	if _, err := applyCustomSources([]any{
+		customSourceEntry("custom-normal1111", "完整接口地址", "https://full.example.com/api.php/provide/vod/?ac=videolist"),
+	}); err != nil {
+		t.Fatalf("register with full api url failed: %v", err)
+	}
+	spec, found := provider.SpecOf("custom-normal1111")
+	if !found {
+		t.Fatal("custom-normal1111 must be registered")
+	}
+	if spec.Base != "https://full.example.com" {
+		t.Fatalf("spec base = %q, want normalized root (otherwise Go appends /api.php/provide/vod twice)", spec.Base)
+	}
+}
+
 func TestApplyCustomSourcesExplicitCategoryAndTypeID(t *testing.T) {
 	t.Cleanup(clearCustomSources)
 	if _, err := applyCustomSources([]any{map[string]any{
@@ -154,5 +194,69 @@ func TestApplyCustomSourcesExplicitCategoryAndTypeID(t *testing.T) {
 	}
 	if _, isCataloguer := provider.Get("custom-dddd4444"); !isCataloguer {
 		t.Fatal("custom source must expose the cataloguer capability")
+	}
+}
+
+func TestParseCustomSourceHeaders(t *testing.T) {
+	headers, ok := parseCustomSourceHeaders(map[string]any{
+		"User-Agent": "UA-Custom",
+		"Referer":    "https://cms.test/",
+	})
+	if !ok || headers["User-Agent"] != "UA-Custom" || headers["Referer"] != "https://cms.test/" {
+		t.Fatalf("合法请求头解析失败：ok=%v headers=%v", ok, headers)
+	}
+	if headers, ok := parseCustomSourceHeaders(nil); !ok || headers != nil {
+		t.Fatalf("缺省请求头应返回 nil：ok=%v headers=%v", ok, headers)
+	}
+	invalid := []map[string]any{
+		{"Host": "evil.test"},
+		{"Content-Length": "1"},
+		{"Bad Name": "x"},
+		{"X": "a\r\nX-Evil: 1"},
+		{"X": 123},
+		{"X": ""},
+	}
+	for _, entry := range invalid {
+		if _, ok := parseCustomSourceHeaders(entry); ok {
+			t.Fatalf("非法请求头必须拒绝：%v", entry)
+		}
+	}
+	tooMany := map[string]any{}
+	for i := 0; i < 9; i++ {
+		tooMany[string(rune('A'+i))] = "v"
+	}
+	if _, ok := parseCustomSourceHeaders(tooMany); ok {
+		t.Fatal("超过 8 条请求头必须拒绝")
+	}
+}
+
+func TestApplyCustomSourcesCarriesHeaders(t *testing.T) {
+	t.Cleanup(clearCustomSources)
+	_, err := applyCustomSources([]any{map[string]any{
+		"id":   "custom-header1111",
+		"name": "带头源",
+		"url":  "https://header.example.com",
+		"headers": map[string]any{
+			"User-Agent": "UA-Custom",
+			"X-Token":    "abc",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("带头源注册失败：%v", err)
+	}
+	spec, found := provider.SpecOf("custom-header1111")
+	if !found {
+		t.Fatal("custom-header1111 must be registered")
+	}
+	if spec.Headers["User-Agent"] != "UA-Custom" || spec.Headers["X-Token"] != "abc" {
+		t.Fatalf("Spec.Headers 未透传：%+v", spec.Headers)
+	}
+	if _, err := applyCustomSources([]any{map[string]any{
+		"id":      "custom-header2222",
+		"name":    "坏头源",
+		"url":     "https://bad.example.com",
+		"headers": map[string]any{"Host": "evil.test"},
+	}}); err == nil {
+		t.Fatal("带非法请求头的条目必须整段拒绝")
 	}
 }

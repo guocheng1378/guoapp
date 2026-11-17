@@ -361,4 +361,30 @@ void main() {
     );
     await unmount(tester, session.player);
   });
+
+  testWidgets(
+    '竖屏沉浸：控制栏可见时从底部控制带竖滑也能立刻切集',
+    (tester) async {
+      final session = await mount(tester);
+      final area = gestureArea(tester);
+      // 进入播放器时控制栏先亮一次；settle 只推进 120ms，仍在 2.5s
+      // 自动隐藏窗口内，此时底部 26% 属于「控制带」。
+      // 旧实现会在 pointerDown 处整片吞掉手势，必须等 HUD 完全消失
+      // 才能切下一集；这里要求不等待、直接起手就能换集。
+      // 起手取控制带内、但落在按钮行上方的空白区（按钮自身的 hitTest
+      // 归控件处理，不属于这次要放行的手势区）。
+      final gesture = await tester.startGesture(
+        Offset(area.width * .30, area.bottom - area.height * .18),
+      );
+      await gesture.moveBy(Offset(0, -area.height * .28));
+      await gesture.up();
+      await settle(tester);
+      expect(
+        session.repo.requestedEpisodes,
+        contains(2),
+        reason: '控制栏可见时也不该挡住竖滑切集',
+      );
+      await unmount(tester, session.player);
+    },
+  );
 }

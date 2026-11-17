@@ -205,25 +205,41 @@ Future<void> showCatalogFilterMenu({
   List<String>? yearOptions,
   Set<String>? releaseOptions,
 }) async {
-  final anchorContext = anchorKey.currentContext;
-  final overlayBox =
-      Overlay.of(context, rootOverlay: true).context.findRenderObject();
-  if (anchorContext == null || overlayBox is! RenderBox) return;
-  final anchorBox = anchorContext.findRenderObject();
-  if (anchorBox is! RenderBox) return;
-  final topLeft = anchorBox.localToGlobal(Offset.zero, ancestor: overlayBox);
-  final anchorSize = anchorBox.size;
-  final screenSize = overlayBox.size;
+  final overlayRender = Overlay.maybeOf(
+    context,
+    rootOverlay: true,
+  )?.context.findRenderObject();
+  // 连 Overlay 都拿不到才是真没法画（正常永远拿得到）。
+  if (overlayRender is! RenderBox) return;
+  final screenSize = overlayRender.size;
+
+  // 锚点没就位时**不能静默 return**：旧实现在这里直接放弃，表现就是
+  // 「点排序筛选完全没反应」——按钮看着在、tooltip 也弹得出来，但菜单
+  // 永远不出现（红果「全部」页真机复现：≡ 点了 6 秒无任何反应，日志也
+  // 无异常）。锚点缺失只影响卡片贴哪，不该让整个功能消失：退到右上角
+  // 常规位继续弹，用户至少能用。
+  final anchorRender = anchorKey.currentContext?.findRenderObject();
+  final Rect anchorRect;
+  if (anchorRender is RenderBox) {
+    anchorRect =
+        anchorRender.localToGlobal(Offset.zero, ancestor: overlayRender) &
+        anchorRender.size;
+  } else {
+    final insets = MediaQuery.paddingOf(context);
+    anchorRect = Rect.fromLTWH(
+      screenSize.width - 56,
+      insets.top + 40,
+      40,
+      40,
+    );
+  }
 
   final dark = Theme.of(context).brightness == Brightness.dark;
   // 卡宽按「两枚四字胶囊并排 + 余量」取定，两节 chips 对齐流动。
   const cardWidth = 236.0;
-  var left = topLeft.dx + anchorSize.width - cardWidth;
+  var left = anchorRect.right - cardWidth;
   left = left.clamp(12.0, screenSize.width - cardWidth - 12);
-  final top = (topLeft.dy + anchorSize.height + 8).clamp(
-    0.0,
-    screenSize.height - 64,
-  );
+  final top = (anchorRect.bottom + 8).clamp(0.0, screenSize.height - 64);
 
   // 选中态必须挂在函数级：pageBuilder 会在 DuanjuApp 随 store 通知重建
   // MaterialApp 时整体重跑，声明写在 pageBuilder 内会被重置回打开时快照，

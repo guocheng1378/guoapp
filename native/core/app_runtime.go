@@ -1400,6 +1400,9 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 // 由本机流代理的重签路径兜底，缓存只影响「同一集短时间内重复解析」。
 const nativeResolveCacheTTL = 5 * time.Minute
 
+// nativeResolveCacheLimit 解析结果的内存条目上限（每条约含一个媒体 URL 切片）。
+const nativeResolveCacheLimit = 64
+
 // nativeResolveMedia 解析媒体信息，命中 5 分钟缓存则直接复用。
 func (engine *nativeEngine) nativeResolveMedia(ctx context.Context, task Task, input nativeInput) (providerMedia, error) {
 	key := nativeResolveCacheKey(task, input)
@@ -1422,6 +1425,22 @@ func (engine *nativeEngine) nativeResolveMedia(ctx context.Context, task Task, i
 		engine.resolveCacheMu.Lock()
 		if engine.resolveCache == nil {
 			engine.resolveCache = map[string]nativeResolveCacheEntry{}
+		}
+		// 容量上限：此前只有同 key 过期才删，换剧/换清晰度会无限累积
+		// （每条含 providerMedia 与 URL 切片）。超限时先清过期，再任意逐出一条。
+		if len(engine.resolveCache) >= nativeResolveCacheLimit {
+			now := time.Now()
+			for staleKey, entry := range engine.resolveCache {
+				if now.After(entry.expireAt) {
+					delete(engine.resolveCache, staleKey)
+				}
+			}
+			if len(engine.resolveCache) >= nativeResolveCacheLimit {
+				for oldKey := range engine.resolveCache {
+					delete(engine.resolveCache, oldKey)
+					break
+				}
+			}
 		}
 		engine.resolveCache[key] = nativeResolveCacheEntry{media: media, expireAt: time.Now().Add(nativeResolveCacheTTL)}
 		engine.resolveCacheMu.Unlock()

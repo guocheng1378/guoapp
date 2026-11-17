@@ -445,7 +445,13 @@ func (stream *nativeStreamServer) nativeServeCached(ctx context.Context, writer 
 		return true
 	}
 	// 预读还在继续时边下边发，播放器不必等整集下完。
-	_ = cache.copyGrowing(ctx, writer, start, length)
+	// 头已按 length 声明过，这里出错会直接导致播放器收到短 body（卡死/花屏），
+	// 必须留痕，不能静默丢弃。
+	if err := cache.copyGrowing(ctx, writer, start, length); err != nil &&
+		ctx.Err() == nil {
+		// 缓存层没有 engine 引用，这里直接写 stderr（与其它底层诊断同口径）。
+		fmt.Fprintf(os.Stderr, "[DBG] stream short body: %v\n", err)
+	}
 	return true
 }
 

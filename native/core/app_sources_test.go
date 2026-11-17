@@ -75,25 +75,17 @@ func awaitSourceTask(t *testing.T, engine *nativeEngine, source string) nativeSo
 
 func TestSourceUpdatesPreservePagesOtherSourcesAndMetadata(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		if strings.HasPrefix(request.URL.Path, "/video/") {
-			id := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/video/"), "/")
-			body := fmt.Sprintf(`<html><head><title>合成剧集</title></head><body>
-				<script id="o5-video-init">var videoUrl = "https://example.test/%s/index.m3u8";</script>
-				<h1 class="o5-detail__title">合成剧集</h1>
-				</body></html>`, id)
-			return sourceFixtureResponse(request, 200, body), nil
-		}
-		if !strings.HasPrefix(request.URL.Path, "/ai-") && !strings.HasPrefix(request.URL.Path, "/chigua/") {
-			return nil, errors.New("unexpected path: " + request.URL.Path)
+		target := huangguoEdgeTarget(t, request)
+		if !strings.HasPrefix(target.Path, "/api/videos/category/") {
+			return nil, errors.New("only catalog text is allowed")
 		}
 		id := "new"
-		if strings.HasSuffix(request.URL.Path, "/3/") {
+		if target.Query().Get("page") == "3" {
 			id = "continued"
 		}
-		body := fixtureHuangguoAICards(
-			struct{ id, title, cover string }{id, "合成短剧", "https://example.test/cover"},
-		)
-		return sourceFixtureResponse(request, 200, body), nil
+		return sourceFixtureResponse(request, 200, huangguoEdgeReply([]any{map[string]any{
+			"id": id, "title": "合成短剧", "description": "完整资料", "episode_count": 2,
+		}})), nil
 	})
 	engine.catalogs[sourceHuangguoAI] = []nativeDrama{{ID: "huangguoai:old", Source: sourceHuangguoAI, Title: "原有短剧", Description: "保留资料", Episodes: 2}}
 	engine.catalogStates[sourceHuangguoAI] = nativeCatalogState{Page: 2, HasMore: true}
@@ -190,6 +182,9 @@ func TestSourceJobsDeduplicateCancelAndRecoverAfterRestart(t *testing.T) {
 
 func TestSourceHealthRejectsHTML200AndPreservesFailureStage(t *testing.T) {
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
+		if response, handled := huangguoHealthEdgeResponse(t, request); handled {
+			return response, nil
+		}
 		switch {
 		case strings.HasPrefix(request.URL.Path, "/ai-") || strings.HasPrefix(request.URL.Path, "/chigua/"):
 			return sourceFixtureResponse(request, 200, fixtureHuangguoAICards(struct{ id, title, cover string }{"fixture", "合成检测剧", "https://example.test/cover"})), nil
@@ -217,6 +212,9 @@ func TestSourceHealthRejectsHTML200AndPreservesFailureStage(t *testing.T) {
 func TestSourceHealthChecksHLSKeyAndBoundedMedia(t *testing.T) {
 	var segments atomic.Int32
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
+		if response, handled := huangguoHealthEdgeResponse(t, request); handled {
+			return response, nil
+		}
 		switch {
 		case strings.HasPrefix(request.URL.Path, "/ai-") || strings.HasPrefix(request.URL.Path, "/chigua/"):
 			return sourceFixtureResponse(request, 200, fixtureHuangguoAICards(struct{ id, title, cover string }{"fixture", "合成检测剧", "https://example.test/cover"})), nil

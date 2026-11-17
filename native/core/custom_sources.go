@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -29,6 +30,7 @@ type customSourceSpec struct {
 	base     string
 	category provider.Category
 	typeID   string
+	headers  map[string]string
 }
 
 // applyCustomSources 校验并注册自定义源，返回生效 ID 列表（保持输入顺序）。
@@ -90,6 +92,7 @@ func (spec customSourceSpec) providerSpec() provider.Spec {
 		Base:               spec.base,
 		Kind:               "maccms",
 		Category:           spec.category,
+		Headers:            spec.headers,
 		Family:             provider.FamilyDuanju,
 		Searcher:           true,
 		Paged:              true,
@@ -132,7 +135,7 @@ func parseCustomSourceSpec(raw any) (customSourceSpec, bool) {
 	if !ok {
 		return customSourceSpec{}, false
 	}
-	base = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	base = normalizeCustomSourceBase(base)
 	if !validSourceBaseURL(base) {
 		return customSourceSpec{}, false
 	}
@@ -160,13 +163,60 @@ func parseCustomSourceSpec(raw any) (customSourceSpec, bool) {
 			return customSourceSpec{}, false
 		}
 	}
+	headers, ok := parseCustomSourceHeaders(entry["headers"])
+	if !ok {
+		return customSourceSpec{}, false
+	}
 	return customSourceSpec{
 		id:       id,
 		name:     name,
 		base:     base,
 		category: category,
 		typeID:   typeID,
+		headers:  headers,
 	}, true
+}
+
+// parseCustomSourceHeaders 校验自定义站源的请求头表：最多 8 条、键只含
+// 字母数字与短横线、值不含 CRLF（防头注入）、禁止覆盖 Host/Content-Length。
+// 非法条目整段拒绝，与 sourceConfig 其它段的语义一致。
+func parseCustomSourceHeaders(raw any) (map[string]string, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	entries, ok := raw.(map[string]any)
+	if !ok || len(entries) > 8 {
+		return nil, false
+	}
+	out := make(map[string]string, len(entries))
+	for key, value := range entries {
+		name := strings.TrimSpace(key)
+		text, ok := value.(string)
+		if !ok {
+			return nil, false
+		}
+		text = strings.TrimSpace(text)
+		if name == "" || text == "" || len(name) > 64 || len(text) > 512 ||
+			strings.ContainsAny(name, "\r\n") || strings.ContainsAny(text, "\r\n") {
+			return nil, false
+		}
+		for _, r := range name {
+			valid := r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' ||
+				r >= '0' && r <= '9' || r == '-'
+			if !valid {
+				return nil, false
+			}
+		}
+		lower := strings.ToLower(name)
+		if lower == "host" || lower == "content-length" {
+			return nil, false
+		}
+		out[name] = text
+	}
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, true
 }
 
 // sanitizeCustomSourceName 清理名称里的控制字符与首尾空白。
@@ -179,4 +229,42 @@ func sanitizeCustomSourceName(text string) string {
 		builder.WriteRune(r)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// normalizeCustomSourceBase 把 TVBox 等配置里常见的完整 CMS 接口地址
+// （https://host/api.php/provide/vod/?ac=videolist）归一化为站点根地址。
+// maccmsapi 会自行拼接 /api.php/provide/vod/?ac=list，若不归一化会拼出
+// 双段路径；子目录部署的站点根（如 /maccms）需要保留。
+// 规则与 Dart 侧 CustomSourceSpec.normalizeUrl 保持一致。
+func normalizeCustomSourceBase(raw string) string {
+	text := strings.TrimSpace(raw)
+	u, err := url.Parse(text)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return text
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	cut := -1
+	for i, part := range parts {
+		if strings.EqualFold(part, "api.php") {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		for i := 0; i+1 < len(parts); i++ {
+			if strings.EqualFold(parts[i], "provide") && strings.EqualFold(parts[i+1], "vod") {
+				cut = i
+				break
+			}
+		}
+	}
+	kept := parts
+	if cut >= 0 {
+		kept = parts[:cut]
+	}
+	path := ""
+	if len(kept) > 0 && kept[0] != "" {
+		path = "/" + strings.Join(kept, "/")
+	}
+	return u.Scheme + "://" + u.Host + path
 }

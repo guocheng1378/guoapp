@@ -1,7 +1,7 @@
 name: duanju_app
 description: 独立运行的多端短剧应用
 publish_to: none
-version: 0.2.96+2279
+version: 0.2.96+2281
 environment:
   sdk: '>=3.12.0 <4.0.0'
 
@@ -48,6 +48,10 @@ dependency_overrides:
   # SharedPreferencesPlugin（2135 成功是 intermediates 增量复用的假象）。
   # 约束 ^2.3.4 允许降到 Groovy 形态旧版。
   shared_preferences_android: 2.4.3
+  # file_picker 13.x 的传递依赖被 pub 解析到 2.2.0（已迁移 Built-in Kotlin，
+  # 本项目 android.builtInKotlin=false 时其 Kotlin 源 finishWithError 等全部
+  # Unresolved reference，assembleRelease 失败）。锁回 Groovy 形态的 2.1.1。
+  android_file_picker: 2.1.1
 
 flutter:
   config:

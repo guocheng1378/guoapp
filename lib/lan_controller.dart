@@ -50,6 +50,9 @@ class LanController extends ChangeNotifier with WidgetsBindingObserver {
   bool _connecting = false;
   Object? _pairing;
   bool _pinging = false;
+  /// 入站事件串行链：pair/play/sync 共用一条队列，避免并发派发导致
+  /// respond 乱序（对端只会接受每个 eventId 的第一条 respond）。
+  Future<void> _inboundEvents = Future<void>.value();
   bool _manual = false;
   bool _syncing = false;
   bool _pushing = false;
@@ -727,7 +730,10 @@ class LanController extends ChangeNotifier with WidgetsBindingObserver {
         final data = await repository.lan('poll', {'generation': generation});
         if (run != _run || _disposed) return;
         if (data['event'] != null) {
-          unawaited(_event(lanMap(data['event']), run, generation));
+          final event = lanMap(data['event']);
+          _inboundEvents = _inboundEvents
+              .catchError((Object _) {})
+              .then((_) => _event(event, run, generation));
         }
       } catch (failure) {
         if (_disposed || run != _run) return;

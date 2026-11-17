@@ -1,11 +1,11 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
-
 import 'app_icons.dart';
+import 'haptics.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
 import 'motion.dart';
@@ -20,11 +20,11 @@ import 'motion.dart';
 /// 回顶钮 σ30 模糊核：弹簧每帧重建球体时复用，避免重复分配。
 final ImageFilter fogFabBlur = ImageFilter.blur(sigmaX: 30, sigmaY: 30);
 
-/// 共用弹簧（小米 Folme 手感基准）：质量 1 / 刚度 400 / 阻尼 26。
+/// 共用弹簧（小米 Folme 手感基准）：质量 1 / 刚度 400 / 阻尼 32。
 const SpringDescription kFolmeSpring = SpringDescription(
   mass: 1,
   stiffness: 400,
-  damping: 26,
+  damping: 32,
 );
 
 /// 官方 miuix 档位换算：damping = 2·ζ·√(stiffness·mass)（mass=1）。
@@ -454,10 +454,16 @@ class FogRefresh extends StatefulWidget {
     this.threshold = 64,
     this.header,
     this.headerExtent = 0,
+    this.refreshFailed,
   });
 
   final Future<void> Function() onRefresh;
   final Widget child;
+
+  /// 刷新完成后回调：宿主返回本次是否失败。各页面都在自己的 catch 里吞掉
+  /// 异常（只写 `_error`），Future 永远正常完成，所以只能这样取回结果。
+  /// 不传则按成功处理；`onRefresh` 自身抛异常也按失败处理。
+  final bool Function()? refreshFailed;
 
   /// 刷新位时圆环顶边距滚动视口顶的距离；主页传顶栏+吸顶分类条总高
   /// + 间隙，让环停在分类条之下。
@@ -505,6 +511,24 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
   bool _startedAtTop = false;
   bool _refreshing = false;
 
+  /// 下拉是否已跨过触发阈值：跨那一刻轻震一次（「松手就会刷新」），
+  /// 回拖到阈值以下允许再次触发；真正触发时另给一次中档震动。
+  bool _thresholdBuzzed = false;
+
+  /// 本轮刷新是否失败：收场时决定震动档位、环配色与提示文案。
+  bool _lastRefreshFailed = false;
+  bool _failureBannerVisible = false;
+  Timer? _failureBannerTimer;
+
+  void _buzzThreshold() {
+    final reached = _drag >= widget.threshold;
+    if (reached == _thresholdBuzzed) return;
+    _thresholdBuzzed = reached;
+    if (reached) {
+      AppHaptics.selection();
+    }
+  }
+
   /// 阈值之后仍可继续拉的拉伸上限（环长手感余量，高度封顶 76px）。
   static const double _maxStretch = 1.3;
 
@@ -523,6 +547,8 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
     if (n is ScrollStartNotification && n.dragDetails != null) {
       // 手指落下：记录是否起步于顶缘（extentBefore==0）。
       _startedAtTop = n.metrics.extentBefore <= 0;
+      // 新一轮下拉开始：清掉上次的失败文案，别让它挂到拉伸态上。
+      _lastRefreshFailed = false;
       return false;
     }
     if (n is OverscrollNotification &&
@@ -534,6 +560,7 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
       // 进度，弹簧只负责松手收尾。
       _drag = math.min(_drag - n.overscroll, widget.threshold * _maxStretch);
       _p.jumpTo(_drag / widget.threshold);
+      _buzzThreshold();
       return false;
     }
     if (n is ScrollUpdateNotification &&
@@ -547,12 +574,14 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
       // 内容/吸顶分类条跟手缩回；缩回后继续上拖=正常滚动列表。
       _drag = math.max(0, _drag - n.scrollDelta!);
       _p.jumpTo(_drag / widget.threshold);
+      _buzzThreshold();
       return false;
     }
     if (n is ScrollEndNotification) {
       final drag = _drag;
       _drag = 0;
       _startedAtTop = false;
+      _thresholdBuzzed = false;
       if (drag > 0) {
         if (drag >= widget.threshold) {
           show();
@@ -567,6 +596,13 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
   /// 公开触发入口（与 RefreshIndicatorState.show() 同语义）。
   void show() {
     if (_refreshing) return;
+    _lastRefreshFailed = false;
+    _failureBannerTimer?.cancel();
+    _failureBannerTimer = null;
+    _failureBannerVisible = false;
+    // 松手真正触发刷新：中档震动，与跨阈值那一下轻震区分开。
+    // 收敛在这里，所有调用方（首页/榜单/站源/推荐）自动一致。
+    AppHaptics.medium();
     // 下拉触发的刷新：内容从当前位置弹簧挪到让位量（环高+间隙）停住，
     // 给小环腾出空隙、不压轮播；程序化触发（offset=0）内容原地不动。
     // 必须在 _p.to(0) 起跳前同步取值。
@@ -593,13 +629,37 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
   }
 
   Future<void> _run() async {
+    var failed = false;
     try {
       await widget.onRefresh();
+      failed = widget.refreshFailed?.call() ?? false;
+    } catch (_) {
+      // 宿主若改用抛异常表达失败，也不能让它逃逸成未处理的异步错误。
+      failed = true;
     } finally {
       if (mounted) {
         _spin.stop();
+        // 触发重建，让失败文案/环配色在场。
+        setState(() {
+          _lastRefreshFailed = failed;
+          _failureBannerVisible = failed;
+        });
+        _failureBannerTimer?.cancel();
+        _failureBannerTimer = null;
+        if (failed && !Motion.inTest) {
+          // 真机留 1.6s 读文案；测试环境不挂定时器，保留状态供断言。
+          _failureBannerTimer = Timer(const Duration(milliseconds: 1600), () {
+            if (mounted) setState(() => _failureBannerVisible = false);
+          });
+        }
+        // 完成反馈：成功轻震、失败重震，收场不再是「环淡出就结束」。
+        if (failed) {
+          AppHaptics.heavy();
+        } else {
+          AppHaptics.selection();
+        }
         // 收场：30×30 小圆原位淡出，内容让位同步弹簧归零（环与界面一起
-        // 收场），两者都落定才摘刷新态。
+        // 收场），两者都落定才摘刷新态；失败时淡出更慢，留出读文案的时间。
         if (Motion.inTest) {
           _e.value = 0;
           _hold.value = 0;
@@ -608,7 +668,10 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
           final release = _hold.animateWith(
             SpringSimulation(kFolmeSpring, _hold.value, 0, 0),
           );
-          await _e.animateBack(0, duration: const Duration(milliseconds: 160));
+          await _e.animateBack(
+            0,
+            duration: Duration(milliseconds: failed ? 420 : 160),
+          );
           await release;
           if (mounted) setState(() => _refreshing = false);
         }
@@ -618,6 +681,7 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _failureBannerTimer?.cancel();
     _e.dispose();
     _spin.dispose();
     _hold.dispose();
@@ -662,6 +726,43 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
               right: 0,
               height: widget.headerExtent,
               child: widget.header!,
+            ),
+          // 失败提示独立于环收场：环淡出后还留一小段时间，
+          // 让用户确实读到「这次没刷成功、旧内容还在」。
+          if (_failureBannerVisible)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: Transform.translate(
+                offset: Offset(0, widget.displacement + 40),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: IgnorePointer(
+                    child: Container(
+                      key: const Key('fog-refresh-failed'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.error.withValues(
+                              alpha: .92,
+                            ),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        '刷新失败 · 已保留当前内容',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onError,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           // 圆环浮层：顶边永远钉在 displacement（分类条下缘），只向下
           // 伸展、向上收回——锚点不动、宽度不变，不罩分类条。
@@ -718,25 +819,35 @@ class FogRefreshState extends State<FogRefresh> with TickerProviderStateMixin {
     required double spin,
   }) {
     final theme = Theme.of(context);
+    final failed = _refreshing && _lastRefreshFailed;
     return Transform.translate(
       offset: Offset(0, widget.displacement),
       child: Align(
         alignment: Alignment.topCenter,
-        child: Opacity(
-          opacity: alpha.clamp(0.0, 1.0),
-          child: SizedBox(
-            key: const Key('fog-refresh-ring'),
-            width: _ringWidth,
-            height: height,
-            child: CustomPaint(
-              painter: _FogRefreshRingPainter(
-                dark: theme.brightness == Brightness.dark,
-                dotColor: theme.colorScheme.primary,
-                dotAngle: spin * 2 * math.pi,
-                dotAlpha: dotAlpha.clamp(0.0, 1.0),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Opacity(
+              opacity: alpha.clamp(0.0, 1.0),
+              child: SizedBox(
+                key: const Key('fog-refresh-ring'),
+                width: _ringWidth,
+                height: height,
+                child: CustomPaint(
+                  painter: _FogRefreshRingPainter(
+                    dark: theme.brightness == Brightness.dark,
+                    dotColor: failed
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.primary,
+                    dotAngle: spin * 2 * math.pi,
+                    dotAlpha: dotAlpha.clamp(0.0, 1.0),
+                  ),
+                ),
               ),
             ),
-          ),
+            // 失败文案由 Stack 里的独立层承担（环淡出后仍要留一段时间），
+            // 环本身只负责变色，避免出现两条重复提示。
+          ],
         ),
       ),
     );

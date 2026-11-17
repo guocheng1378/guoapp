@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'admin_pin_dialog.dart';
 import 'app_icons.dart';
 import 'cloud_backup.dart';
 import 'core_bridge.dart';
@@ -139,7 +140,13 @@ class _CloudBackupScreenState extends State<CloudBackupScreen> {
       final count = await _service.restoreMergeFollow(widget.store, remote);
       return '合并完成：${count.label}';
     }
-    await _service.restoreReplace(widget.store, remote);
+    final pin = await showAdminPinDialog(
+      context,
+      title: '覆盖恢复需要密码',
+      message: '会用云端备份替换本机全部用户、追剧、历史与设置。',
+    );
+    if (pin == null || !mounted) return null;
+    await _service.restoreReplace(widget.store, remote, pin: pin);
     return '已恢复云端备份，本机数据被整体覆盖';
   });
 

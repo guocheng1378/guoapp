@@ -16,6 +16,29 @@ import 'widgets.dart';
 import 'app_icons.dart';
 import 'watch_calendar_strip.dart';
 
+/// 一个分组段落（label 为空表示不分组，直接平铺）。
+typedef _SavedSection = ({String label, List<Drama> items});
+
+/// 观看记录按天分档：今天 / 昨天 / 更早。
+///
+/// 只和本地日历日比较（同一天不同时刻都算「今天」），跨月跨年天然正确；
+/// 时钟回拨/未来时间统一算「今天」，不出现「明天」这种档。
+abstract final class HistoryDayBucket {
+  static const today = '今天';
+  static const yesterday = '昨天';
+  static const earlier = '更早';
+  static const order = [today, yesterday, earlier];
+
+  static String forTime(DateTime at, DateTime now) {
+    final day = DateTime(at.year, at.month, at.day);
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final days = todayStart.difference(day).inDays;
+    if (days <= 0) return today;
+    if (days == 1) return yesterday;
+    return earlier;
+  }
+}
+
 class SavedLibrary extends StatefulWidget {
   const SavedLibrary({
     super.key,
@@ -41,7 +64,7 @@ class SavedLibrary extends StatefulWidget {
   final ValueChanged<Drama> onContinue;
   final ValueChanged<Drama>? onDownload;
 
-  /// 追剧/最近卡 ⋯ 菜单「换个源找」：回发现页用剧名触发全源搜索；
+  /// 追剧/最近卡 ⋯ 菜单「换个源找」：回发现页用剧名触发本分组搜索；
   /// 单源变体不传该回调，菜单项自然消失。
   final ValueChanged<String>? onFindSource;
 
@@ -243,6 +266,8 @@ class _SavedLibraryState extends State<SavedLibrary> {
     final badge = state == null
         ? null
         : '${state.label}${state.hasUpdates ? ' · ${state.updateLabel}' : ''}';
+    // 封面左上角的站源小标：最近观看/追剧混源后，一眼看得出条目来自哪个源。
+    final sourceName = SourceSite.byId(drama.source)?.name;
     return DramaTile(
       key: ValueKey('saved-${drama.id}'),
       drama: drama,
@@ -251,6 +276,7 @@ class _SavedLibraryState extends State<SavedLibrary> {
       onFocus: onFocus,
       onTap: () => widget.onOpen(drama),
       onMore: () => _actions(drama),
+      sourceTag: sourceName,
       actions: DramaActionButton(
         drama: drama,
         store: widget.store,
@@ -266,6 +292,55 @@ class _SavedLibraryState extends State<SavedLibrary> {
       subtitle: watched == null
           ? (SourceSite.byId(drama.source)?.name ?? '未知源')
           : '第 ${watched.episode} 集 · ${formatPosition(watched.position)}',
+    );
+  }
+
+  /// 最近观看按天分组（今天 / 昨天 / 更早）；追剧页不分组，保持原排序。
+  /// 同一部剧只可能出现一次，分桶不重排（桶内仍是 updatedAt 倒序）。
+  List<_SavedSection> _sections(List<Drama> items) {
+    if (!widget.history || items.isEmpty) {
+      return [(label: '', items: items)];
+    }
+    final watchedAt = {
+      for (final entry in widget.store.history) entry.drama.id: entry.updatedAt,
+    };
+    final now = DateTime.now();
+    final buckets = <String, List<Drama>>{};
+    for (final drama in items) {
+      final at = watchedAt[drama.id];
+      final label = at == null
+          ? HistoryDayBucket.earlier
+          : HistoryDayBucket.forTime(at, now);
+      buckets.putIfAbsent(label, () => []).add(drama);
+    }
+    return [
+      for (final label in HistoryDayBucket.order)
+        if (buckets[label] != null) (label: label, items: buckets[label]!),
+    ];
+  }
+
+  Widget _sectionHeader(BuildContext context, String label, int count) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 2),
+      child: Row(
+        children: [
+          Text(
+            label,
+            key: ValueKey('history-section-$label'),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -477,6 +552,8 @@ class _SavedLibraryState extends State<SavedLibrary> {
             );
           }
           final padding = constraints.maxWidth < 600 ? 16.0 : 24.0;
+          final sections = _sections(items);
+          final gridWidth = constraints.maxWidth - 2 * padding;
           return CustomScrollView(
             key: PageStorageKey(
               'saved-${widget.history}-$_filter-${_search.text}',
@@ -490,25 +567,36 @@ class _SavedLibraryState extends State<SavedLibrary> {
               ),
               if (items.isEmpty)
                 SliverFillRemaining(hasScrollBody: false, child: empty)
-              else
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(
-                    padding,
-                    0,
-                    padding,
-                    20 + widget.bottomInset,
-                  ),
-                  sliver: SliverGrid(
-                    gridDelegate: dramaGridDelegate(
-                      context,
-                      constraints.maxWidth - 2 * padding,
+              else ...[
+                for (final section in sections) ...[
+                  if (section.label.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: _sectionHeader(
+                        context,
+                        section.label,
+                        section.items.length,
+                      ),
                     ),
-                    delegate: SliverChildBuilderDelegate(
-                      (_, index) => _tile(items[index]),
-                      childCount: items.length,
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      padding,
+                      0,
+                      padding,
+                      // 分组段落之间留窄缝，最后一段补足底部避让。
+                      section.label.isEmpty || section == sections.last
+                          ? 20 + widget.bottomInset
+                          : 10,
+                    ),
+                    sliver: SliverGrid(
+                      gridDelegate: dramaGridDelegate(context, gridWidth),
+                      delegate: SliverChildBuilderDelegate(
+                        (_, index) => _tile(section.items[index]),
+                        childCount: section.items.length,
+                      ),
                     ),
                   ),
-                ),
+                ],
+              ],
             ],
           );
         },

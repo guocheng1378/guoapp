@@ -20,7 +20,11 @@ class BuildVariant:
 
     @property
     def flutter_arguments(self):
-        return ['--dart-define=ALL_SOURCES=' + str(self.all_sources).lower()]
+        arguments = ['--dart-define=ALL_SOURCES=' + str(self.all_sources).lower()]
+        version = pubspec_version()
+        if version:
+            arguments.append('--dart-define=APP_VERSION=' + version)
+        return arguments
 
     @property
     def linker_flags(self):

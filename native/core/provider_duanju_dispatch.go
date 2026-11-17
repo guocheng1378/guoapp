@@ -48,12 +48,25 @@ func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID str
 }
 
 func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]Drama, error) {
+	items, _, err := d.searchDuanjuPage(ctx, source, query, 1)
+	return items, err
+}
+
+// searchDuanjuPage 让在线搜索与目录共用 page/hasMore 语义。实现
+// PagedSearcher 的源（maccms 视频源）按页拉取；只实现 Searcher 的源
+// 仍是单页结果，hasMore=false，不会每次上拉都重复第一页。
+func (d *Downloader) searchDuanjuPage(ctx context.Context, source, query string, page int) ([]Drama, bool, error) {
 	source = canonicalProviderSource(source)
-	searcher, ok := duanjuSourceFor(d, source).(provider.Searcher)
-	if !ok {
-		return nil, errors.New("该站源不支持在线搜索")
+	entry := duanjuSourceFor(d, source)
+	if paged, ok := entry.(provider.PagedSearcher); ok {
+		return paged.SearchPage(ctx, d.host(), query, page)
 	}
-	return searcher.Search(ctx, d.host(), query)
+	searcher, ok := entry.(provider.Searcher)
+	if !ok {
+		return nil, false, errors.New("该站源不支持在线搜索")
+	}
+	items, err := searcher.Search(ctx, d.host(), query)
+	return items, false, err
 }
 
 func duanjuSupportsSearch(source string) bool {

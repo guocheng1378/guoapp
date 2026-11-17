@@ -29,7 +29,7 @@ abstract final class MotionCurves {
   static const Curve emphasized = Cubic(0.2, 0, 0, 1);
 
   /// 轻弹性按压回弹（轻微过冲）。
-  static const Curve press = Cubic(0.34, 1.56, 0.64, 1);
+  static const Curve press = Cubic(0.34, 1.2, 0.64, 1);
 
   /// 退场加速。
   static const Curve exit = Curves.easeIn;

@@ -50,6 +50,13 @@ func nativeManifestValidator(header http.Header) string {
 	return ""
 }
 
+// nativeManifestVOD 判断清单是不是点播（带 #EXT-X-ENDLIST）。
+// 直播是滑动窗口：分片一直在动而部分 CDN 的 ETag/Last-Modified 不变，
+// 回放旧改写结果会让时间轴倒退或卡在同一段。
+func nativeManifestVOD(manifest string) bool {
+	return strings.Contains(manifest, "#EXT-X-ENDLIST")
+}
+
 // nativeCachedManifest 命中则返回可原样回放的改写结果。
 func (session *nativeStreamSession) nativeCachedManifest(base, validator string) (string, bool) {
 	if validator == "" || base == "" {
@@ -61,6 +68,12 @@ func (session *nativeStreamSession) nativeCachedManifest(base, validator string)
 	if !found || entry.validator != validator {
 		return "", false
 	}
+	if !nativeManifestVOD(entry.rewritten) {
+		// 旧版本可能把直播清单也缓存了：命中即丢弃，且不再参与回放。
+		session.manifestBytes -= len(entry.rewritten)
+		delete(session.manifests, base)
+		return "", false
+	}
 	// 命中即刷新使用序号，逐出按「最久没用」挑。
 	entry.seq = session.nativeNextManifestSeq()
 	session.manifests[base] = entry
@@ -69,7 +82,7 @@ func (session *nativeStreamSession) nativeCachedManifest(base, validator string)
 
 // nativeStoreManifest 记下一份改写结果，按条数与总字节双预算逐出。
 func (session *nativeStreamSession) nativeStoreManifest(base, validator, rewritten string) {
-	if validator == "" || base == "" {
+	if validator == "" || base == "" || !nativeManifestVOD(rewritten) {
 		return
 	}
 	size := len(rewritten)

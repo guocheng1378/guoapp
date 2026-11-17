@@ -20,6 +20,7 @@ import 'related_dramas.dart';
 import 'remote_widgets.dart';
 import 'widgets.dart';
 import 'sources_screen.dart';
+import 'source_search.dart';
 import 'episode_browser.dart';
 import 'follow_state.dart';
 import 'hongguo_series.dart';
@@ -50,6 +51,8 @@ class _DetailScreenState extends State<DetailScreen> {
   int _generation = 0;
   int _episodePage = 0;
   bool _expandedDescription = false;
+  // 「系列多季」折叠入口：默认收起，点开才平铺各季（移植自上游 5e3c4e9）。
+  bool _seriesExpanded = false;
   final _episodeAnchor = GlobalKey();
   final _detailScroll = ScrollController();
   final _playFocus = FocusNode(debugLabel: 'tv-detail-play');
@@ -373,9 +376,10 @@ class _DetailScreenState extends State<DetailScreen> {
     );
     return CallbackShortcuts(
       bindings: {
+        // 只接管 Esc（遥控/键盘）。Android 返回键会同时以 goBack 键事件和
+        // 系统 popRoute 两条通道到达，这里再弹一次就成「一次返回退两级」，
+        // 所以返回键一律交给系统（移植自上游 9096557）。
         const SingleActivator(LogicalKeyboardKey.escape): () =>
-            Navigator.of(context).maybePop(),
-        const SingleActivator(LogicalKeyboardKey.goBack): () =>
             Navigator.of(context).maybePop(),
       },
       child: Scaffold(
@@ -593,6 +597,11 @@ class _DetailScreenState extends State<DetailScreen> {
       title: _error != null ? '剧集信息暂时不可用' : '暂时没有可播放的集数',
       message: _error ?? '可以更新剧集信息后重试。',
       onRetry: _load,
+      // 当前源拿不到可播剧集（源站下线/失效）时，按剧名在本分组内换源找。
+      extraActions: GroupSearchButton(
+        title: widget.drama.title,
+        enabled: widget.store.sources.length > 1,
+      ),
       secondaryAction: _sourceDiagnostics,
     );
   }
@@ -873,49 +882,95 @@ class _DetailScreenState extends State<DetailScreen> {
       drama,
       widget.store.seriesDramasFor(drama),
     );
-    if (entries.isEmpty) return const SizedBox.shrink();
+    // 只有一季时没有「多季」可列，原先会渲染一颗指向自己的胶囊（纯噪声）。
+    if (entries.length < 2) return const SizedBox.shrink();
     final colors = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
     final notices = widget.store.following(drama.id)?.seriesSeasons ?? const {};
+    final current = entries.firstWhere(
+      (entry) => entry.drama.id == drama.id,
+      orElse: () => entries.first,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('相关推荐', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final entry in entries)
-                ChoiceChip(
-                  key: ValueKey('series-${entry.drama.id}'),
-                  label: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 260),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            '${entry.label} · ${entry.drama.title}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (notices[entry.drama.id]?.read == false) ...[
-                          const SizedBox(width: 6),
-                          AppIcon(AppIcons.fiberNew, size: 18, color: colors.primary),
-                        ],
-                      ],
+          // 一条入口：折叠时只报「当前季 + 共 N 部」，点开才在下方平铺各季。
+          // 上游 5e3c4e9 的意图是别让多季胶囊把剧集列表挤下一屏。
+          InkWell(
+            key: const ValueKey('series-toggle'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => setState(() => _seriesExpanded = !_seriesExpanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Text('系列多季', style: theme.textTheme.titleMedium),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${current.label} · ${current.drama.title}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                  selected: entry.drama.id == drama.id,
-                  onSelected: entry.drama.id == drama.id
-                      ? null
-                      : (_) => _openSeriesDrama(entry.drama),
-                ),
-            ],
+                  const SizedBox(width: 6),
+                  Text('共 ${entries.length} 部', style: theme.textTheme.bodySmall),
+                  AppIcon(
+                    _seriesExpanded
+                        ? AppIcons.expandLess
+                        : AppIcons.expandMore,
+                    size: 20,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
           ),
+          if (_seriesExpanded) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in entries)
+                  ChoiceChip(
+                    key: ValueKey('series-${entry.drama.id}'),
+                    label: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 260),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '${entry.label} · ${entry.drama.title}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (notices[entry.drama.id]?.read == false) ...[
+                            const SizedBox(width: 6),
+                            AppIcon(
+                              AppIcons.fiberNew,
+                              size: 18,
+                              color: colors.primary,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    selected: entry.drama.id == drama.id,
+                    onSelected: entry.drama.id == drama.id
+                        ? null
+                        : (_) => _openSeriesDrama(entry.drama),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );

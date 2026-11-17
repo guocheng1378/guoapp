@@ -4,8 +4,10 @@ import 'core_bridge.dart';
 import 'error_text.dart';
 import 'folme.dart';
 import 'glass.dart';
+import 'live_epg_sheet.dart';
 import 'live_models.dart';
 import 'live_player_screen.dart';
+import 'live_source_entry.dart';
 
 /// 电视直播页（2026-10-22）：内置双 m3u 列表源一键切换 + 自填源合并展示。
 /// 直播不进站源体系，数据全部来自 Go core `live.channels`。
@@ -16,11 +18,13 @@ class LiveScreen extends StatefulWidget {
     super.key,
     required this.repository,
     this.liveUrls = const [],
+    this.liveSources = const [],
     this.initialListId = '',
     this.onPlayChannel,
   });
   final AppRepository repository;
   final List<String> liveUrls;
+  final List<LiveSourceEntry> liveSources;
   final String initialListId;
   @visibleForTesting
   final ValueChanged<LiveChannel>? onPlayChannel;
@@ -34,6 +38,19 @@ class _LiveScreenState extends State<LiveScreen> {
   LivePage? _page;
   String _listId = '';
   String _group = '';
+
+  /// 当前分组的节目单：没有配置 EPG 源时恒为 [LiveEpg.empty]，所有 UI 自动降级。
+  LiveEpg _epg = LiveEpg.empty;
+
+  /// EPG 请求代号：切分组/刷新时丢弃过期响应，避免旧组的节目串到新组上。
+  int _epgSerial = 0;
+
+  /// 单次 EPG 请求的频道上限（与 Go 侧 liveEpgMaxRefs 对齐）。
+  static const int _epgChannelLimit = 200;
+
+  /// 频道列表请求代号：加载中连点「切换列表」会并发两个请求，后者必须赢，
+  /// 否则旧响应会把 _page/_listId 覆盖回去（显示错误列表且下次进页仍错）。
+  int _loadSerial = 0;
 
   /// 顶栏胶囊描边亮度（滚动越深越亮，回顶熄灭）——与主页同一驱动方式。
   final ValueNotifier<double> _prox = ValueNotifier<double>(0);
@@ -52,17 +69,26 @@ class _LiveScreenState extends State<LiveScreen> {
   }
 
   Future<void> _load({bool force = false}) async {
+    final serial = ++_loadSerial;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final page = await widget.repository.liveChannels(
-        listId: _listId,
-        liveUrls: widget.liveUrls,
-        force: force,
-      );
-      if (!mounted) return;
+      final page = widget.liveSources.isEmpty
+          ? await widget.repository.liveChannels(
+              listId: _listId,
+              liveUrls: widget.liveUrls,
+              force: force,
+            )
+          : await widget.repository.liveChannelsWithSources(
+              listId: _listId,
+              liveSources: widget.liveSources,
+              force: force,
+            );
+      // 切列表时旧请求可能后到：不校验代次就会把 A 的频道盖到 B 上，
+      // 界面打勾的是 B、内容是 A，且要再点一次才能纠正。
+      if (!mounted || serial != _loadSerial) return;
       setState(() {
         _loading = false;
         _page = page;
@@ -72,8 +98,10 @@ class _LiveScreenState extends State<LiveScreen> {
           _group = '';
         }
       });
+      // 频道到手后再补节目单：EPG 是增强信息，晚到不影响列表可用。
+      _loadEpg();
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || serial != _loadSerial) return;
       setState(() {
         _loading = false;
         _error = friendlyError(e);
@@ -102,6 +130,57 @@ class _LiveScreenState extends State<LiveScreen> {
     return const [];
   }
 
+  /// 为当前可见频道拉取节目单。
+  ///
+  /// 只请求当前分组的前 200 个频道：整份列表可达 3000 个，全部请求会让 xmltv
+  /// 匹配与回传体积翻十几倍，而屏幕外的节目单没有意义。
+  Future<void> _loadEpg() async {
+    final sources = [
+      for (final entry in widget.liveSources)
+        if (entry.hasEpg) entry,
+    ];
+    if (sources.isEmpty) {
+      if (mounted && !_epg.isEmpty) setState(() => _epg = LiveEpg.empty);
+      return;
+    }
+    final channels = _visibleChannels.take(_epgChannelLimit).toList();
+    if (channels.isEmpty) return;
+    final serial = ++_epgSerial;
+    try {
+      final epg = await widget.repository.liveEpg(
+        epgSources: sources,
+        channels: channels,
+      );
+      if (!mounted || serial != _epgSerial) return;
+      setState(() => _epg = epg);
+    } catch (_) {
+      // 节目单失败静默：频道列表照常可用，不弹错误。
+    }
+  }
+
+  LiveEpgChannel? _epgChannelFor(LiveChannel channel) =>
+      _epg.find(channel.name, tvgId: channel.tvgId);
+
+  /// 长按频道卡看当日节目单（与主页剧卡长按同一手势习惯）。
+  void _openEpgSheet(LiveChannel channel) {
+    final epgChannel = _epgChannelFor(channel);
+    if (epgChannel == null || epgChannel.programs.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.liveSources.any((entry) => entry.hasEpg)
+                  ? '「${channel.name}」暂无节目单数据'
+                  : '未配置节目单（EPG）地址，可在直播源管理里填写',
+            ),
+          ),
+        );
+      return;
+    }
+    showLiveEpgSheet(context, channel: epgChannel);
+  }
+
   void _openChannel(LiveChannel channel) {
     if (!channel.playable) {
       ScaffoldMessenger.of(context)
@@ -122,6 +201,7 @@ class _LiveScreenState extends State<LiveScreen> {
           channels: channels,
           initialIndex: index,
           listId: _listId,
+          epg: _epg,
         ),
       ),
     );
@@ -329,6 +409,7 @@ class _LiveScreenState extends State<LiveScreen> {
     LiveChannel channel,
   ) {
     final playable = channel.playable;
+    final banner = liveEpgBanner(_epgChannelFor(channel), DateTime.now());
     return Opacity(
       opacity: playable ? 1 : .45,
       child: Padding(
@@ -338,6 +419,8 @@ class _LiveScreenState extends State<LiveScreen> {
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
             onTap: () => _openChannel(channel),
+            // 长按看节目单：只在有 EPG 数据时提供，避免手势做了没反馈。
+            onLongPress: () => _openEpgSheet(channel),
             child: GlassSurface(
               radius: 16,
               child: Padding(
@@ -347,14 +430,34 @@ class _LiveScreenState extends State<LiveScreen> {
                     _channelAvatar(scheme, channel),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text(
-                        channel.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w500,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            channel.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          if (banner != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                banner,
+                                key: Key('live-now-${channel.name}'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                     if (!playable) ...[
@@ -407,7 +510,9 @@ class _LiveScreenState extends State<LiveScreen> {
         child: channel.logo.isEmpty
             ? placeholder()
             : Image(
-                image: NetworkImage(channel.logo),
+                // 台标显示 38px，按 2× 解码即可；源站台标常是几百 px 大图，
+                // 上千频道逐张全尺寸解码会明显吃内存/掉帧。
+                image: ResizeImage(NetworkImage(channel.logo), width: 76),
                 width: 38,
                 height: 38,
                 fit: BoxFit.cover,
@@ -430,7 +535,10 @@ class _LiveScreenState extends State<LiveScreen> {
           fontSize: 14,
           hitTarget: 48,
           proxListenable: _prox,
-          onTap: () => setState(() => _group = group),
+          onTap: () {
+            setState(() => _group = group);
+            _loadEpg();
+          },
         ),
       ),
     );

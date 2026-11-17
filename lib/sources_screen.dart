@@ -13,6 +13,8 @@ import 'local_store.dart';
 import 'models.dart';
 import 'source_status.dart';
 import 'app_icons.dart';
+import 'http_headers.dart';
+import 'tvbox_import.dart';
 
 String sourceTimestamp(DateTime? value) {
   if (value == null) return '尚无记录';
@@ -68,7 +70,9 @@ class _SourcesScreenState extends State<SourcesScreen> {
       }
       if (_ticks % 2 == 0 &&
           (_statuses.values.any((status) => status.running) ||
-              _ticks % 10 == 0)) {
+              // 空闲兜底轮询从 10s 放宽到 30s：此前停在站源页会每 10 秒
+              // 把全部源（最多 25 个）并发拉一遍，纯耗流量与电量。
+              _ticks % 30 == 0)) {
         unawaited(_refresh());
       }
     });
@@ -250,6 +254,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
     final nameController = TextEditingController();
     final urlController = TextEditingController();
     final typeIdController = TextEditingController();
+    final agentController = TextEditingController();
+    final headerController = TextEditingController();
     var category = 'shortDrama';
     final confirmed = await showFloatingDialog<bool>(
       context: context,
@@ -273,8 +279,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
               key: const ValueKey('custom-source-url'),
               controller: urlController,
               decoration: const InputDecoration(
-                labelText: '接口地址（http/https）',
-                hintText: 'https://example.com/api.php/provide/vod',
+                labelText: '站点根地址（http/https）',
+                hintText: 'https://example.com（完整 api 地址会自动识别）',
               ),
             ),
             const SizedBox(height: 12),
@@ -297,6 +303,24 @@ class _SourcesScreenState extends State<SourcesScreen> {
                 labelText: '分类 ID（可选，源站 type_id）',
               ),
             ),
+            TextField(
+              key: const ValueKey('custom-source-agent'),
+              controller: agentController,
+              decoration: const InputDecoration(
+                labelText: '自定义 UA（可选）',
+                hintText: 'Mozilla/5.0 …',
+              ),
+            ),
+            TextField(
+              key: const ValueKey('custom-source-headers'),
+              controller: headerController,
+              maxLines: 2,
+              minLines: 1,
+              decoration: const InputDecoration(
+                labelText: '自定义请求头（可选）',
+                hintText: '{"Referer":"https://…"}',
+              ),
+            ),
           ],
         ),
       ),
@@ -313,11 +337,17 @@ class _SourcesScreenState extends State<SourcesScreen> {
       ],
     );
     final name = nameController.text;
-    final url = urlController.text;
+    // Go 核心会自行拼 /api.php/provide/vod/，完整接口地址必须归一到站点根，
+    // 否则会拼出双段路径（TVBox 配置的 api 字段就是完整地址写法）。
+    final url = CustomSourceSpec.normalizeUrl(urlController.text);
     final typeId = typeIdController.text;
+    final agent = agentController.text;
+    final headers = parseHttpHeaders(headerController.text);
     nameController.dispose();
     urlController.dispose();
     typeIdController.dispose();
+    agentController.dispose();
+    headerController.dispose();
     if (confirmed != true || !mounted) return;
     try {
       await widget.store.addCustomSource(
@@ -325,6 +355,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
         url: url,
         category: category,
         typeId: typeId,
+        agent: agent,
+        headers: headers,
       );
     } catch (error) {
       _showMessage(friendlyError(error));
@@ -333,6 +365,24 @@ class _SourcesScreenState extends State<SourcesScreen> {
     // store 已注册进 SourceSite（站源菜单即时可见），这里全量下发 Go 核心。
     await widget.repository.setCustomSources(widget.store.customSources);
     _showMessage('自定义站源已添加');
+  }
+
+  /// 批量导入 TVBox 配置里的 CMS 站源与 m3u/txt 直播订阅。
+  Future<void> _importTvbox() async {
+    final plan = await showTvboxImportDialog(context);
+    if (plan == null || !mounted) return;
+    final outcome = await applyTvboxImport(
+      store: widget.store,
+      publish: (sources) => widget.repository.setCustomSources(sources),
+      plan: plan,
+    );
+    if (outcome.sitesAdded > 0) unawaited(_refresh());
+    if (!mounted) return;
+    _showMessage(
+      outcome.errors.isEmpty
+          ? outcome.summary
+          : '${outcome.summary}\n${outcome.errors.first}',
+    );
   }
 
   /// 删除自定义站源：本地落盘 + 全量下发 Go 核心 + 清理本页轮询状态。
@@ -408,13 +458,20 @@ class _SourcesScreenState extends State<SourcesScreen> {
           flexibleSpace: const TopFog(),
           title: const Text('站源管理'),
           actions: [
-            if (widget.store.profile.admin)
+            if (widget.store.profile.admin) ...[
               IconButton(
                 key: const ValueKey('sources-add-custom'),
                 tooltip: '添加自定义站源',
                 onPressed: _showAddCustomDialog,
                 icon: AppIcon(AppIcons.add),
               ),
+              IconButton(
+                key: const ValueKey('sources-import-tvbox'),
+                tooltip: '导入 TVBox 配置（站源 + 直播源）',
+                onPressed: _importTvbox,
+                icon: AppIcon(AppIcons.cloudDownload),
+              ),
+            ],
             if (widget.store.profile.admin && sources.isNotEmpty) ...[
               IconButton(
                 key: const ValueKey('sources-enable-all'),
@@ -435,10 +492,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 960),
             child: FogRefresh(
-              onRefresh: () {
-                HapticFeedback.mediumImpact();
-                return _refresh();
-              },
+              onRefresh: () => _refresh(),
+              refreshFailed: () => _errors.isNotEmpty,
               // 胶囊停在视口顶 6px（视口顶已在顶栏之下）。
               displacement: 6,
               child: ListView(
@@ -469,6 +524,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
   String _categoryIdOf(SourceSite site) {
     if (site.inHuangguoCategory) return 'huangguo';
     if (site.isAdultSource) return 'adult';
+    if (site.isLocalSource) return 'local';
     if (site.isShortDrama) return 'short';
     return 'video';
   }
@@ -486,7 +542,10 @@ class _SourcesScreenState extends State<SourcesScreen> {
         .where((site) => !site.inHuangguoCategory)
         .toList();
     final shortDrama = rest.where((site) => site.isShortDrama).toList();
-    final video = rest.where((site) => site.isVideoSource).toList();
+    final video = SourceSite.orderVideoGroup(
+      rest.where((site) => site.isVideoSource),
+    );
+    final local = rest.where((site) => site.isLocalSource).toList();
     final adult = rest.where((site) => site.isAdultSource).toList();
     return [
       if (shortDrama.isNotEmpty)
@@ -506,6 +565,15 @@ class _SourcesScreenState extends State<SourcesScreen> {
           icon: AppIcon(AppIcons.movie, size: 20),
           subtitle: '横版播放 · 多线路与清晰度',
           sources: video,
+        ),
+      if (local.isNotEmpty)
+        _categorySection(
+          id: 'local',
+          title: '本地类',
+          count: local.length,
+          icon: AppIcon(AppIcons.folder, size: 20),
+          subtitle: '本地配置包导入 · 独立分区',
+          sources: local,
         ),
       if (huangguo.isNotEmpty)
         _categorySection(

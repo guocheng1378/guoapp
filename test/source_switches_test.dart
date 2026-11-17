@@ -14,8 +14,8 @@ void main() {
     addTearDown(store.dispose);
     final ids = [for (final site in SourceSite.values) site.id];
     // 受限站源（黄果类）与需登录站源（青空，2026-10-30）默认关闭，
-    // 因此初始可见数量少于全部站源。
-    expect(store.sources.length, allSourcesEnabled ? 19 : 1);
+    // 因此初始可见数量少于全部站源。韩小圈与云追（yunzhui）不属受限名单，默认可见。
+    expect(store.sources.length, allSourcesEnabled ? 21 : 1);
 
     // 青空：站点加账号墙（登录+滑块验证码才能播放，2026-10-30 真网取证），
     // 默认关闭；不属受限名单，无需管理员密码即可手动开启。

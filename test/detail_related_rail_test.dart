@@ -1,3 +1,4 @@
+import 'package:duanju_app/app_build.dart';
 import 'package:duanju_app/app_theme.dart';
 import 'package:duanju_app/core_bridge.dart';
 import 'package:duanju_app/detail_screen.dart';
@@ -111,6 +112,16 @@ class _NavSpy extends NavigatorObserver {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // 本文件 fixture 锚点全是 dongpiandi 源；默认变体只有 hongguo 源，简介页
+  // 会被 store.allowsSource 门控拦掉主体、整条 rail 不挂载。全源专属，跳过。
+  if (!allSourcesEnabled) {
+    test(
+      '需要 ALL_SOURCES=true 的全源变体',
+      () {},
+      skip: '默认变体仅 hongguo 源，dongpiandi 相关推荐 rail 不挂载',
+    );
+    return;
+  }
 
   Future<LocalStore> localStore() async {
     // 默认档案受保护 + forceLogin 缺省开启 → store 自锁，简介页只渲染

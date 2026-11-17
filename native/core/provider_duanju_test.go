@@ -41,8 +41,8 @@ func TestDuanjuRegistryKeepsDistinctIdentitiesFromExistingSources(t *testing.T) 
 			real = append(real, spec)
 		}
 	}
-	if len(real) != 35 {
-		t.Fatalf("duanju catalog should register 35 sources, got %d", len(real))
+	if len(real) != 36 {
+		t.Fatalf("duanju catalog should register 36 sources, got %d", len(real))
 	}
 	for _, spec := range real {
 		if seen[spec.ID] {
@@ -120,6 +120,63 @@ func TestDuanjuMaccmsAPIParsesCatalogDetailAndSearch(t *testing.T) {
 	found, err := d.searchDuanju(context.Background(), sourceYingshigongchang, "样本")
 	if err != nil || len(found) != 1 || found[0].ID != "yingshigongchang:77" {
 		t.Fatalf("maccms-api search failed: %+v %v", found, err)
+	}
+}
+
+// 视频源的搜索页码必须一路透到源站：core 若丢掉 page，Dart 侧上拉加载
+// 拿到的还是第一页。上游 fork 的做法正是让搜索与目录共用带 page 的请求。
+func TestDuanjuSearchPagePassesPageToMaccmsAPI(t *testing.T) {
+	var got url.Values
+	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
+		got = request.URL.Query()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"code":1,"page":2,"pagecount":3,"total":48,"list":[{"vod_id":77,"vod_name":"搜索样本","type_name":"短剧"}]}`))
+	})
+	d.providerHosts[sourceYingshigongchang] = server.URL
+
+	items, more, err := d.searchDuanjuPage(context.Background(), sourceYingshigongchang, "样本", 2)
+	if err != nil {
+		t.Fatalf("分页搜索失败: %v", err)
+	}
+	if got.Get("wd") != "样本" || got.Get("pg") != "2" {
+		t.Fatalf("搜索参数应携带 wd 与 pg=2: %v", got)
+	}
+	if !more {
+		t.Fatal("pagecount=3 时应还有下一页")
+	}
+	if len(items) != 1 || items[0].ID != "yingshigongchang:77" {
+		t.Fatalf("分页搜索结果异常: %+v", items)
+	}
+	if items[0].CategoryName != "短剧" {
+		t.Fatalf("搜索结果应复用目录的完整字段映射: %+v", items[0])
+	}
+}
+
+// 聚合搜索会向同类所有源发 query；不支持在线搜索的源不应再抛错刷错误
+// 横幅，而应回落在已加载剧库里本地筛选（搜索框提示的本机筛选语义）。
+func TestDuanjuSearchWithoutOnlineSupportUsesLocalLibrary(t *testing.T) {
+	engine := &nativeEngine{
+		directory: t.TempDir(),
+		catalogs: map[string][]nativeDrama{
+			sourceShandian: {
+				{ID: "shandian:1", Source: sourceShandian, Title: "都市夜归人"},
+				{ID: "shandian:2", Source: sourceShandian, Title: "山海情"},
+			},
+		},
+	}
+	result, err := engine.nativeCatalog(context.Background(), nativeInput{
+		Source: sourceShandian,
+		Query:  "都市",
+		Page:   1,
+	})
+	if err != nil {
+		t.Fatalf("不支持在线搜索的源应回落本地筛选而非报错: %v", err)
+	}
+	if !result.LocalSearch {
+		t.Fatal("应标记为本地筛选结果")
+	}
+	if len(result.Items) != 1 || result.Items[0].ID != "shandian:1" {
+		t.Fatalf("本地筛选结果不符: %+v", result.Items)
 	}
 }
 

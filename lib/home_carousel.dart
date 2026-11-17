@@ -3,9 +3,8 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
 import 'core_bridge.dart';
+import 'haptics.dart';
 import 'featured_catalog.dart';
 import 'local_store.dart';
 import 'models.dart';
@@ -348,7 +347,7 @@ class _CarouselCardState extends State<_CarouselCard> {
         setState(() => _pressed = false);
       },
       onTap: () {
-        HapticFeedback.selectionClick();
+        AppHaptics.selection();
         widget.onOpen(drama);
       },
       child: AnimatedScale(

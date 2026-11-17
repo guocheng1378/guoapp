@@ -66,11 +66,27 @@ func (manager *nativeDownloads) transferMedia(ctx context.Context, job nativeDow
 	}
 	fingerprint := sha256.Sum256([]byte(identity))
 	marker := filepath.Join(directory, ".bundle")
-	previous, _ := os.ReadFile(marker)
-	if len(previous) > 0 && string(previous) != hex.EncodeToString(fingerprint[:]) {
-		if err := os.RemoveAll(directory); err != nil {
+	previous, readErr := os.ReadFile(marker)
+	replaced := ""
+	committed := false
+	if readErr == nil && len(previous) > 0 && string(previous) != hex.EncodeToString(fingerprint[:]) {
+		// 分片身份变化（换源/站点更新地址）：先把旧目录整体挪到 <dir>.old，
+		// 新文件全部写好后再删。绝不能先 RemoveAll——那样一旦新下载失败，
+		// 用户原本完整的一集（含 index.m3u8）就凭空消失了。
+		replaced = directory + ".old"
+		_ = os.RemoveAll(replaced)
+		if err := os.Rename(directory, replaced); err != nil {
 			return nativeDownloadResult{}, errors.New("无法替换旧的下载文件")
 		}
+		defer func() {
+			if committed {
+				_ = os.RemoveAll(replaced)
+				return
+			}
+			// 新文件没下成：清掉半成品、把旧目录挪回来，至少保住可播放的旧集。
+			_ = os.RemoveAll(directory)
+			_ = os.Rename(replaced, directory)
+		}()
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nativeDownloadResult{}, errors.New("无法创建下载文件，请检查存储空间")
@@ -119,6 +135,7 @@ func (manager *nativeDownloads) transferMedia(ctx context.Context, job nativeDow
 		}
 	}
 	manager.progress(job.ID, completedBytes, completedBytes, 1)
+	committed = true
 	return nativeDownloadResult{file: entry, key: hex.EncodeToString(media.CENCKey), quality: bundle.quality}, nil
 }
 
@@ -230,7 +247,13 @@ func (manager *nativeDownloads) downloadFileAttempt(ctx context.Context, address
 	if key && (total > 64 || offset > 0) {
 		return 0, false, errors.New("视频密钥格式无效")
 	}
-	metadata := nativeDownloadFileState{URL: address, Validator: validator, Total: total}
+	metadataTotal := total
+	if metadataTotal < 0 {
+		// 无 Content-Length（chunked）：未知大小按 0 记。把 -1 写进续传元数据会让
+		// `old.Total > 0` 的片长变化比较失效，也无法在完成后校验字节数。
+		metadataTotal = 0
+	}
+	metadata := nativeDownloadFileState{URL: address, Validator: validator, Total: metadataTotal}
 	encoded, _ := json.Marshal(metadata)
 	if err := nativeDownloadWrite(target+".json", encoded); err != nil {
 		return 0, false, err

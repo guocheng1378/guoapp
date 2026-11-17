@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'live_epg_sheet.dart';
 import 'live_models.dart';
 import 'live_route_memory.dart';
 
@@ -45,6 +46,7 @@ class LivePlayerScreen extends StatefulWidget {
     required this.channels,
     this.initialIndex = 0,
     this.listId = '',
+    this.epg = LiveEpg.empty,
     this.playerFactory,
     this.videoBuilder,
   });
@@ -58,6 +60,9 @@ class LivePlayerScreen extends StatefulWidget {
   final int initialIndex;
   /// 线路记忆的列表键：进台优先用上次手动选中的线路（见 LiveRouteMemory）。
   final String listId;
+
+  /// 列表页已拉到的节目单快照：只用于 OSD 显示当前/下一档，不在播放期发请求。
+  final LiveEpg epg;
   @visibleForTesting
   final Player Function()? playerFactory;
   @visibleForTesting
@@ -112,6 +117,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
   String _osd = '';
   Timer? _hideTimer;
   Timer? _osdTimer;
+  /// 节目单进度条的 1s 心跳：原来只在控制层显隐/换台时重建，进度条会一直
+  /// 停在打开时刻的比例。
+  Timer? _clockTimer;
   double _dragAccum = 0;
 
   @override
@@ -150,6 +158,10 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     );
     _openInitial();
     _scheduleHide();
+    // 节目单进度条需要按秒推进；只在直播播放页存在，离开即 cancel。
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -157,6 +169,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     _closed = true;
     _hideTimer?.cancel();
     _osdTimer?.cancel();
+    _clockTimer?.cancel();
     _frameTimer?.cancel();
     _graceTimer?.cancel();
     _failureTimer?.cancel();
@@ -506,6 +519,77 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
     );
   }
 
+  /// 顶栏标题块：台名 + 当前/下一档节目 + 2px 播放进度。
+  /// 没有 EPG 时与旧版一致（只显示台名），不额外占高。
+  Widget _titleBlock() {
+    final epgChannel = widget.epg.find(
+      _channel.name,
+      tvgId: _channel.tvgId,
+    );
+    final current = epgChannel?.now;
+    final next = epgChannel?.next;
+    final subtitle = current != null
+        ? '正在播 · ${current.title}'
+        : (next != null ? '${liveEpgClock(next.start)} ${next.title}' : '');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          _channel.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        if (subtitle.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    subtitle,
+                    key: const Key('live-player-now'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ),
+                if (current != null)
+                  Text(
+                    '${liveEpgClock(current.start)}-${liveEpgClock(current.start.add(current.duration))}',
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        if (current != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 3, right: 12),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: current.progressAt(DateTime.now()),
+                minHeight: 2,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white70),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildControls() {
     return Stack(
       children: [
@@ -635,18 +719,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen> {
                       onPressed: () => Navigator.of(context).maybePop(),
                       tooltip: '返回',
                     ),
-                    Expanded(
-                      child: Text(
-                        _channel.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
+                    Expanded(child: _titleBlock()),
+
+
                     if (_channel.group.trim().isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(right: 12),

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,15 +54,22 @@ type nativeDownloadResult struct {
 }
 
 type nativeDownloads struct {
-	mu          sync.Mutex
-	root        string
-	engine      *nativeEngine
-	jobs        map[string]*nativeDownloadRecord
-	active      map[string]context.CancelFunc
-	closed      bool
-	moving      bool
-	mediaBusy   bool
-	loadErr     error
+	mu   sync.Mutex
+	root string
+	// migrationLeftover 记录上次下载目录迁移后没能删掉的旧目录位置，
+	// 由 downloadDirectory / moveDownloads 回传界面提示清理。读写均在
+	// mu 保护下进行。
+	migrationLeftover string
+	engine            *nativeEngine
+	jobs              map[string]*nativeDownloadRecord
+	active            map[string]context.CancelFunc
+	closed            bool
+	moving            bool
+	mediaBusy         bool
+	loadErr           error
+	// batchSave 为 true 时单条控制操作只改内存，由批量调用方统一落盘
+	// （500 条批量操作逐条 Marshal + Sync 整份索引会把 UI 卡十几秒）。受 mu 保护。
+	batchSave   bool
 	workers     sync.WaitGroup
 	lastSaved   time.Time
 	concurrency int
@@ -110,35 +118,16 @@ func (manager *nativeDownloads) load() error {
 		return errors.New("无法创建下载目录，请检查存储空间和权限")
 	}
 	path := filepath.Join(manager.root, "index.json")
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil
+	records, err := readNativeDownloadIndex(path)
+	if err != nil {
+		// 主索引损坏（断电写半截/磁盘错误）时回退上一份备份：mp4 都还在盘上，
+		// 不该因为索引读不出来就让整个下载库不可见、且后续写入永久锁死。
+		if backup, backupErr := readNativeDownloadIndex(path + ".bak"); backupErr == nil {
+			records, err = backup, nil
+		}
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
-		return errors.New("无法读取下载记录，原文件已保留")
-	}
-	data, err := os.ReadFile(path)
-	var records []*nativeDownloadRecord
-	if err != nil || json.Unmarshal(data, &records) != nil || records == nil {
-		return errors.New("下载记录无法解析，原文件已保留")
-	}
-	seen := map[string]bool{}
-	for _, record := range records {
-		if record == nil || record.Index < 1 || record.ID != nativeDownloadID(record.Drama.ID, record.Index) || seen[record.ID] {
-			return errors.New("下载记录条目无效，原索引和文件已保留")
-		}
-		seen[record.ID] = true
-		if record.Folder != "" && record.Folder != record.Drama.Source+"/"+record.ID {
-			return errors.New("下载目录记录无效，原文件已保留")
-		}
-		if record.File != "" && record.File != "media.mp4" && record.File != "index.m3u8" {
-			return errors.New("下载记录文件信息无效，原索引和文件已保留")
-		}
-		switch record.State {
-		case "removing", "downloading", "queued", "paused", "failed", "completed":
-		default:
-			return errors.New("下载记录状态无效，原索引和文件已保留")
-		}
+	if err != nil {
+		return err
 	}
 	for _, record := range records {
 		record.Drama = migrateNativeDrama(record.Drama)
@@ -164,6 +153,52 @@ func (manager *nativeDownloads) load() error {
 	return nil
 }
 
+// readNativeDownloadIndex 读取并校验一份索引；只读盘，不做任何写入。
+func readNativeDownloadIndex(path string) ([]*nativeDownloadRecord, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
+		return nil, errors.New("无法读取下载记录，原文件已保留")
+	}
+	data, err := os.ReadFile(path)
+	var records []*nativeDownloadRecord
+	if err != nil || json.Unmarshal(data, &records) != nil || records == nil {
+		return nil, errors.New("下载记录无法解析，原文件已保留")
+	}
+	seen := map[string]bool{}
+	for _, record := range records {
+		if record == nil || record.Index < 1 || record.ID != nativeDownloadID(record.Drama.ID, record.Index) || seen[record.ID] {
+			return nil, errors.New("下载记录条目无效，原索引和文件已保留")
+		}
+		seen[record.ID] = true
+		if record.File != "" && record.File != "media.mp4" && record.File != "index.m3u8" {
+			return nil, errors.New("下载记录文件信息无效，原索引和文件已保留")
+		}
+		switch record.State {
+		case "removing", "downloading", "queued", "paused", "failed", "completed":
+		default:
+			return nil, errors.New("下载记录状态无效，原索引和文件已保留")
+		}
+		// Folder 只收紧「不许逃出下载根」：旧版本按源分目录写过 folder，用户
+		// 关掉 downloadBySource 后不能因此拒绝整份索引（jobDirectory 本身也带
+		// 前缀断言）。带 ".." 或绝对路径的值就地丢弃，回落到 <root>/<ID>。
+		if record.Folder != "" && !nativeDownloadFolderSafe(record.Folder) {
+			record.Folder = ""
+		}
+	}
+	return records, nil
+}
+
+func nativeDownloadFolderSafe(folder string) bool {
+	cleaned := filepath.Clean(filepath.FromSlash(folder))
+	if cleaned == "." || filepath.IsAbs(cleaned) || strings.Contains(cleaned, "..") {
+		return false
+	}
+	return true
+}
+
 func nativeDownloadWrite(path string, data []byte) error {
 	file, err := os.CreateTemp(filepath.Dir(path), ".download-write-")
 	if err != nil {
@@ -183,6 +218,11 @@ func nativeDownloadWrite(path string, data []byte) error {
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	// 覆盖前把旧索引留一份 .bak：真写坏了（断电/磁盘满）load 还能回退。
+	if _, statErr := os.Stat(path); statErr == nil {
+		_ = os.Remove(path + ".bak")
+		_ = os.Rename(path, path+".bak")
 	}
 	return os.Rename(temporary, path)
 }
@@ -229,6 +269,26 @@ func (manager *nativeDownloads) snapshot() ([]nativeDownloadJob, error) {
 		return jobs[i].Created > jobs[j].Created
 	})
 	return jobs, nil
+}
+
+// snapshotSince 返回下载列表快照，并附带内容指纹（jobs 序列化后的 sha256 前 8 字节）。
+// since 与当前指纹相同时只回指纹、不带 jobs：界面 2 秒一次的轮询在状态没变时
+// 不必再序列化整张列表、跨语言传输再由 Dart 重建一遍。
+func (manager *nativeDownloads) snapshotSince(since string) (map[string]any, error) {
+	jobs, err := manager.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(jobs)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(data)
+	fingerprint := hex.EncodeToString(hash[:8])
+	if since == fingerprint {
+		return map[string]any{"fingerprint": fingerprint}, nil
+	}
+	return map[string]any{"jobs": json.RawMessage(data), "fingerprint": fingerprint}, nil
 }
 
 func (manager *nativeDownloads) enqueue(input nativeInput) (int, error) {
@@ -399,11 +459,13 @@ func (manager *nativeDownloads) controlExpected(id, action, version string) erro
 	default:
 		return errors.New("不支持的下载操作")
 	}
-	if err := manager.saveLocked(); err != nil {
-		for key, value := range previous {
-			*manager.jobs[key] = value
+	if !manager.batchSave {
+		if err := manager.saveLocked(); err != nil {
+			for key, value := range previous {
+				*manager.jobs[key] = value
+			}
+			return err
 		}
-		return err
 	}
 	for _, key := range cancelIDs {
 		if cancel := manager.active[key]; cancel != nil {
@@ -414,14 +476,18 @@ func (manager *nativeDownloads) controlExpected(id, action, version string) erro
 		job := manager.jobs[id]
 		if err := os.RemoveAll(manager.jobDirectory(job.nativeDownloadJob)); err != nil {
 			job.Error = "文件正在使用或无法删除，请退出播放后重试"
-			_ = manager.saveLocked()
+			if !manager.batchSave {
+				_ = manager.saveLocked()
+			}
 			return errors.New(job.Error)
 		}
 		delete(manager.jobs, id)
-		if err := manager.saveLocked(); err != nil {
-			job.Error = "文件已删除，记录尚未清理，请重试"
-			manager.jobs[id] = job
-			return err
+		if !manager.batchSave {
+			if err := manager.saveLocked(); err != nil {
+				job.Error = "文件已删除，记录尚未清理，请重试"
+				manager.jobs[id] = job
+				return err
+			}
 		}
 	}
 	manager.scheduleLocked()
@@ -469,8 +535,16 @@ func (manager *nativeDownloads) progress(id string, downloaded, total int64, pro
 		return
 	}
 	job.Bytes, job.Total, job.Progress = downloaded, total, max(0, min(progress, 1))
-	if time.Since(manager.lastSaved) >= time.Second {
-		_ = manager.saveLocked()
+	// 落盘节流从 1s 放宽到 3s：每个 worker 每秒全量 Marshal 整份 index.json
+	// （上限 32MB）会与快照轮询抢 manager.mu，进度观感上 3s 粒度足够。
+	// 写盘失败不再静默——记录诊断，便于排查「重启后进度回退」。
+	if time.Since(manager.lastSaved) >= 3*time.Second {
+		if err := manager.saveLocked(); err != nil {
+			manager.engine.downloader.recordDiagnostic(diagnosticEvent{
+				Event:   "download_index_save_failed",
+				Message: err.Error(),
+			})
+		}
 	}
 }
 
@@ -509,7 +583,12 @@ func (manager *nativeDownloads) run(ctx context.Context, job nativeDownloadJob) 
 		}
 	}
 	if saveErr := manager.saveLocked(); saveErr != nil && manager.jobs[job.ID] != nil {
-		record.State, record.Error = "failed", saveErr.Error()
+		// 不伪造状态迁移：此刻文件可能已经落盘（completed）或已经删除
+		// （removing）。改状态会让 UI 显示「失败」而文件其实完好，或反过来。
+		// 只把原因挂上去，由下一次落盘/重启的 load() 按真实状态收尾。
+		if record.State != "completed" {
+			record.Error = "下载记录未能保存：" + saveErr.Error()
+		}
 	}
 	manager.scheduleLocked()
 }

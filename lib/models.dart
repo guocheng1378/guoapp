@@ -6,6 +6,11 @@ enum SourceCategory {
   shortDrama,
   video,
   adult,
+
+  /// 本地配置文件包（手机里的 TVBox .json/.txt 离线导入）专属分区：
+  /// 只做界面归类，下发给 Go 核心的 category 仍是解析出的真实内容类型
+  /// （核心只认短剧/视频/成人三枚举，不新增本地档）。
+  local,
 }
 
 class SourceSite {
@@ -21,6 +26,7 @@ class SourceSite {
   bool get isShortDrama => category == SourceCategory.shortDrama;
   bool get isVideoSource => category == SourceCategory.video;
   bool get isAdultSource => category == SourceCategory.adult;
+  bool get isLocalSource => category == SourceCategory.local;
 
   /// 黄果类成员：黄果系入口（AI/旧版/视频）+ 黄豆/野果/剧果。
   /// 既是受限站源名单（默认关闭、开启要管理员密码，见 isRestricted），
@@ -32,12 +38,16 @@ class SourceSite {
     'huangdou',
     'yeguo',
     'huangju',
+    'heitao',
+    // 上游「禁果短剧」与黄果旧版同源后台，按黄果类归拢（默认关闭）。
+    'jinguoduanju',
   };
   bool get inHuangguoCategory => huangguoCategoryIds.contains(id);
 
-  /// 站源四分类口径：短剧类 / 视频类 / 黄果类 / 成人类。
+  /// 站源五分类口径：短剧类 / 视频类 / 本地类 / 黄果类 / 成人类。
   /// 黄果类优先级高于内容类型——黄果系入口自成一类，不与短剧类、视频类混；
-  /// 界面分区、精选轮换、豆瓣选片的搜索目标、榜单归属、本地榜统计统一用它判定「同类」。
+  /// 界面分区、精选轮换、榜单归属、本地榜统计统一用它判定「同类」；
+  /// 豆瓣选片的同名跳转按它分桶轮转，保证各大类都有候选站源。
   String get classKey => inHuangguoCategory ? 'huangguo' : category.name;
 
   /// 四分类显示名（与首页站源菜单、站源管理页口径一致）。
@@ -45,12 +55,16 @@ class SourceSite {
     'huangguo' => '黄果类',
     'shortDrama' => '短剧类',
     'adult' => '成人类',
+    'local' => '本地类',
     _ => '视频类',
   };
 
   bool? get shortPlayOverride => _shortPlay[id];
   bool get onlineSearch => id == 'hongguo' || pagedSearch;
-  bool get pagedSearch => id == 'huangju' || duanjuPaged;
+  // 黄果 AI / 黑桃走站点在线搜索接口（/api/search 与 /vod/search/wd/），
+  // 两者都按页返回 hasMore，与 Go 侧 nativeCatalog 的 query 分支对应。
+  bool get pagedSearch =>
+      id == 'huangju' || id == 'huangguoai' || id == 'heitao' || duanjuPaged;
   bool get duanjuPaged => const {
     'yingshigongchang',
     'hongniu',
@@ -60,6 +74,7 @@ class SourceSite {
     'zy155', 'yutu', 'fanhao', 'lsbzy', 'hsck', 'danaizi',
     'jkun', 'lebo', 'senlin', 'doudou', 'didi', 'heiliao',
     'taohua', 'souav',
+    'yunzhui',
   }.contains(id);
   bool get searchSuggestions => id == 'hongguo';
   // 各入口（含黄果系 AI/旧版/视频）各自成组：主界面站源菜单与站源管理页
@@ -102,6 +117,7 @@ class SourceSite {
     SourceSite('wangguo', '短剧网站', 'maccms · 短剧聚合'),
     SourceSite('faguo', '168 影院', 'maccms · 影视采集'),
     SourceSite('wuguo', '五五', 'maccms · 短剧采集'),
+    SourceSite('yunzhui', '云追', '影视聚合，带日榜/总榜'),
   ];
   // adultValues：成人采集源（maccms 接口），界面归「成人类」独立分区；
   // 属受限名单（isRestricted），默认关闭、开启需管理员密码。
@@ -111,6 +127,8 @@ class SourceSite {
     'zy155', 'yutu', 'fanhao', 'lsbzy', 'hsck', 'danaizi',
     'jkun', 'lebo', 'senlin', 'doudou', 'didi', 'heiliao',
     'taohua', 'souav', 'ckzy', 'aosika',
+    // 上游「笔盒」是成人视频站，按成人类归档（受限，默认关闭）。
+    'beabox',
   };
   static const adultValues = [
     SourceSite('zy155', '155', 'maccms · m3u8 · 可播放'),
@@ -135,12 +153,35 @@ class SourceSite {
   // douban 是榜单专用源：只提供排行榜数据，无目录/搜索/播放能力，
   // 仅登记进 allValues 供 byId 解析分组名，不进 knownValues 站源菜单。
   static const douban = SourceSite('douban', '豆瓣', '榜单 · 电影/剧集');
+  // 上游（Xanerix/guoapp）移植的三个内置站源，已进 knownValues 站源菜单。
+  // 本地核心（native/provider）已移植对应 Go provider，分类口径：
+  // 笔盒→成人类（受限默认关闭）、禁果短剧→黄果类（受限默认关闭）、
+  // 韩小圈→视频类。旧备份、远程站源配置与自定义源解析到这些 id 时
+  // 也能落到正确分区。
+  static const beabox = SourceSite('beabox', '笔盒', '成人视频 · 热门标签');
+  static const jinguoduanju = SourceSite(
+    'jinguoduanju',
+    '禁果短剧',
+    '推荐 · 分类短剧 · 在线搜索',
+  );
+  static const hanxiaoquan = SourceSite(
+    'hanxiaoquan',
+    '韩小圈',
+    '韩剧 · 韩国电影 · 综艺动漫',
+  );
   static const knownValues = [
     hongguo,
     SourceSite('huangdou', '黄豆', '精选短剧'),
     SourceSite('huangju', '剧果', '热门 · 最新 · 分类短剧'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
+    SourceSite('heitao', '黑桃', '分类短剧 · 在线搜索'),
+    // 上游（Xanerix/guoapp）移植的内置站源：禁果短剧归黄果类、韩小圈归视频类、
+    // 笔盒归成人类（受限默认关闭）。本地核心已移植对应 Go provider（native/provider），
+    // 站源菜单直接展示；分类口径与上游一致。
+    jinguoduanju,
+    hanxiaoquan,
+    beabox,
     ...duanjuValues,
     ...engineValues,
     ...adultValues,
@@ -156,8 +197,13 @@ class SourceSite {
     SourceSite('huangguo-video', '黄果视频', '视频剧集'),
     SourceSite('huangguoai', '黄果 AI', 'AI 短剧'),
     SourceSite('cloudfront', '黄果旧版', '旧 API 剧库'),
+    SourceSite('heitao', '黑桃', '分类短剧 · 在线搜索'),
     dsd,
     douban,
+    // 上游源：已进 knownValues 站源菜单，此处仍登记供 byId 解析与分类归属。
+    beabox,
+    jinguoduanju,
+    hanxiaoquan,
     ...duanjuValues,
     ...engineValues,
     ...adultValues,
@@ -185,6 +231,11 @@ class SourceSite {
   /// 天然排除），只提供榜单参考数据。榜单链路（榜列表/榜条目/授权）按
   /// 此放行，与 Go 侧 nativeSourceAvailable 的豆瓣特判同语义。
   static bool isRankingOnly(String id) => id == douban.id;
+
+  /// 该站源是否真的向服务端发过在线搜索。搜索结果里只有这类源的条目
+  /// 可以跳过客户端关键词复核；其余源（本地剧库匹配、忽略 query 的目录
+  /// 接口）必须再过一遍 matchesDramaQuery，否则会混入不匹配条目。
+  static bool searchesOnline(String id) => byId(id)?.onlineSearch ?? false;
 
   /// 数据请求(封面/榜单等只读链路)的站源授权口径：榜单专用源（豆瓣）
   /// 不注册 provider、不在站源菜单内，只提供榜单参考数据，因此直接放行；
@@ -236,6 +287,7 @@ class SourceSite {
     'wangguo': SourceCategory.shortDrama,
     'faguo': SourceCategory.video,
     'wuguo': SourceCategory.shortDrama,
+    'yunzhui': SourceCategory.video,
     'yingshigongchang': SourceCategory.video,
     '360zy': SourceCategory.video,
     'modu': SourceCategory.video,
@@ -263,6 +315,11 @@ class SourceSite {
     'souav': SourceCategory.adult,
     'ckzy': SourceCategory.adult,
     'aosika': SourceCategory.adult,
+    // 上游三源的内容类型归类。classKey 另由 huangguoCategoryIds 把
+    // 禁果短剧抬到「黄果类」，所以它的底层类型仍是短剧。
+    'beabox': SourceCategory.adult,
+    'jinguoduanju': SourceCategory.shortDrama,
+    'hanxiaoquan': SourceCategory.video,
   };
 
   static const _shortPlay = <String, bool>{
@@ -286,6 +343,21 @@ class SourceSite {
     'senlin': false, 'doudou': false, 'didi': false, 'heiliao': false,
     'taohua': false, 'souav': false, 'ckzy': false, 'aosika': false,
   };
+
+  /// 视频类分组恒以真果·鉴打头（用户主用源，长按选「视频类」/点按站源岛
+  /// 的视频类菜单都先落到它）。不依赖 [values] 的声明顺序：后续再往上插
+  /// 韩小圈/短视频类源也不会把它挤走。
+  static const videoPriorityId = 'dongpiandi';
+
+  /// 返回把 [videoPriorityId] 提到首位的副本；列表里没有该源时原样返回。
+  static List<SourceSite> orderVideoGroup(Iterable<SourceSite> items) {
+    final list = items.toList();
+    final index = list.indexWhere((site) => site.id == videoPriorityId);
+    if (index > 0) {
+      list.insert(0, list.removeAt(index));
+    }
+    return list;
+  }
 }
 
 class SourceGroup {

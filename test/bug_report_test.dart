@@ -119,17 +119,6 @@ void main() {
     });
   });
 
-  group('buildBugIssueUri', () {
-    test('指向仓库 issues/new 并携带预填参数', () {
-      final uri = buildBugIssueUri(title: '播放黑屏', body: '问题描述：\n播放黑屏');
-      expect(uri.scheme, 'https');
-      expect(uri.host, 'github.com');
-      expect(uri.path, '/guocheng1378/guoapp/issues/new');
-      expect(uri.queryParameters['title'], '播放黑屏');
-      expect(uri.queryParameters['body'], contains('播放黑屏'));
-    });
-  });
-
   group('反馈卡片', () {
     Widget host() => MaterialApp(
       home: Builder(
@@ -182,7 +171,7 @@ void main() {
       expect(find.byKey(const ValueKey('bug-report-status')), findsOneWidget);
     });
 
-    testWidgets('提交成功打开预填的 GitHub 页并关闭卡片', (tester) async {
+    testWidgets('前往反馈区打开网页并关闭卡片', (tester) async {
       final stub = _StubLauncher(true);
       _installLauncher(stub);
       await open(tester);
@@ -195,11 +184,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(stub.launched, hasLength(1));
       final uri = Uri.parse(stub.launched.single);
-      expect(uri.host, 'github.com');
-      expect(uri.path, '/guocheng1378/guoapp/issues/new');
-      expect(uri.queryParameters['title'], '播放黑屏');
-      expect(uri.queryParameters['body'], contains('点开就退回首页'));
-      expect(uri.queryParameters['body'], contains('版本：0.2.96+2134'));
+      expect(uri.host, 'guoapp.dpdns.org');
+      expect(uri.path, '/forum.html');
       expect(find.byKey(const ValueKey('bug-report-field')), findsNothing);
     });
 
@@ -242,6 +228,14 @@ void main() {
     await tester.tap(find.text('设置与备份'));
     await tester.pumpAndSettle();
 
+    // 设置页新增「模糊封面按钮 / 开屏自动模糊」两个开关后，手机高度下
+    // 「反馈 Bug」已落到首屏之外，先滚动到位再断言（入口可达性不变）。
+    await tester.dragUntilVisible(
+      find.text('反馈 Bug'),
+      find.byType(ListView).last,
+      const Offset(0, -220),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('反馈 Bug'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('bug-report-setting')));
     await tester.pumpAndSettle();
@@ -261,10 +255,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('bug-report-submit')));
     await tester.pumpAndSettle();
     expect(stub.launched, hasLength(1));
-    expect(
-      Uri.parse(stub.launched.single).queryParameters['body'],
-      contains('设置页文字重叠'),
-    );
+    final launchedUri = Uri.parse(stub.launched.single);
+    expect(launchedUri.host, 'guoapp.dpdns.org');
+    expect(launchedUri.path, '/forum.html');
     expect(find.byKey(const ValueKey('bug-report-field')), findsNothing);
   });
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,7 +15,7 @@ import 'license.dart';
 /// 也能走到激活页 UI。
 Future<String> _resolveDeviceCode(String? debugDeviceCode) async {
   if (debugDeviceCode != null) return debugDeviceCode;
-  if (Platform.environment.containsKey('FLUTTER_TEST')) {
+  if (kDebugMode && Platform.environment.containsKey('FLUTTER_TEST')) {
     return 'FLUTTERTEST';
   }
   return DeviceIdentity.instance.deviceCode();

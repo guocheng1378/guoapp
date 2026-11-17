@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
 import 'app_layout.dart';
 import 'catalog_filters.dart';
+import 'haptics.dart';
 import 'core_bridge.dart';
 import 'detail_screen.dart';
 import 'featured_catalog.dart';
@@ -130,6 +129,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
   @override
   void dispose() {
     widget.repository.catalogUpdates.removeListener(_metadataChanged);
+    widget.store.removeListener(_metadataChanged);
     FogTuningStore.state.removeListener(_onFogTuning);
     _generation++;
     _scroll.removeListener(_onScroll);
@@ -347,6 +347,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
         )
         .firstOrNull;
     if (board == null) return;
+    AppHaptics.selection();
     setState(() {
       _category = id;
       _kind = kind;
@@ -366,6 +367,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
         )
         .firstOrNull;
     if (board == null) return;
+    AppHaptics.selection();
     setState(() {
       _kind = kind;
       _board = board;
@@ -379,6 +381,7 @@ class _RankingsScreenState extends State<RankingsScreen> {
   void _selectBoardId(String id) {
     final board = _boards.firstWhere((board) => board.id == id);
     if (_board?.id == board.id) return;
+    AppHaptics.selection();
     setState(() {
       _board = board;
       _error = null;
@@ -500,7 +503,9 @@ class _RankingsScreenState extends State<RankingsScreen> {
     // 吸顶头内容高度：可见行高之和 + 末行与内容的呼吸；行高单一来源
     // CatalogFilters.barHeight（与主页同口径，含系统字号缩放）。
     final pinnedRowsExtent = floatingFog && pinnedRows.isNotEmpty
-        ? pinnedRows.length * CatalogFilters.barHeight(context) + 10.0
+        // 每行实际占 barHeight + 上下各 4 的 padding，原来漏掉这 8px，
+        // 三行时矮 14px，吸顶区最后一行会被裁。
+        ? pinnedRows.length * (CatalogFilters.barHeight(context) + 8) + 2
         : 0.0;
     final descriptionRow = Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -584,10 +589,8 @@ class _RankingsScreenState extends State<RankingsScreen> {
                     topInset +
                     pinnedRowsExtent +
                     (_fogHeight > 0 ? _fogHeight : 0),
-                onRefresh: () {
-                  HapticFeedback.mediumImpact();
-                  return _load(force: true);
-                },
+                onRefresh: () => _load(force: true),
+                refreshFailed: () => _error != null,
                 child: CustomScrollView(
                   controller: _scroll,
                   physics: const AlwaysScrollableScrollPhysics(),

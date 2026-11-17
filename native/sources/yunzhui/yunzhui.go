@@ -167,9 +167,13 @@ func (s *Source) call(ctx context.Context, host provider.Host, path string, form
 			continue
 		}
 		if num(decoded["code"]) != "10000" {
-			lastErr = errors.New("yunzhui: " + str(decoded["message"]))
-			s.rotate()
-			continue
+			message := str(decoded["message"])
+			if message == "" {
+				message = "请求被拒绝"
+			}
+			// 业务码是服务端判定（token 失效/参数错误/内容下架），换域名不会
+			// 自愈：直接返回可读错误，别把它伪装成「线路故障」再白跑三个域名。
+			return nil, errors.New("yunzhui: " + message)
 		}
 		return decoded, nil
 	}
@@ -409,9 +413,9 @@ func (s *Source) ResolveMedia(ctx context.Context, host provider.Host, task prov
 }
 
 func buildMedias(result map[string]any) []provider.Media {
-// The CDN answers 403 to every non-empty Referer (verified against chw.ycblhs.com
-// with u.gslock.com / chw.ycblhs.com / www.gslock.com), so the media address must
-// be requested without a Referer header at all.
+	// The CDN answers 403 to every non-empty Referer (verified against chw.ycblhs.com
+	// with u.gslock.com / chw.ycblhs.com / www.gslock.com), so the media address must
+	// be requested without a Referer header at all.
 
 	out := make([]provider.Media, 0, 4)
 	var items []map[string]any

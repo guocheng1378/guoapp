@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"duanjuapp/native/provider"
 )
@@ -67,7 +69,8 @@ func (f *flexInt) UnmarshalJSON(data []byte) error {
 }
 
 type response struct {
-	Code      int     `json:"code"`
+	// maccms 系站点常把 code 写成字符串 "1"，强类型会让整页解析失败。
+	Code      flexInt `json:"code"`
 	Msg       string  `json:"msg"`
 	Page      flexInt `json:"page"`
 	PageCount flexInt `json:"pagecount"`
@@ -177,7 +180,11 @@ func (s *Source) text(ctx context.Context, host provider.Host, locked string, bu
 		if err := ctx.Err(); err != nil {
 			return "", "", err
 		}
-		raw, err := host.Text(ctx, build(base))
+		request := build(base)
+		if len(s.spec.Headers) > 0 {
+			request.Headers = s.spec.Headers
+		}
+		raw, err := host.Text(ctx, request)
 		if err == nil {
 			s.rememberHit(host, base)
 			return raw, base, nil
@@ -276,9 +283,15 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return nil, false, fmt.Errorf("maccms-api 解析失败: %w", err)
 	}
-	if decoded.Code != 1 && len(decoded.List) == 0 {
+	if int(decoded.Code) != 1 && len(decoded.List) == 0 {
 		return nil, false, errors.New("maccms-api 无数据")
 	}
+	return s.dramas(decoded), page < int(decoded.PageCount), nil
+}
+
+// dramas 把 vod 列表归一化为完整 Drama。目录与在线搜索共用同一套映射，
+// 搜索结果才不会缺简介/评分/地区/年份/时长/主演而让筛选与排序失效。
+func (s *Source) dramas(decoded response) []provider.Drama {
 	channel := provider.SourceName(s.spec.ID)
 	out := make([]provider.Drama, 0, len(decoded.List))
 	for _, item := range decoded.List {
@@ -311,7 +324,7 @@ func (s *Source) CatalogPage(ctx context.Context, host provider.Host, page int, 
 			ChannelName:   channel,
 		})
 	}
-	return out, page < int(decoded.PageCount), nil
+	return out
 }
 
 func (s *Source) Detail(ctx context.Context, host provider.Host, sourceID string) (provider.Drama, []provider.Chapter, error) {
@@ -508,39 +521,47 @@ func vodText(value any) string {
 	return ""
 }
 
-func (s *Source) Search(ctx context.Context, host provider.Host, query string) ([]provider.Drama, error) {
+// SearchPage 是在线搜索的分页实现：与目录共用 `ac=list` 端点，只把
+// 分类参数换成 `wd`，页码透传给 `pg`，并由源站 pagecount 决定 hasMore。
+// 上游 fork 的搜索同样统一走「带 page+query 的目录请求」，避免单页搜索
+// 在声明可分页的源上反复返回第一页。
+func (s *Source) SearchPage(ctx context.Context, host provider.Host, query string, page int) ([]provider.Drama, bool, error) {
 	if s.baseURL(host) == "" {
-		return nil, errors.New("maccms-api 源未配置")
+		return nil, false, errors.New("maccms-api 源未配置")
 	}
+	keyword := strings.TrimSpace(query)
+	if keyword == "" {
+		return nil, false, errors.New("搜索词不能为空")
+	}
+	if utf8.RuneCountInString(keyword) > 80 || strings.IndexFunc(keyword, unicode.IsControl) >= 0 {
+		return nil, false, errors.New("搜索词过长或包含非法字符")
+	}
+	page = max(1, page)
 	raw, _, err := s.text(ctx, host, "", func(base string) provider.Request {
 		return provider.Request{
 			Source:  s.spec.ID,
-			Address: fmt.Sprintf("%s/api.php/provide/vod/?ac=list&wd=%s&pg=1", base, url.QueryEscape(query)),
+			Address: searchURL(base, keyword, page),
 			Referer: base + "/",
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var decoded response
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return nil, err
+		return nil, false, fmt.Errorf("maccms-api 搜索解析失败: %w", err)
 	}
-	out := make([]provider.Drama, 0, len(decoded.List))
-	for _, item := range decoded.List {
-		id := vodIDString(item.VodID)
-		remarks := strings.TrimSpace(item.VodRemarks)
-		out = append(out, provider.Drama{
-			ID:            provider.DramaID(s.spec.ID, id),
-			Source:        s.spec.ID,
-			SourceID:      id,
-			Title:         strings.TrimSpace(item.VodName),
-			Cover:         item.VodPic,
-			Remark:        remarks,
-			ReleaseStatus: provider.ReleaseStatus(remarks, 0, 0),
-		})
-	}
-	return out, nil
+	// 搜索无命中是正常空态（源站常返回 code!=1 + 空 list），不当错误抛出。
+	return s.dramas(decoded), page < int(decoded.PageCount), nil
+}
+
+func (s *Source) Search(ctx context.Context, host provider.Host, query string) ([]provider.Drama, error) {
+	items, _, err := s.SearchPage(ctx, host, query, 1)
+	return items, err
+}
+
+func searchURL(base, query string, page int) string {
+	return fmt.Sprintf("%s/api.php/provide/vod/?ac=list&wd=%s&pg=%d", base, url.QueryEscape(query), max(1, page))
 }
 
 func catalogURL(base, typeID string, page int) string {

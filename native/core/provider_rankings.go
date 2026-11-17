@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"duanjuapp/native/provider"
 )
 
 const rankingCacheTTL = 5 * time.Minute
@@ -75,6 +77,15 @@ var rankingBoards = []rankingBoard{
 	{ID: "dongpiandi-anime", Source: sourceDongpiandi, Name: "动画榜", Description: "真果·鉴动画热门，按源站返回顺序展示。", path: "anime"},
 	{ID: "dongpiandi-variety", Source: sourceDongpiandi, Name: "综艺榜", Description: "真果·鉴综艺热门，按源站返回顺序展示。", path: "variety"},
 	{ID: "yingshigongchang-new", Source: sourceYingshigongchang, Name: "最近更新榜", Description: "影视工厂最新收录与更新，按源站返回顺序展示。"},
+	// —— 云追视频（yunzhui）：日榜/总榜，path 为 type_id|area|sort，复用目录接口 ——
+	{ID: "yunzhui-daily-drama", Source: provider.SourceYunzhui, Name: "国产剧日榜", Description: "云追国产剧每日热度。", path: "2|内地|日榜", ttl: time.Hour},
+	{ID: "yunzhui-daily-movie", Source: provider.SourceYunzhui, Name: "电影日榜", Description: "云追电影每日热度。", path: "1||日榜", ttl: time.Hour},
+	{ID: "yunzhui-daily-variety", Source: provider.SourceYunzhui, Name: "综艺日榜", Description: "云追综艺每日热度。", path: "3||日榜", ttl: time.Hour},
+	{ID: "yunzhui-daily-short", Source: provider.SourceYunzhui, Name: "短剧日榜", Description: "云追短剧每日热度。", path: "31||日榜", ttl: time.Hour},
+	{ID: "yunzhui-total-drama", Source: provider.SourceYunzhui, Name: "国产剧总榜", Description: "云追国产剧总热度。", path: "2|内地|最热", ttl: 12 * time.Hour},
+	{ID: "yunzhui-total-movie", Source: provider.SourceYunzhui, Name: "电影总榜", Description: "云追电影总热度。", path: "1||最热", ttl: 12 * time.Hour},
+	{ID: "yunzhui-total-variety", Source: provider.SourceYunzhui, Name: "综艺总榜", Description: "云追综艺总热度。", path: "3||最热", ttl: 12 * time.Hour},
+	{ID: "yunzhui-total-short", Source: provider.SourceYunzhui, Name: "短剧总榜", Description: "云追短剧总热度。", path: "31||最热", ttl: 12 * time.Hour},
 }
 
 func findRankingBoard(id string) (rankingBoard, bool) {
@@ -240,15 +251,25 @@ func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, p
 		if page != 1 {
 			return rankingPage{}, errors.New("该榜单只有一页")
 		}
-		pageURL := d.providerBaseURL(sourceHuangguoAI) + "/" + strings.Trim(board.path, "/") + "/"
-		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(sourceHuangguoAI)+"/")
-		if err != nil {
+		var ranking struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := d.huangguoAIAPI(ctx, "/api/ranks/"+huangguoRankingAPIPath(board.path), &ranking); err != nil {
 			return rankingPage{}, err
 		}
-		return parseHuangguoRanking(body, board)
+		result, err := parseHuangguoAIAPIRanking(ranking.Items, d.providerBaseURL(sourceHuangguoAI)+"/")
+		if err != nil {
+			return rankingPage{}, fmt.Errorf("%s: %w", board.Name, err)
+		}
+		return result, nil
 	case sourceHuangju, sourceYeguo, sourceYingshigongchang, sourceDongpiandi:
 		return d.fetchCatalogRankingPage(ctx, board, page)
 	default:
+		if p, ok := provider.Get(board.Source); ok {
+			if ranker, ok := p.(provider.Ranker); ok {
+				return d.fetchProviderRankingPage(ctx, board, page, ranker)
+			}
+		}
 		return rankingPage{}, fmt.Errorf("不支持的榜单站源 %s", board.Source)
 	}
 }

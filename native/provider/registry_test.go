@@ -90,7 +90,7 @@ func TestContentCategoriesSplitShortDramaFromVideo(t *testing.T) {
 		SourceYaguo, SourceMaoguo, SourceFanguo, SourceHeguo, SourceXingguo,
 		SourceHuaguo, SourceWangguo, SourceFaguo, SourceWuguo}
 	video := []string{SourceCloudFront, SourceYingshigongchang, Source360ZY, SourceModu,
-		SourceDytt, SourceShandian, SourceHongniu, SourceNiuniuZY, SourceWsyzy, SourceSorani, SourceDongpiandi}
+		SourceDytt, SourceShandian, SourceHongniu, SourceNiuniuZY, SourceWsyzy, SourceSorani, SourceDongpiandi, SourceYunzhui}
 	for _, id := range shortDrama {
 		if spec, _ := SpecOf(id); spec.Category != CategoryShortDrama {
 			t.Fatalf("%s must be a short drama source, got %q", id, spec.Category)

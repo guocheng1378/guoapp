@@ -283,8 +283,12 @@ class CloudBackup {
   }
 
   /// 覆盖本机：云端备份整体恢复（全部用户、追剧、历史与设置）。
-  Future<void> restoreReplace(LocalStore store, CloudBackupRemote remote) =>
-      store.importBackup(jsonEncode(remote.data));
+  /// 需要管理员口令，与本地恢复路径同口径。
+  Future<void> restoreReplace(
+    LocalStore store,
+    CloudBackupRemote remote, {
+    required String pin,
+  }) => store.importBackup(jsonEncode(remote.data), pin: pin);
 
   /// 合并追剧：仅把云端记录与当前用户按 LAN 同款字段级三向语义合并，
   /// 云端记录里本机不允许的源会被跳过，其他用户的档不受影响。

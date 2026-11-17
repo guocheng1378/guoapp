@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
+import 'folme.dart';
 import 'app_scaffold.dart';
 import 'detail_screen.dart';
 import 'local_store.dart';
@@ -272,9 +273,13 @@ class _RelatedCatalogScreenState extends State<RelatedCatalogScreen> {
         ),
       );
     }
-    return RefreshIndicator(
+    return FogRefresh(
       onRefresh: () => _load(reset: true),
+      refreshFailed: () => _error != null,
+      // 与全站雾面下拉一致：胶囊停在视口顶 6px，震动由 FogRefresh 统一给出。
+      displacement: 6,
       child: GridView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
         controller: _scroll,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(

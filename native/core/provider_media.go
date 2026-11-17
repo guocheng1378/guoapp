@@ -117,6 +117,14 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.HuangjuURL, huangjuBaseURL
 	case sourceYeguo:
 		configured, fallback = d.cfg.YeguoURL, yeguoBaseURL
+	case sourceHeitao:
+		configured, fallback = d.cfg.HeitaoURL, heitaoBaseURL
+	case sourceHanxiaoquan:
+		fallback = hanxiaoquanSiteBaseURL
+	case sourceJinguoduanju:
+		configured, fallback = jinguoDuanjuContentSite(d.cfg.JinguoDuanjuURL), jinguoDuanjuBaseURL
+	case sourceBeabox:
+		configured, fallback = d.cfg.BeaboxURL, beaboxGatewayURL
 	default:
 		// duanju 族只能在 default 分支识别：这些源同时也注册在 provider 规格表里，
 		// 提前判定会把 hongguo/huangdou 等内置源一并当成 duanju 族并绕过 cfg 注入。
@@ -206,6 +214,18 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if chapter.Source == sourceCloudFront {
 		return d.resolveLegacyMedia(ctx, task)
 	}
+	if chapter.Source == sourceHeitao {
+		return d.resolveHeitaoMedia(ctx, task)
+	}
+	if chapter.Source == sourceHanxiaoquan {
+		return d.resolveHanxiaoquanMedia(ctx, task)
+	}
+	if chapter.Source == sourceJinguoduanju {
+		return d.resolveJinguoDuanjuMedia(ctx, task)
+	}
+	if chapter.Source == sourceBeabox {
+		return d.resolveBeaboxMedia(ctx, task)
+	}
 	if chapter.Source == sourceHuangju {
 		return d.resolveHuangjuMedia(ctx, task)
 	}
@@ -262,23 +282,20 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 			media.Referer = client.host + "/home"
 		}
 	}
-	if chapter.PageURL != "" && chapter.Source == sourceHuangguoAI && !isProviderHTTPMediaURL(media.URL) {
-		responses := &playbackResponseURLs{}
-		pageContext := context.WithValue(ctx, playbackResponseURLsKey{}, responses)
-		body, err := d.fetchProviderText(pageContext, chapter.PageURL, media.Referer)
+	// 黄果 AI 播放地址改由 /api/edge/request → POST /api/videos/{id}/episodes/{ep}/playback
+	// 按集取（streams.main）；站点 2026-11 起 GET play 的 video_url 恒为空。
+	// 地址落在第三方 CDN，Referer 用媒体自身来源，避免沿用站源 base 被防盗链判跨站。
+	if chapter.Source == sourceHuangguoAI {
+		_, sourceID, valid := splitProviderDramaID(task.DramaID)
+		if !valid {
+			return providerMedia{}, fmt.Errorf("黄果剧集信息无效")
+		}
+		address, err := d.fetchHuangguoAIPlayURL(ctx, sourceID, chapterEpisodeNumber(chapter, task.Index))
 		if err != nil {
 			return providerMedia{}, err
 		}
-		pageURL := chapter.PageURL
-		if actual, ok := responses.values.Load(chapter.PageURL); ok {
-			pageURL = actual.(string)
-		}
-		if chapter.Source == sourceHuangguoAI {
-			media.URL = parseAIVideoURL(body, pageURL)
-		} else {
-			media.URL = parseDataHLS(body, pageURL)
-		}
-		media.Referer = pageURL
+		media.URL = address
+		media.Referer = providerMediaReferer(address, d.providerBaseURL(sourceHuangguoAI)+"/")
 	}
 	if !isProviderHTTPMediaURL(media.URL) {
 		return providerMedia{}, fmt.Errorf("%s 未返回有效播放地址，请刷新章节或确认站点访问权限", chapter.Source)

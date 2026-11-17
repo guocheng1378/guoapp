@@ -348,6 +348,48 @@ void main() {
     },
   );
 
+  test('danmaku scroll speed shortens flight lifetime and packs more items', () {
+    final items = [
+      for (var i = 0; i < 60; i++)
+        DanmakuItem(id: '$i', text: '合成弹幕', timeMs: i * 500),
+    ];
+    int count(int lifetimeMs) => planDanmaku(
+      items,
+      width: 400,
+      rows: 2,
+      lifetimeMs: lifetimeMs,
+      measure: (text) => text.length * 16,
+    ).length;
+
+    // 速度 2× → 单条存活 4 秒，同一轨道能更早接纳下一条，窗口内排上的更多；
+    // 0.5× → 16 秒，密度必须更小。密度上限（同时 24 条）不受速度影响。
+    final fast = count(danmakuLifetimeMs ~/ 2);
+    final normal = count(danmakuLifetimeMs);
+    final slow = count(danmakuLifetimeMs * 2);
+    expect(fast, greaterThan(normal));
+    expect(normal, greaterThan(slow));
+    expect(fast, lessThanOrEqualTo(items.length));
+  });
+
+  test('danmaku speed preference round-trips, clamps and labels', () {
+    expect(danmakuSpeedLabel(1), '1×');
+    expect(danmakuSpeedLabel(.5), '0.5×');
+    expect(danmakuSpeedLabel(1.25), '1.25×');
+    expect(danmakuSpeedLabel(2), '2×');
+
+    const fast = PlaybackPreferences(danmakuSpeed: 2);
+    expect(PlaybackPreferences.fromJson(fast.toJson()).danmakuSpeed, 2);
+    expect(
+      PlaybackPreferences.fromJson({'danmakuSpeed': 9}).danmakuSpeed,
+      danmakuSpeedMax,
+    );
+    expect(
+      PlaybackPreferences.fromJson({'danmakuSpeed': .1}).danmakuSpeed,
+      danmakuSpeedMin,
+    );
+    expect(PlaybackPreferences.fromJson({}).danmakuSpeed, 1);
+  });
+
   test(
     'danmaku preference survives restart, backup, old backups and user switching',
     () async {
@@ -379,14 +421,14 @@ void main() {
       addTearDown(restarted.dispose);
       await restarted.switchProfile('default', pin: 'synthetic-pin');
       expect(restarted.playbackPreferences.danmaku, isFalse);
-      await store.importBackup(backup);
+      await store.importBackup(backup, pin: 'synthetic-pin');
       expect(store.locked, isTrue);
       await store.switchProfile('default', pin: 'synthetic-pin');
       expect(store.playbackPreferences.danmaku, isFalse);
       final legacy = jsonDecode(backup) as Map<String, dynamic>;
       (((legacy['libraries'] as Map)['default'] as Map)['playback'] as Map)
           .remove('danmaku');
-      await store.importBackup(jsonEncode(legacy));
+      await store.importBackup(jsonEncode(legacy), pin: 'synthetic-pin');
       expect(store.locked, isTrue);
       await store.switchProfile('default', pin: 'synthetic-pin');
       expect(store.playbackPreferences.danmaku, isTrue);

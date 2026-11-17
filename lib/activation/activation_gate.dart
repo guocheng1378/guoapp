@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,7 +56,10 @@ class _ActivationGateState extends State<ActivationGate> {
     // （Windows 走 Process.run）在 fake-async 测试区永不完成，门禁会卡在
     // loading 使 pumpAndSettle 超时。显式注入 debug 参数的激活测试不受影响，
     // 生产行为不变。
-    if (widget.debugDeviceCode == null &&
+    // kDebugMode 守卫：环境变量在 release 二进制里同样可被外部设置，
+    // 只靠 containsKey('FLUTTER_TEST') 等于给发布包留了后门。
+    if (kDebugMode &&
+        widget.debugDeviceCode == null &&
         widget.debugVerifier == null &&
         widget.debugStore == null &&
         Platform.environment.containsKey('FLUTTER_TEST')) {

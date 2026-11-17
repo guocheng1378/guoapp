@@ -62,6 +62,64 @@ type nativeRenewResult struct {
 	ok      bool
 }
 
+// nativeStreamMeter 统计本机代理写回播放器的字节速率（电视播放页状态栏用）。
+// 只统计 Get 响应的转发字节；取样间隔不足 1 秒时直接返还上次结果，避免
+// 高刷界面把读数抖成噪声。
+type nativeStreamMeter struct {
+	mu      sync.Mutex
+	total   int64
+	sampled int64
+	at      time.Time
+	rate    int64
+}
+
+func (meter *nativeStreamMeter) add(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	meter.mu.Lock()
+	meter.total += bytes
+	meter.mu.Unlock()
+}
+
+func (meter *nativeStreamMeter) bytesPerSecond() int64 {
+	meter.mu.Lock()
+	defer meter.mu.Unlock()
+	now := time.Now()
+	if meter.at.IsZero() {
+		meter.at, meter.sampled = now, meter.total
+		return 0
+	}
+	elapsed := now.Sub(meter.at)
+	if elapsed < time.Second {
+		return meter.rate
+	}
+	meter.rate = int64(float64(meter.total-meter.sampled) / elapsed.Seconds())
+	meter.at, meter.sampled = now, meter.total
+	return meter.rate
+}
+
+// nativeStreamStats 把当前转发速率报给 Dart（播放页「网速」读数）。
+func (engine *nativeEngine) nativeStreamStats() map[string]any {
+	return map[string]any{"bytesPerSecond": nativeStreamMeterShared.bytesPerSecond()}
+}
+
+// nativeStreamMeterShared 是进程内唯一的转发计量器：流服务和引擎分属两个
+// 结构体，同一时刻只有少量会话，用包级变量比层层回传更省事。
+var nativeStreamMeterShared nativeStreamMeter
+
+// nativeCountingReader 在 io.Copy 转发时累加已写出的字节数。
+type nativeCountingReader struct {
+	source io.Reader
+	meter  *nativeStreamMeter
+}
+
+func (reader *nativeCountingReader) Read(p []byte) (int, error) {
+	n, err := reader.source.Read(p)
+	reader.meter.add(int64(n))
+	return n, err
+}
+
 type nativeStreamServer struct {
 	mu         sync.Mutex
 	downloader *Downloader
@@ -385,7 +443,12 @@ func (stream *nativeStreamServer) nativeAsset(token string, session *nativeStrea
 
 func (stream *nativeStreamServer) nativeRewrite(token string, session *nativeStreamSession, body, base string) (string, error) {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	body = strings.Join(nativePruneAdSegments(lines, base), "\n")
+	// 直播（无 #EXT-X-ENDLIST 的滑动窗口）不做广告剔除：删掉分片会让
+	// #EXT-X-MEDIA-SEQUENCE 与实际分片失配，播放端时间轴倒退或卡在同一段。
+	// 采集站注入的广告目前只在点播短剧里出现，直播保守放行。
+	if nativeManifestVOD(body) {
+		body = strings.Join(nativePruneAdSegments(lines, base), "\n")
+	}
 	var output []string
 	nextPlaylist := false
 	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
@@ -787,6 +850,12 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	}
 	writer.WriteHeader(response.StatusCode)
 	if request.Method == http.MethodGet {
-		_, _ = io.Copy(writer, response.Body)
+		_, _ = io.Copy(
+			writer,
+			&nativeCountingReader{
+				source: response.Body,
+				meter:  &nativeStreamMeterShared,
+			},
+		)
 	}
 }

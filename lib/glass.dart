@@ -233,6 +233,10 @@ class GlassChip extends StatelessWidget {
       radius: shape.topLeft.x,
       tint: fill,
       edgeColor: edge,
+      // 接近度亮起交给 painter 自己监听重绘（不重建胶囊子树）。
+      edgeProx: glass ? proxListenable : null,
+      edgeFor: (h) =>
+          GlassChipTokens.pillEdgeLit(dark, selected: selected, h: h),
       // 真磨砂：每颗胶囊自带 σ（清透磨砂配方，默认 14）。铁律：
       // BackdropFilter 直挂裁剪祖先，柔光特征层画在其兄弟位置。
       // inheritBlur：上层已有整条模糊时不重复采样（同层单 backdrop）。
@@ -294,10 +298,11 @@ class GlassChip extends StatelessWidget {
             return null;
           }),
           child: ListenableBuilder(
-            listenable: Listenable.merge([
-              GlassPreferences.enabled,
-              ?proxListenable,
-            ]),
+            // 只监听玻璃总开关：接近度信号**不进这里**——它由
+            // SoftGlassSurface 的 painter 直接监听重绘（1px 描边），
+            // 否则滚动前 50px 的十个档位会把整颗胶囊（含裁剪层）
+            // 重建十次，分类条 20+ 颗 = 两三百次重建 = 滚动起手掉帧。
+            listenable: GlassPreferences.enabled,
             builder: (context, _) {
               final chip = _chip(
                 theme,
@@ -354,19 +359,24 @@ class FogPill extends StatelessWidget {
           theme.brightness,
           enabled: false,
         );
-        return ListenableBuilder(
-          listenable: prox,
-          builder: (context, _) => SoftGlassSurface(
-            // 真胶囊（MIUI 液态玻璃默认形态）：圆角半径 = 短边一半。
-            shape: SoftGlassShape.capsule,
-            tint: glass ? GlassChipTokens.pill(dark) : fallback.tint,
-            // 白描边随接近度亮起（回顶熄灭）——清透玻璃靠轮廓立形。
-            edgeColor: glass
-                ? GlassChipTokens.pillEdgeLit(dark, selected: false, h: prox.value)
-                : fallback.edge,
-            selfBlur: glass && !inheritBlur,
-            child: child,
-          ),
+        return SoftGlassSurface(
+          // 真胶囊（MIUI 液态玻璃默认形态）：圆角半径 = 短边一半。
+          shape: SoftGlassShape.capsule,
+          tint: glass ? GlassChipTokens.pill(dark) : fallback.tint,
+          // 白描边随接近度亮起（回顶熄灭）——清透玻璃靠轮廓立形。
+          // 信号交给 painter 监听重绘，不重建整颗胶囊（见 edgeProx）。
+          edgeColor: glass
+              ? GlassChipTokens.pillEdgeLit(
+                  dark,
+                  selected: false,
+                  h: prox.value,
+                )
+              : fallback.edge,
+          edgeProx: glass ? prox : null,
+          edgeFor: (h) =>
+              GlassChipTokens.pillEdgeLit(dark, selected: false, h: h),
+          selfBlur: glass && !inheritBlur,
+          child: child,
         );
       },
     );

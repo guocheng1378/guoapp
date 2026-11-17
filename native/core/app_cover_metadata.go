@@ -80,16 +80,16 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 		}
 		return "", errors.New("详情暂未返回海报地址")
 	case sourceHuangguoAI:
-		route := "/detail/" + url.PathEscape(id) + "/"
-		if source == sourceHuangguoAI && !rankingSourceID.MatchString(id) {
-			return "", errors.New("无效的黄果剧集 ID")
-		}
-		pageURL := d.providerBaseURL(source) + route
-		body, err := d.fetchProviderText(ctx, pageURL, d.providerBaseURL(source)+"/")
-		if err != nil {
-			return "", err
-		}
-		fresh, err := parseHuangguoSortDetail(body, pageURL, Drama{ID: drama.ID, Source: source, SourceID: id})
+		fresh, _, err := d.fetchHuangguoAIDetail(ctx, id)
+		return nativeNormalize(fresh).Cover, err
+	case sourceHeitao:
+		fresh, _, err := d.fetchHeitaoDetail(ctx, id)
+		return nativeNormalize(fresh).Cover, err
+	case sourceHanxiaoquan:
+		fresh, _, err := d.fetchHanxiaoquanDetail(ctx, id)
+		return nativeNormalize(fresh).Cover, err
+	case sourceJinguoduanju:
+		fresh, _, err := d.fetchJinguoDuanjuDetail(ctx, id)
 		return nativeNormalize(fresh).Cover, err
 	}
 	return "", errors.New("该站源暂无封面补齐接口")

@@ -16,6 +16,10 @@ import (
 type providerTextUserAgentKey struct{}
 type providerTextNoCacheKey struct{}
 
+// providerTextCookieKey 给单次站源请求附加 Cookie（黑桃播放器页的年龄确认门
+// 只认 heitao_age_confirmed=1，否则返回无播放配置的确认页）。
+type providerTextCookieKey struct{}
+
 var webProviderNumericID = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 
 func webProviderInteger(value any, maximum int) (int, bool) {

@@ -18,6 +18,7 @@ List<DanmakuFlight> planDanmaku(
   required double width,
   required int rows,
   required double Function(String) measure,
+  int lifetimeMs = danmakuLifetimeMs,
 }) {
   if (!width.isFinite || width <= 0 || rows < 1) return const [];
   final lanes = List<DanmakuFlight?>.filled(rows.clamp(1, 4), null);
@@ -33,7 +34,7 @@ List<DanmakuFlight> planDanmaku(
     }
     if (flights.reversed
             .takeWhile(
-              (flight) => item.timeMs - flight.item.timeMs < danmakuLifetimeMs,
+              (flight) => item.timeMs - flight.item.timeMs < lifetimeMs,
             )
             .length >=
         24) {
@@ -45,14 +46,12 @@ List<DanmakuFlight> planDanmaku(
     final lane = lanes.indexWhere((previous) {
       if (previous == null) return true;
       final gap = item.timeMs - previous.item.timeMs;
-      if (gap >= danmakuLifetimeMs) return true;
-      return (width + previous.width) * gap / danmakuLifetimeMs -
+      if (gap >= lifetimeMs) return true;
+      return (width + previous.width) * gap / lifetimeMs -
                   previous.width >=
               24 &&
           width -
-                  (width + size) *
-                      (danmakuLifetimeMs - gap) /
-                      danmakuLifetimeMs >=
+                  (width + size) * (lifetimeMs - gap) / lifetimeMs >=
               24;
     });
     if (lane < 0) continue;
@@ -68,9 +67,13 @@ class DanmakuOverlay extends StatefulWidget {
     super.key,
     required this.controller,
     required this.aspectRatio,
+    this.speed = 1,
   });
   final DanmakuController controller;
   final double aspectRatio;
+
+  /// 滚动速度倍率：1 为默认（约 8 秒横穿一屏），越大飞得越快。
+  final double speed;
 
   @override
   State<DanmakuOverlay> createState() => _DanmakuOverlayState();
@@ -79,6 +82,16 @@ class DanmakuOverlay extends StatefulWidget {
 class _DanmakuOverlayState extends State<DanmakuOverlay> {
   Object? _layout;
   List<DanmakuFlight> _schedule = const [];
+
+  /// 单条弹幕横穿一屏的时长：默认 8 秒，按速度倍率缩放。
+  /// 速度只改这一处，排布（planDanmaku）与动画（_DanmakuMotion）同源，
+  /// 否则弹幕会被排进错误的轨道或提前消失。
+  int get _lifetimeMs =>
+      (danmakuLifetimeMs / (widget.speed.isFinite && widget.speed > 0
+              ? widget.speed
+              : 1))
+          .round()
+          .clamp(500, danmakuLifetimeMs * 4);
 
   /// [_schedule] 按 timeMs 升序（planDanmaku 保证），二分定位可见窗口起点，
   /// 把每帧 O(全部弹幕) 的线性过滤降为 O(log n + 可见数)。
@@ -97,7 +110,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
   }
 
   Iterable<DanmakuFlight> _visibleFlights(int positionMs) sync* {
-    final from = _lowerBoundMs(positionMs - danmakuLifetimeMs + 1);
+    final from = _lowerBoundMs(positionMs - _lifetimeMs + 1);
     for (var i = from; i < _schedule.length; i++) {
       final flight = _schedule[i];
       if (flight.item.timeMs > positionMs) break;
@@ -159,6 +172,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                       rows,
                       fontSize,
                       scaler,
+                      _lifetimeMs,
                     );
                     if (_layout != layout) {
                       _layout = layout;
@@ -166,6 +180,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                         controller.items,
                         width: width,
                         rows: rows,
+                        lifetimeMs: _lifetimeMs,
                         measure: (text) {
                           final painter = TextPainter(
                             text: TextSpan(text: text, style: style),
@@ -198,6 +213,7 @@ class _DanmakuOverlayState extends State<DanmakuOverlay> {
                                 moving: controller.moving,
                                 rate: controller.rate,
                                 revision: controller.motionRevision,
+                                lifetimeMs: _lifetimeMs,
                                 style: style,
                                 scaler: scaler,
                               ),
@@ -223,6 +239,7 @@ class _DanmakuMotion extends StatefulWidget {
     required this.moving,
     required this.rate,
     required this.revision,
+    required this.lifetimeMs,
     required this.style,
     required this.scaler,
   });
@@ -232,6 +249,7 @@ class _DanmakuMotion extends StatefulWidget {
   final bool moving;
   final double rate;
   final int revision;
+  final int lifetimeMs;
   final TextStyle style;
   final TextScaler scaler;
 
@@ -260,6 +278,7 @@ class _DanmakuMotionState extends State<_DanmakuMotion>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.revision != widget.revision ||
         oldWidget.width != widget.width ||
+        oldWidget.lifetimeMs != widget.lifetimeMs ||
         oldWidget.flight.width != widget.flight.width ||
         oldWidget.flight.item.timeMs != widget.flight.item.timeMs) {
       _sync();
@@ -268,16 +287,17 @@ class _DanmakuMotionState extends State<_DanmakuMotion>
 
   void _sync() {
     _motion.stop();
+    final lifetime = widget.lifetimeMs;
     final elapsed = (widget.positionMs - widget.flight.item.timeMs).clamp(
       0,
-      danmakuLifetimeMs,
+      lifetime,
     );
-    _motion.value = elapsed / danmakuLifetimeMs;
-    if (widget.moving && elapsed < danmakuLifetimeMs) {
+    _motion.value = elapsed / lifetime;
+    if (widget.moving && elapsed < lifetime) {
       _motion.animateTo(
         1,
         duration: Duration(
-          microseconds: ((danmakuLifetimeMs - elapsed) * 1000 / widget.rate)
+          microseconds: ((lifetime - elapsed) * 1000 / widget.rate)
               .round()
               .clamp(1, 86400000000),
         ),

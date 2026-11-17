@@ -22,7 +22,9 @@ void main() {
     final store = LocalStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
     // 青空源需登录默认关闭（2026-10-30），全源默认可见数减一。
-    expect(store.sources.length, allSourcesEnabled ? 19 : 1);
+    // 默认可见增量：韩小圈（视频类，上游移植）与云追 yunzhui（2026-11-15 新增）
+    // 都不属受限名单；黑桃/禁果短剧/笔盒归受限（黄果类/成人类），默认关闭。
+    expect(store.sources.length, allSourcesEnabled ? 21 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
       isFalse,

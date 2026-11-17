@@ -8,7 +8,10 @@ export 'app_build.dart';
 
 // 版本号单一来源：构建脚本通过 --dart-define=APP_VERSION 注入 pubspec 的 version 字段。
 // defaultValue 仅为 flutter test（不带 dart-define）兜底，生产构建必带真值。
-const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0.2.96+2255');
+// 兜底值必须是「明显无效」的版本号：此前写死 0.2.96+2255，构建脚本一旦
+// 漏注入就会拿旧版本号去比远程 update.build，导致误弹更新。真实版本由
+// scripts/app_build.py 注入，三端还有 duanju/device 通道兜底。
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '0.0.0+0');
 
 ThemeData televisionTheme(ThemeData theme) {
   final colors = theme.colorScheme;

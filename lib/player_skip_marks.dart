@@ -126,7 +126,14 @@ EpisodeSkipMarks effectiveSkipMarks({
   required double outroFromEnd,
   required double duration,
 }) {
-  final introEnd = manual.hasIntro ? manual.introEnd : introPreset;
+  // 手动标定的片头终点也要按片长钳制：在较短的一集上标过之后，换源/片长
+  // 变短会让它落到片长之外，进而让 introValid 失效——表现是「跳过一次后
+  // 整部剧都不跳」。越界就回退到预设。
+  final manualIntro =
+      manual.hasIntro &&
+      manual.introEnd > 0 &&
+      (duration <= 0 || manual.introEnd < duration - 1);
+  final introEnd = manualIntro ? manual.introEnd : introPreset;
   var outroStart = manual.outroStart;
   if (!manual.hasOutro && duration > 0 && outroFromEnd > 0) {
     final floor =

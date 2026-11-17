@@ -41,10 +41,15 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
       if (reload) {
         await widget.store.reload();
       } else if (export) {
+        final pin = await _promptPassword(
+          context,
+          '管理员（当前配置中的密码）',
+        );
+        if (pin == null || !mounted) return;
         await FilePicker.saveFile(
           fileName: '$appSlug-recovery.json',
           bytes: Uint8List.fromList(
-            utf8.encode(widget.store.exportRecoveryData()),
+            utf8.encode(await widget.store.exportRecoveryData(pin: pin)),
           ),
           mimeType: 'application/json',
         );
@@ -554,7 +559,12 @@ class _ProfileEditorState extends State<ProfileEditor> {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      category == SourceCategory.shortDrama ? '短剧源' : '视频源',
+                      switch (category) {
+                        SourceCategory.shortDrama => '短剧源',
+                        SourceCategory.local => '本地源',
+                        SourceCategory.adult => '成人源',
+                        SourceCategory.video => '视频源',
+                      },
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),

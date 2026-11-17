@@ -111,17 +111,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     try {
       final jobs = await widget.repository.downloads();
       if (mounted && _allowed) {
-        setState(() {
-          _jobs = jobs;
-          _selected.retainAll(jobs.map((job) => job.id));
-          _error = null;
-        });
+        _selected.retainAll(jobs.map((job) => job.id));
+        // 核心按内容指纹返回同一份列表实例（见 core_bridge 的 downloads）：
+        // 2 秒一次的轮询在状态没变时不能 setState 重建整页。
+        if (!identical(jobs, _jobs) || _error != null) {
+          setState(() {
+            _jobs = jobs;
+            _error = null;
+          });
+        }
       }
     } catch (error) {
-      if (mounted && _allowed) setState(() => _error = friendlyError(error));
+      final message = friendlyError(error);
+      if (mounted && _allowed && _error != message) {
+        setState(() => _error = message);
+      }
     } finally {
       _refreshing = false;
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _loading) setState(() => _loading = false);
     }
   }
 
@@ -1036,7 +1043,18 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   Widget build(BuildContext context) {
     if (!_allowed) {
-      return const StatusPanel(title: '当前用户无权访问下载', message: '请返回后重新操作。');
+      // 之前直接返回裸 StatusPanel：切用户/关权限后整页变成无标题、无返回
+      // 入口的空白面板（嵌入式 tab 甚至退不出去）。
+      return Scaffold(
+        appBar: AppBar(
+          flexibleSpace: const TopFog(),
+          title: const Text('下载合集'),
+        ),
+        body: const StatusPanel(
+          title: '当前用户无权访问下载',
+          message: '请返回后重新操作。',
+        ),
+      );
     }
     final collections = _collections;
     final television = AppLayout.isTelevision(context);
@@ -1156,7 +1174,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         _ => 'row-$index',
                       },
                   ],
-                  itemExtent: RemoteListTile.extent,
+                  itemExtent: RemoteListTile.extentFor(context),
                   spacing: 8,
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
                   onExitUp: () => _toolbarKey.currentState?.focusCurrent(),
@@ -1214,9 +1232,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     if (widget.embedded) return body;
     return CallbackShortcuts(
       bindings: {
+        // 返回键交给系统 popRoute，避免与 goBack 键事件双通道各弹一层。
         const SingleActivator(LogicalKeyboardKey.escape): () =>
-            Navigator.of(context).maybePop(),
-        const SingleActivator(LogicalKeyboardKey.goBack): () =>
             Navigator.of(context).maybePop(),
       },
       child: Scaffold(

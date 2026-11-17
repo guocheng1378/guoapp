@@ -12,6 +12,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -320,6 +321,13 @@ Future<void> showRemoteNoticeCard(
     pageBuilder: (dialogContext, animation, secondaryAnimation) {
       final scheme = Theme.of(dialogContext).colorScheme;
       final textTheme = Theme.of(dialogContext).textTheme;
+      // 长更新说明（notes 多行）必须能上下滚动：给整卡一个高度上限，
+      // 内容区用 Flexible + SingleChildScrollView 吃掉可滚动空间，按钮
+      // 固定在底部始终可见。无上限时 Column 会把弹窗撑出屏幕。
+      final maxHeight = math.max(
+        200.0,
+        MediaQuery.sizeOf(dialogContext).height - 48,
+      );
       var linkFallback = '';
 
       Widget sectionHeader(String icon, String text) => Row(
@@ -371,7 +379,7 @@ Future<void> showRemoteNoticeCard(
 
       return Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 320),
+          constraints: BoxConstraints(maxWidth: 320, maxHeight: maxHeight),
           child: GlassSurface(
             radius: 20,
             topHighlight: true,
@@ -421,23 +429,15 @@ Future<void> showRemoteNoticeCard(
                       if (announcement.title.isNotEmpty) {
                         sections.add(const SizedBox(height: 10));
                       }
-                      sections.add(
-                        Flexible(
-                          child: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (announcement.message.isNotEmpty)
-                                  bodyText(announcement.message),
-                                if (announcement.message.isNotEmpty && hasImage)
-                                  const SizedBox(height: 12),
-                                if (hasImage)
-                                  announcementImage(announcement.image),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
+                      if (announcement.message.isNotEmpty) {
+                        sections.add(bodyText(announcement.message));
+                      }
+                      if (announcement.message.isNotEmpty && hasImage) {
+                        sections.add(const SizedBox(height: 12));
+                      }
+                      if (hasImage) {
+                        sections.add(announcementImage(announcement.image));
+                      }
                     }
                   }
                   if (update != null) {
@@ -461,13 +461,7 @@ Future<void> showRemoteNoticeCard(
                     );
                     if (update.notes.isNotEmpty) {
                       sections.add(const SizedBox(height: 10));
-                      sections.add(
-                        Flexible(
-                          child: SingleChildScrollView(
-                            child: bodyText(update.notes),
-                          ),
-                        ),
-                      );
+                      sections.add(bodyText(update.notes));
                     }
                   }
 
@@ -517,37 +511,35 @@ Future<void> showRemoteNoticeCard(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: sections,
-                        ),
-                      ),
-                      if (linkFallback.isNotEmpty)
-                        Padding(
-                          padding:
-                              const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                      // 内容区可滚动：长 notes 时上下滑动阅读，按钮固定底部。
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                           child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '无法打开浏览器，链接已复制，可手动粘贴：',
-                                style: textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
+                              ...sections,
+                              if (linkFallback.isNotEmpty) ...[
+                                const SizedBox(height: 14),
+                                Text(
+                                  '无法打开浏览器，链接已复制，可手动粘贴：',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              SelectableText(
-                                linkFallback,
-                                style: textTheme.bodySmall?.copyWith(
-                                  color: scheme.primary,
+                                const SizedBox(height: 4),
+                                SelectableText(
+                                  linkFallback,
+                                  style: textTheme.bodySmall?.copyWith(
+                                    color: scheme.primary,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
+                      ),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
                         child: Row(children: actions),

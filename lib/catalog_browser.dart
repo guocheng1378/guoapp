@@ -95,6 +95,9 @@ class _CatalogEntry {
   int nextPage = 1;
   bool hasMore = true;
   bool fresh = false;
+  // 连续失败/警告次数：搜索态下坏源不能无限把 hasMore 撑成 true，
+  // 否则向下滚动会一直重发同一页，表现为「循环重复」。
+  int stalled = 0;
 }
 
 class _CatalogSession {
@@ -441,17 +444,42 @@ class CatalogBrowser {
           force: force,
         );
         if (generation != session.generation) return;
+        final known = <String>{for (final item in entry.items) item.id};
+        final freshRows = more
+            ? result.items.where((item) => !known.contains(item.id)).toList()
+            : result.items;
         final items = <String, Drama>{
           if (more)
             for (final item in entry.items) item.id: item,
-          for (final item in result.items) item.id: item,
+          for (final item in freshRows) item.id: item,
         };
         entry.items = items.values.toList();
         entry.page = result.page;
-        entry.nextPage = result.warning.isEmpty ? result.page + 1 : page;
-        entry.hasMore =
-            (query.isEmpty || (SourceSite.byId(source)?.pagedSearch ?? false)) &&
-            (result.hasMore || result.warning.isNotEmpty);
+        final searching = query.isNotEmpty;
+        final paged = SourceSite.byId(source)?.pagedSearch ?? false;
+        if (searching) {
+          // 搜索态：页码必须单调推进。旧实现在 warning 时把 nextPage 冻结
+          // 回当前页，并把 hasMore 置 true，坏源（或红果 Limited 提示）会让
+          // 上拉永远重发同一页，用户看到列表循环重复且停不下来。
+          entry.nextPage = max(page, result.page) + 1;
+          if (result.warning.isEmpty) {
+            entry.stalled = 0;
+          } else {
+            entry.stalled++;
+          }
+          // 只信服务端明确给出的 hasMore；warning 不再充当「还有下一页」。
+          // 连续两页警告/空响应后彻底收敛，避免坏源拖住整组。
+          entry.hasMore = paged && result.hasMore && entry.stalled < 2;
+          // 本页没有任何新条目（服务端忽略 page / 每页都回第一页）时
+          // 直接判耗尽：否则列表看着不动、footer 却一直转，就是用户
+          // 说的「向下滚动循环重复」。
+          if (more && freshRows.isEmpty) entry.hasMore = false;
+        } else {
+          // 浏览态保留既有语义：失败成员重试同一页（测试与断网恢复依赖）。
+          entry.nextPage = result.warning.isEmpty ? result.page + 1 : page;
+          entry.hasMore = result.hasMore || result.warning.isNotEmpty;
+          entry.stalled = result.warning.isEmpty ? 0 : entry.stalled + 1;
+        }
         entry.fresh = result.fresh && result.warning.isEmpty;
         if (query.isEmpty) _remember(source, result.items);
         if (result.warning.isNotEmpty) {
@@ -461,10 +489,18 @@ class CatalogBrowser {
         }
       } catch (error) {
         if (generation != session.generation) return;
-        entry.nextPage = page;
-        entry.hasMore =
-            query.isEmpty || (SourceSite.byId(source)?.pagedSearch ?? false);
         entry.fresh = false;
+        if (query.isNotEmpty) {
+          // 搜索态失败同样不能无限重试同一页：推进页码、限次收敛。
+          entry.nextPage = page + 1;
+          entry.stalled++;
+          entry.hasMore =
+              (SourceSite.byId(source)?.pagedSearch ?? false) &&
+              entry.stalled < 2;
+        } else {
+          entry.nextPage = page;
+          entry.hasMore = true;
+        }
         // 强制刷新失败（断网/源站超时）不能清掉已在显示的磁盘缓存：
         // 旧实现把 entry.items 清空，用户看到的就是「下拉刷新一下，
         // 缓存突然没有了」。错误仍通过 failures 以横幅/警告呈现。

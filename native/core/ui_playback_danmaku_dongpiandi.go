@@ -91,12 +91,38 @@ func (d *Downloader) dongpiandiDanmaku(ctx context.Context, variantID, episodeID
 	if err != nil {
 		return hongguoDanmakuPage{}, err
 	}
-	// 覆盖页：至少一个 30s 窗口；有更晚的弹幕就延伸到最晚弹幕之后 30s，
-	// 让 Dart 侧 _covering 一页覆盖全片，不必逐窗口空打。
+	// 覆盖页：至少一个 30s 窗口。next 只能用**实际返回**的最后一条推算——
+	// 早前按全部 items 取最晚一条，而 items 会被 90 条截断：窗口已推到片尾，
+	// 被截掉的那些弹幕就永远取不到了（热门集 >90 条时整段缺失）。
 	next := start + danmakuWindowMS
+	page := hongguoDanmakuPage{
+		EpisodeID: episodeID, Items: []hongguoDanmakuItem{}, StartMS: start, NextMS: next, Total: int64(len(items)),
+	}
+	truncated := false
 	for _, item := range items {
-		if edge := item.TimeMS + danmakuWindowMS; edge > next {
-			next = edge
+		if item.TimeMS < start || item.TimeMS >= duration {
+			continue
+		}
+		if len(page.Items) == 90 {
+			truncated = true
+			break
+		}
+		page.Items = append(page.Items, item)
+	}
+	if truncated {
+		// 关键修复：被 90 条截断时，窗口只推进到第 90 条之后（+30s 保持原语义），
+		// 否则原实现把 next 推到全片末尾，被截掉的弹幕永远取不到。
+		if last := len(page.Items); last > 0 {
+			if edge := page.Items[last-1].TimeMS + danmakuWindowMS; edge > next {
+				next = edge
+			}
+		}
+	} else {
+		// 未截断：覆盖页一次覆盖全片（最晚一条 + 30s），与历史行为一致。
+		for _, item := range items {
+			if edge := item.TimeMS + danmakuWindowMS; edge > next {
+				next = edge
+			}
 		}
 	}
 	if next > duration {
@@ -105,18 +131,7 @@ func (d *Downloader) dongpiandiDanmaku(ctx context.Context, variantID, episodeID
 	if next <= start {
 		next = start + 1
 	}
-	page := hongguoDanmakuPage{
-		EpisodeID: episodeID, Items: []hongguoDanmakuItem{}, StartMS: start, NextMS: next, Total: int64(len(items)),
-	}
-	for _, item := range items {
-		if item.TimeMS < start || item.TimeMS >= next {
-			continue
-		}
-		page.Items = append(page.Items, item)
-		if len(page.Items) == 90 {
-			break
-		}
-	}
+	page.NextMS = next
 	sort.SliceStable(page.Items, func(i, j int) bool { return page.Items[i].TimeMS < page.Items[j].TimeMS })
 	return page, nil
 }

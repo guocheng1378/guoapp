@@ -12,13 +12,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// webdavLoopbackHost 判断备份目标是否本机回环（明文 http 的唯一豁免）。
+func webdavLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // 云备份（WebDAV）：Dart 把全量快照 JSON 交上来，这里负责加密信封与
 // WebDAV 传输；备份内容语义（schema、恢复、合并）由 Dart 侧负责。
@@ -75,7 +86,15 @@ func nativeWebDAV(ctx context.Context, command string, raw json.RawMessage) (any
 	if !strings.HasPrefix(input.URL, "http://") && !strings.HasPrefix(input.URL, "https://") {
 		return nil, errors.New("服务器地址必须以 http:// 或 https:// 开头")
 	}
-	client := &http.Client{}
+	// 明文 http 会把 WebDAV 账号以 BasicAuth 暴露在链路上：只允许本机回环。
+	if strings.HasPrefix(strings.ToLower(input.URL), "http://") {
+		parsed, err := url.Parse(input.URL)
+		if err != nil || !webdavLoopbackHost(parsed.Hostname()) {
+			return nil, errors.New("为保证账号安全，请使用 https:// 地址（本机回环地址除外）")
+		}
+	}
+	// 没有超时的 client 会在服务器挂起时让整个备份流程永久卡住。
+	client := &http.Client{Timeout: 60 * time.Second}
 	switch command {
 	case "test":
 		return webdavTest(ctx, client, input)

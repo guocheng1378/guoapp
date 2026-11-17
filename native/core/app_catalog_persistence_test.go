@@ -249,13 +249,14 @@ func TestNativeHongguoStalledCursorKeepsPartialItems(t *testing.T) {
 func TestNativeCatalogPreservesLargeLibraryAndPage501(t *testing.T) {
 	var requested string
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
-		const prefix = "/ai-duanju/"
-		if !strings.HasPrefix(request.URL.Path, prefix) {
+		target := huangguoEdgeTarget(t, request)
+		if target.Path != "/api/videos/category/ai-duanju" {
 			return nil, errors.New("only synthetic catalog metadata is allowed")
 		}
-		requested = strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, prefix), "/")
-		card := `<article class="o5-card"><a href="https://huangguoai.com/d/6001/" class="o5-card__poster"><img src="https://example.test/cover-6001.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguoai.com/d/6001/" class="o5-card__title">第6001部</a></h3><span class="o5-card__ep">全</span></div></article>`
-		return sourceFixtureResponse(request, 200, "<html><body><div class='o5-grid'>"+card+"</div></body></html>"), nil
+		requested = target.Query().Get("page")
+		return sourceFixtureResponse(request, 200, huangguoEdgeReply([]any{
+			map[string]any{"id": "6001", "title": "第6001部"},
+		})), nil
 	})
 	items := make([]nativeDrama, 6000)
 	for index := range items {
@@ -446,6 +447,11 @@ func TestNativeCatalogCacheLoadsOnFirstUse(t *testing.T) {
 }
 
 func TestNativeCatalogSizeLimitPreservesPreviousFile(t *testing.T) {
+	// 安全阀已提到 512 MiB，直接构造超限数据会吃掉半 GB 内存并拖慢构建：
+	// 注入 1 KiB 复现同一分支（判定逻辑与常量无关）。
+	previousLimit := nativeCatalogMaxBytes
+	nativeCatalogMaxBytes = 1 << 10
+	t.Cleanup(func() { nativeCatalogMaxBytes = previousLimit })
 	var requests atomic.Int32
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {
 		requests.Add(1)

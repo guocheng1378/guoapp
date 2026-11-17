@@ -29,12 +29,26 @@ import (
 )
 
 const (
-	yeguoBaseURL    = "https://www.yeguodj.com"
+	// 2026-11-14 真网实测：www.yeguodj.com 已无 DNS 解析，*.vgbyziuz.cc
+	// 全线超时；analyze.buxefaex.cc 与 delta.ygrwdsgt.cc 仍能返回页面与
+	// 接口配置。默认入口改为存活线路，冷启动不再从死域名起步。
+	yeguoBaseURL    = "https://analyze.buxefaex.cc"
 	yeguoTransitURL = "https://ygdj7.com"
+	// 单条线路的自发现预算：死线路快速让位，避免整轮探测被一个超时拖垮。
+	// 整轮预算由调用方 ctx 决定，不再固定 25s 覆盖外层超时。
+	yeguoSiteTimeout = 8 * time.Second
 )
 
 var (
-	yeguoBackupSites  = []string{"https://attract.vgbyziuz.cc", "https://as.vgbyziuz.cc", "https://anyway.vgbyziuz.cc", "https://analyze.buxefaex.cc"}
+	// 存活线路排在前面，DNS 已失效的历史入口只作最后兜底，保证旧缓存
+	// 里的地址仍能被识别、也不会再拖慢首屏。
+	yeguoBackupSites = []string{
+		"https://delta.ygrwdsgt.cc",
+		"https://attract.vgbyziuz.cc",
+		"https://as.vgbyziuz.cc",
+		"https://anyway.vgbyziuz.cc",
+		"https://www.yeguodj.com",
+	}
 	errYeguoDecode    = errors.New("野果接口响应校验或解码失败")
 	yeguoModuleImport = regexp.MustCompile(`(?s)import\s*\{([^{};]+)\}\s*from\s*["'\x60]([^"'\x60]+)["'\x60]`)
 	// baseURL:xxx(...) 调用点：xxx 是返回接口根地址的箭头函数名
@@ -71,8 +85,13 @@ type yeguoAPIClient struct {
 	mu         sync.Mutex
 	access     *yeguoAccess
 	pending    *yeguoAccessCall
-	httpOnce   sync.Once
-	httpClient *http.Client
+	// 上次自发现成功的线路：站点换域名很频繁，重发现时先探它，
+	// 避免每次都从 DNS 已失效的历史入口重新开始。failedSite 记录上一次
+	// 请求失败的线路，重发现时把它降权，防止清缓存后立刻回到同一条死线。
+	lastGoodSite string
+	failedSite   string
+	httpOnce     sync.Once
+	httpClient   *http.Client
 }
 
 func (d *Downloader) yeguoClient() *yeguoAPIClient {
@@ -122,6 +141,9 @@ func isYeguoActiveSite(raw string) bool {
 		strings.HasSuffix(host, ".awlaxemk.cc"),
 		strings.HasSuffix(host, ".vuenadqi.cc"),
 		strings.HasSuffix(host, ".vgbyziuz.cc"),
+		// 注册表（specs.go）早已登记 delta.ygrwdsgt.cc，运行时白名单漏了
+		// 这个后缀，导致真网仍存活的线路即使被发现也被 add() 静默丢弃。
+		strings.HasSuffix(host, ".ygrwdsgt.cc"),
 		host == "yeguodj.com" || host == "www.yeguodj.com" || strings.HasSuffix(host, ".yeguodj.com"),
 		host == "ocdjlxow.cc" || strings.HasSuffix(host, ".ocdjlxow.cc"):
 		return true
@@ -196,7 +218,7 @@ func yeguoTransitSites(body string) []string {
 			host := strings.ToLower(parsed.Hostname())
 			if strings.HasSuffix(host, ".buxefaex.cc") || strings.HasSuffix(host, ".fzchosdi.cc") ||
 				strings.HasSuffix(host, ".awlaxemk.cc") || strings.HasSuffix(host, ".vuenadqi.cc") ||
-				strings.HasSuffix(host, ".vgbyziuz.cc") ||
+				strings.HasSuffix(host, ".vgbyziuz.cc") || strings.HasSuffix(host, ".ygrwdsgt.cc") ||
 				strings.HasSuffix(host, ".yeguodj.com") || strings.HasSuffix(host, ".ocdjlxow.cc") {
 				add(match)
 			}
@@ -448,8 +470,9 @@ func parseYeguoPublicConfiguration(script string) *yeguoAccess {
 }
 
 func (client *yeguoAPIClient) discoverConfiguration(ctx context.Context) (*yeguoAccess, error) {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	var sites []string
 	add := func(site string) {
@@ -458,24 +481,80 @@ func (client *yeguoAPIClient) discoverConfiguration(ctx context.Context) (*yeguo
 			sites = append(sites, site)
 		}
 	}
+	// 上次成功的线路优先：站点域名轮换频繁，先探已知可用的那条，
+	// 冷启动不必每次都从 DNS 已失效的历史入口开始。
+	client.mu.Lock()
+	preferred := client.lastGoodSite
+	client.mu.Unlock()
+	add(preferred)
 	add(client.site)
 	add(yeguoBaseURL)
 	for _, backup := range yeguoBackupSites {
 		add(backup)
 	}
-	var lastErr error
-	for index := 0; index < len(sites); index++ {
-		site := sites[index]
-		access, err := client.discoverConfigurationAt(ctx, site)
-		if err == nil {
-			return access, nil
+
+	// 每条线路独立预算：DNS 失效 / 超时的线路快速让位，后面的存活线路
+	// 仍来得及探测。旧实现给整轮循环套固定 25s，外层给 90s 也没用——
+	// 前几条死线路耗尽预算后，唯一可用的线路永远排不到。
+	probe := func(candidates []string) (*yeguoAccess, error) {
+		client.mu.Lock()
+		failed := client.failedSite
+		client.mu.Unlock()
+		if failed != "" {
+			// 上次失败的线路排到末尾：清缓存重发现时先换一条线，
+			// 否则立刻回到同一条死线，故障会被缓存钉住一小时。
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return candidates[i] != failed && candidates[j] == failed
+			})
 		}
-		lastErr = err
-		if index == 0 {
-			for _, site := range client.discoverTransitSites(ctx) {
-				add(site)
+		var lastErr error
+		for _, site := range candidates {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
+			siteCtx, cancel := context.WithTimeout(ctx, yeguoSiteTimeout)
+			access, err := client.discoverConfigurationAt(siteCtx, site)
+			cancel()
+			if err == nil {
+				client.mu.Lock()
+				client.lastGoodSite = site
+				client.failedSite = ""
+				client.mu.Unlock()
+				return access, nil
+			}
+			lastErr = err
 		}
+		return nil, lastErr
+	}
+	var lastErr error
+	if access, err := probe(sites); err == nil {
+		return access, nil
+	} else {
+		lastErr = err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// 内置线路全失败后才问线路发现页，且不给它挤占内置线路的预算：
+	// 中转页自身也常 DNS 失效（ygdj7/ygdj15 实测均不可解析）。
+	transitCtx, transitCancel := context.WithTimeout(ctx, yeguoSiteTimeout)
+	transit := client.discoverTransitSites(transitCtx)
+	transitCancel()
+	var extra []string
+	for _, site := range transit {
+		if site = validYeguoSite(site); site != "" && isYeguoActiveSite(site) && !seen[site] {
+			seen[site] = true
+			extra = append(extra, site)
+		}
+	}
+	if access, err := probe(extra); err == nil {
+		return access, nil
+	} else if err != nil {
+		lastErr = err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return nil, errors.Join(errors.New("野果线路暂不可用，请稍后重试"), lastErr)
 }
@@ -639,6 +718,20 @@ func decodeYeguoResponse(body []byte, access *yeguoAccess) (map[string]any, erro
 	return envelope, nil
 }
 
+// invalidate 丢弃当前接口配置并记录失败线路：网络错误、非 2xx、解码
+// 失败等都说明这条线路已经换了域名或下线，必须重新自发现，不能让
+// configuration() 的 1 小时缓存把死线路钉住。
+func (client *yeguoAPIClient) invalidate(access *yeguoAccess) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.access == access {
+		client.access = nil
+	}
+	if access != nil && access.site != "" {
+		client.failedSite = access.site
+	}
+}
+
 func (client *yeguoAPIClient) call(ctx context.Context, route string, parameters url.Values) (map[string]any, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		access, err := client.configuration(ctx)
@@ -679,26 +772,34 @@ func (client *yeguoAPIClient) call(ctx context.Context, route string, parameters
 		}
 		response, err := client.do(ctx, request, timeout)
 		if err != nil {
+			if attempt == 0 {
+				client.invalidate(access)
+				continue
+			}
 			return nil, err
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
 		response.Body.Close()
-		if response.StatusCode < 200 || response.StatusCode >= 300 || catalogResponseBlockReason(response, body) != "" {
+		// 业务错误（status/errcode）是站点正常应答，不该丢弃配置；
+		// 线路级故障（网络、非 2xx、拦截页、读取失败、解码失败）才自愈。
+		lineFailure := response.StatusCode < 200 || response.StatusCode >= 300 ||
+			catalogResponseBlockReason(response, body) != "" || readErr != nil || len(body) > 8<<20
+		if lineFailure {
+			if attempt == 0 {
+				client.invalidate(access)
+				continue
+			}
+			if readErr != nil || len(body) > 8<<20 {
+				return nil, errors.New("野果接口数据过大或读取失败")
+			}
 			return nil, client.downloader.catalogResponseError(request, response, body)
 		}
-		if readErr != nil || len(body) > 8<<20 {
-			return nil, errors.New("野果接口数据过大或读取失败")
-		}
 		payload, err := decodeYeguoResponse(body, access)
-		if errors.Is(err, errYeguoDecode) && attempt == 0 {
-			client.mu.Lock()
-			if client.access == access {
-				client.access = nil
-			}
-			client.mu.Unlock()
-			continue
-		}
 		if err != nil {
+			if attempt == 0 {
+				client.invalidate(access)
+				continue
+			}
 			return nil, err
 		}
 		// 旧协议载荷形如 {"status":"1","data":{...}}；新版信封 {errcode,timestamp,data:<密文>}

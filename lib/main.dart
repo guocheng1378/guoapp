@@ -14,6 +14,7 @@ import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'glass_preferences.dart';
+import 'motion_performance.dart';
 import 'fog_tuning.dart';
 import 'soft_glass.dart';
 import 'home_screen.dart';
@@ -22,6 +23,7 @@ import 'local_snapshot_files.dart';
 import 'local_store.dart';
 import 'cloud_backup.dart';
 import 'profiles_screen.dart';
+import 'route_transition.dart';
 import 'media_library.dart';
 import 'package_smoke.dart';
 import 'lan_controller.dart';
@@ -29,6 +31,7 @@ import 'player_screen.dart';
 import 'video_enhancement_assets.dart';
 import 'app_icons.dart';
 import 'remote_notice.dart';
+import 'ui_scale.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -162,6 +165,7 @@ class _AppBootstrapState extends State<AppBootstrap>
       // 四个偏好集合各自读不同 key，互不依赖，一并并行。
       await Future.wait<void>([
         GlassPreferences.load(preferences),
+        MotionPerformance.load(preferences),
         FogTuningStore.load(preferences),
         SoftGlassStore.load(preferences),
         LiveRouteMemory.load(preferences),
@@ -286,12 +290,15 @@ class DuanjuApp extends StatelessWidget {
       store,
       SoftGlassStore.revision,
       GlassPreferences.enabled,
+      // 界面缩放：拖动设置页滑块时逐帧重建整壳（不落盘）。
+      UiScale.current,
     ]),
     builder: (_, _) => _application(),
   );
 
   Widget _application() => MaterialApp(
     navigatorKey: navigatorKey,
+    navigatorObservers: [appRouteObserver],
     title: appName,
     debugShowCheckedModeBanner: false,
     locale: const Locale('zh', 'CN'),
@@ -304,30 +311,34 @@ class DuanjuApp extends StatelessWidget {
       final mode = store?.displayMode ?? 'auto';
       final tv = mode == 'television' || mode == 'auto' && television;
       final theme = Theme.of(context);
-      return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: AppTheme.systemBars(theme.brightness),
-        child: ColoredBox(
-          color: theme.scaffoldBackgroundColor,
-          child: AppOrientationScope(
-            television: tv,
-            child: AppLayout(
+      // 界面缩放包在最外层：倍率只进 MediaQuery.textScaler，主题/布局树不动。
+      return UiScale.apply(
+        context,
+        AnnotatedRegion<SystemUiOverlayStyle>(
+          value: AppTheme.systemBars(theme.brightness),
+          child: ColoredBox(
+            color: theme.scaffoldBackgroundColor,
+            child: AppOrientationScope(
               television: tv,
-              version: version,
-              child: Theme(
-                data: tv ? televisionTheme(theme) : theme,
-                child: Shortcuts(
-                  shortcuts: const {
-                    SingleActivator(
-                      LogicalKeyboardKey.select,
-                      includeRepeats: false,
-                    ): ActivateIntent(),
-                    SingleActivator(
-                      LogicalKeyboardKey.gameButtonA,
-                      includeRepeats: false,
-                    ): ActivateIntent(),
-                    SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
-                  },
-                  child: FocusTraversalGroup(child: child!),
+              child: AppLayout(
+                television: tv,
+                version: version,
+                child: Theme(
+                  data: tv ? televisionTheme(theme) : theme,
+                  child: Shortcuts(
+                    shortcuts: const {
+                      SingleActivator(
+                        LogicalKeyboardKey.select,
+                        includeRepeats: false,
+                      ): ActivateIntent(),
+                      SingleActivator(
+                        LogicalKeyboardKey.gameButtonA,
+                        includeRepeats: false,
+                      ): ActivateIntent(),
+                      SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
+                    },
+                    child: FocusTraversalGroup(child: child!),
+                  ),
                 ),
               ),
             ),

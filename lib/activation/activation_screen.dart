@@ -10,8 +10,8 @@ import 'qq_launch.dart';
 /// 卖家联系方式：显示在激活页，供买家购买授权码 / 续费 / 换机时联系。
 /// 点卡片拉起 QQ 加好友（识别文本中的 QQ 号），拉不起来自动复制；
 /// 右侧复制按钮直接复制。留空字符串则整块不显示。
-const String kSellerContact = 'QQ：963484350';
-const String kSellerContactHint = '购买授权码 / 续费 / 换机，点此加 QQ 联系卖家';
+const String kSellerContact = '';
+const String kSellerContactHint = '购买授权码 / 续费 / 换机，请访问网页反馈区';
 
 /// 激活页：未激活时输入授权码；已激活时展示授权信息。
 class ActivationScreen extends StatefulWidget {

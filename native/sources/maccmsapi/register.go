@@ -48,4 +48,5 @@ var (
 	_ provider.CatalogSorter = (*Source)(nil)
 	_ provider.Detailer      = (*Source)(nil)
 	_ provider.Searcher      = (*Source)(nil)
+	_ provider.PagedSearcher = (*Source)(nil)
 )

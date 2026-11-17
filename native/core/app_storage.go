@@ -189,7 +189,14 @@ func (engine *nativeEngine) moveDownloads(ctx context.Context, parent string) er
 		return errors.New("保存下载目录失败，原文件已保留")
 	}
 	manager.root = target
-	_ = os.RemoveAll(source)
+	// 旧目录删不干净（Windows 上文件被占用很常见）时记下残留位置，
+	// 由 downloadDirectory / moveDownloads 回传界面提示用户手动清理，
+	// 不再静默忽略——否则用户看不到空间被旧文件继续占着。
+	if err := os.RemoveAll(source); err != nil {
+		manager.migrationLeftover = source
+	} else {
+		manager.migrationLeftover = ""
+	}
 	return nil
 }
 

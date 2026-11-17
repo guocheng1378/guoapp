@@ -187,7 +187,8 @@ class _TelevisionControlsState extends State<TelevisionControls> {
     }
     final key = event.logicalKey;
     _scheduleHide();
-    if (key == LogicalKeyboardKey.escape || key == LogicalKeyboardKey.goBack) {
+    // 返回键交给系统 popRoute：这里再调一次 onBack 会「一次返回退两级」。
+    if (key == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) widget.onBack();
     } else if (key == LogicalKeyboardKey.mediaPlayPause ||
         key == LogicalKeyboardKey.space) {

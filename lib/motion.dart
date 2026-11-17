@@ -6,6 +6,10 @@ import 'motion_tokens.dart';
 import 'route_transition.dart';
 
 export 'motion_tokens.dart';
+// 页面级转场/淡切统一在 route_transition.dart 维护，此处 re-export，
+// 供既有 `import 'motion.dart'` 的调用方继续可见（避免重复定义）。
+export 'route_transition.dart'
+    show FadeScalePageTransitionsBuilder, FadeSwitcher;
 
 /// 按压回弹：按下缩到 [pressedScale]，松手轻弹回 1.0。
 ///
@@ -52,7 +56,7 @@ class _PressableScaleState extends State<PressableScale> {
   }
 }
 
-/// 列表错峰入场：淡入 + 自下 20px 滑入。
+/// 列表错峰入场：淡入 + 自下 32px 滑入。
 ///
 /// 延迟 = min(index * 30ms, 240ms)，动画时长 [MotionDurations.base]，
 /// 有限时长、总延迟封顶，pumpAndSettle 可收敛；测试环境直接静态渲染。
@@ -61,10 +65,19 @@ class StaggeredListItem extends StatefulWidget {
     super.key,
     required this.index,
     required this.child,
+    this.animate = true,
   });
 
   final int index;
   final Widget child;
+
+  /// false = 直接以「完成态」渲染，不播入场。
+  ///
+  /// 切分类/切站源时网格条目整批换新（State 全部重建），若照旧播入场，
+  /// 一屏 20+ 张卡同时挂 `FadeTransition`（每张一个 saveLayer）+ 错峰
+  /// 位移，持续约半秒——这是「切分类/切分组卡一下」的主因，入场动画本身
+  /// 只该在首次进页面时演一次。
+  final bool animate;
 
   @override
   State<StaggeredListItem> createState() => _StaggeredListItemState();
@@ -75,7 +88,7 @@ class _StaggeredListItemState extends State<StaggeredListItem>
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: MotionDurations.base,
-    value: Motion.inTest ? 1 : 0,
+    value: (Motion.inTest || !widget.animate) ? 1 : 0,
   );
 
   late final CurvedAnimation _curve = CurvedAnimation(
@@ -88,9 +101,12 @@ class _StaggeredListItemState extends State<StaggeredListItem>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (Motion.inTest || !widget.animate) {
+      _controller.value = 1;
+      return;
+    }
     if (_armed) return;
     _armed = true;
-    if (Motion.inTest) return;
     // 列表 item 滚出视口会被回收、拉回时重建。若此刻重播入场动画，
     // 快速滚动时路过的卡片会反复闪动；滚动进行中新建的 item 直接
     // 以完成态渲染，只有页面静止时的首次构建才播错峰入场。
@@ -124,7 +140,7 @@ class _StaggeredListItemState extends State<StaggeredListItem>
       child: AnimatedBuilder(
         animation: _curve,
         builder: (context, child) => Transform.translate(
-          offset: Offset(0, 20 * (1 - _curve.value)),
+          offset: Offset(0, 32 * (1 - _curve.value)),
           child: child,
         ),
         child: widget.child,
@@ -203,114 +219,4 @@ class _SkeletonBoxState extends State<SkeletonBox>
   }
 }
 
-/// 全局页面转场：纯淡入淡出，时长 [MotionDurations.page]。
-///
-/// 挂到 `pageTransitionsTheme` 后所有 MaterialPageRoute 自动生效。
-class FadeScalePageTransitionsBuilder extends PageTransitionsBuilder {
-  const FadeScalePageTransitionsBuilder();
 
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    final curved = CurvedAnimation(
-      parent: animation,
-      curve: MotionCurves.standard,
-      reverseCurve: MotionCurves.exit,
-    );
-    // 只做淡入淡出：缩放会让整页每帧重绘（矩阵连续变化时 FadeTransition 的
-    // 缓存层失效，页内玻璃面随之每帧重采样），是回退/切页卡顿的主要来源。
-    return _RouteTransitionScope(
-      animation: animation,
-      child: FadeTransition(opacity: curved, child: child),
-    );
-  }
-}
-
-/// 转场作用域：把「回退动画进行中」广播给全局信号。
-///
-/// 只在 **reverse**（回退/返回）期间置位——push 进场不降级，否则页面刚
-/// 出现的一瞬玻璃会从实底跳成磨砂（肉眼可见的闪变）。
-class _RouteTransitionScope extends StatefulWidget {
-  const _RouteTransitionScope({
-    required this.animation,
-    required this.child,
-  });
-
-  final Animation<double> animation;
-  final Widget child;
-
-  @override
-  State<_RouteTransitionScope> createState() => _RouteTransitionScopeState();
-}
-
-class _RouteTransitionScopeState extends State<_RouteTransitionScope> {
-  /// 本次是否已持有降级名额（保证 begin/end 严格配对）。
-  bool _holding = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.animation.addStatusListener(_onStatus);
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant _RouteTransitionScope oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.animation != widget.animation) {
-      oldWidget.animation.removeStatusListener(_onStatus);
-      widget.animation.addStatusListener(_onStatus);
-      _sync();
-    }
-  }
-
-  void _onStatus(AnimationStatus status) => _sync();
-
-  void _sync() {
-    final reversing =
-        widget.animation.status == AnimationStatus.reverse;
-    if (reversing && !_holding) {
-      _holding = true;
-      RouteTransitionSignal.beginReverse();
-    } else if (!reversing && _holding) {
-      _holding = false;
-      RouteTransitionSignal.endReverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.animation.removeStatusListener(_onStatus);
-    if (_holding) {
-      _holding = false;
-      RouteTransitionSignal.endReverse();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
-}
-
-/// 内容淡切：子树替换时以 [MotionDurations.base] 交叉淡入淡出。
-class FadeSwitcher extends StatelessWidget {
-  const FadeSwitcher({super.key, this.duration, required this.child});
-
-  final Duration? duration;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSwitcher(
-      duration: duration ?? MotionDurations.base,
-      switchInCurve: MotionCurves.standard,
-      switchOutCurve: MotionCurves.exit,
-      child: child,
-    );
-  }
-}

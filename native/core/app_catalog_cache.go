@@ -16,7 +16,7 @@ const nativeCatalogTTL = 15 * time.Minute
 // 剧库每次变更（翻页、详情补齐）都要把整份目录重新序列化并原子写盘，
 // 万级条目时一次 fsync + rename 的代价是几百毫秒，连着翻页就把首屏
 // 拖成连续卡顿。这里把「序列化 + 体积判定」留在调用栈内同步完成
-// （超 32 MiB 必须当场报错，不能拖到窗口外再算），真正的写盘交给
+// （超体积安全阀必须当场报错，不能拖到窗口外再算），真正的写盘交给
 // 合并窗：窗口内的连续变更只落盘一次。
 const nativeCatalogFlushWindow = 2 * time.Second
 
@@ -43,13 +43,15 @@ type nativeCatalogDisk struct {
 func (engine *nativeEngine) loadCatalogCache() {
 	// 读盘之前先把合并窗里待写的快照落盘：读到的必须是「已落盘」的最新剧库，
 	// 否则同一目录重建引擎（或重启）后会读到旧快照，丢掉最后一次变更。
+	// registry 按「数据目录」登记引擎，查别人待写快照仍用它；
+	// 但落盘位置是缓存目录（可能已经搬到系统缓存目录）。
 	flushPendingCatalogWrite(engine.directory, engine)
-	file, err := os.Open(filepath.Join(engine.directory, "catalogs.json"))
+	file, err := os.Open(filepath.Join(engine.cacheDir(), "catalogs.json"))
 	if err != nil {
 		return
 	}
 	defer file.Close()
-	body, err := io.ReadAll(io.LimitReader(file, nativeCatalogMaxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(file, int64(nativeCatalogMaxBytes)+1))
 	if err != nil || len(body) > nativeCatalogMaxBytes {
 		return
 	}
@@ -298,7 +300,7 @@ func (engine *nativeEngine) marshalCatalogDiskLocked() ([]byte, error) {
 }
 
 // deferCatalogDiskWriteLocked 把剧库快照交给合并窗落盘（调用方持有 engine.mu）。
-// 返回值只含「当场可判定」的错误（序列化失败、超过 32 MiB 上限）；窗口内的
+// 返回值只含「当场可判定」的错误（序列化失败、超过体积安全阀）；窗口内的
 // 实际写盘失败由下一次读取/重试路径回报（catalogSaveError 通道不变）。
 //
 // source 是这次变更所属的站源：切源时用来判断「上一源的快照要不要先落盘」。
@@ -364,7 +366,7 @@ func (engine *nativeEngine) flushCatalogDiskLocked() error {
 	if len(body) == 0 {
 		return engine.catalogSaveError
 	}
-	err := writeNativeCacheFile(filepath.Join(engine.directory, "catalogs.json"), body)
+	err := writeNativeCacheFile(filepath.Join(engine.cacheDir(), "catalogs.json"), body)
 	if err != nil {
 		engine.catalogSaveError = nativeSaveError("剧库", err)
 		engine.markCatalogSavePendingLocked()
@@ -423,7 +425,7 @@ func (engine *nativeEngine) stopCatalogWrites() {
 func (engine *nativeEngine) writeCatalogDiskLocked() error {
 	body, err := engine.marshalCatalogDiskLocked()
 	if err == nil {
-		err = writeNativeCacheFile(filepath.Join(engine.directory, "catalogs.json"), body)
+		err = writeNativeCacheFile(filepath.Join(engine.cacheDir(), "catalogs.json"), body)
 	}
 	engine.catalogSaveError = nativeSaveError("剧库", err)
 	if err == nil {

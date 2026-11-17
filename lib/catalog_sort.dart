@@ -82,16 +82,29 @@ class CatalogView {
   );
 }
 
+/// 归一化搜索文本时剥掉的无用字符。预编译：排序比较里会调用上万次，
+/// 每次都 `RegExp(...)` 现编译（正则编译 + 解析）是列表排序卡顿的主要来源。
+final RegExp _searchNoisePattern = RegExp(
+  r'[\s\u3000，。！？、：；·「」『』（）【】《》“”‘’.,!?:;\-_/()\[\]{}]+',
+);
+final RegExp _whitespacePattern = RegExp(r'\s+');
+final RegExp _scorePattern = RegExp(r'\d+(?:\.\d+)?');
+final RegExp _metricNoisePattern = RegExp(r'[,，\s]');
+final RegExp _metricPattern = RegExp(
+  r'^(\d+(?:\.\d+)?)([亿万千wkmb]?)(?:\+)?(?:次播放|次观看|人看过|热度|播放|观看|次)?\+?$',
+);
+final RegExp _seasonSuffixPattern = RegExp(
+  r'第([0-9零〇一二两兩三四五六七八九十百]+)([季部])',
+);
+final RegExp _naturalTokenPattern = RegExp(r'\d+|\D+');
+
 String normalizedSearchText(String text) {
   final value = String.fromCharCodes(
     text.runes.map(
       (rune) => rune >= 0xff01 && rune <= 0xff5e ? rune - 0xfee0 : rune,
     ),
   );
-  return value.toLowerCase().replaceAll(
-    RegExp(r'[\s\u3000，。！？、：；·「」『』（）【】《》“”‘’.,!?:;\-_/()\[\]{}]+'),
-    '',
-  );
+  return value.toLowerCase().replaceAll(_searchNoisePattern, '');
 }
 
 bool matchesDramaQuery(Drama drama, String query) {
@@ -100,7 +113,7 @@ bool matchesDramaQuery(Drama drama, String query) {
   );
   final terms = query
       .trim()
-      .split(RegExp(r'\s+'))
+      .split(_whitespacePattern)
       .map(normalizedSearchText)
       .where((word) => word.isNotEmpty);
   return terms.every(fields.contains);
@@ -109,7 +122,7 @@ bool matchesDramaQuery(Drama drama, String query) {
 /// 解析评分文本（maccms vod_score 一般 0-10，"8.5"/"8.5分"）。
 /// 超出 0-10 视为无效（其他字段混入时不当评分用），解析不出返回 null。
 double? scoreValue(String text) {
-  final match = RegExp(r'\d+(?:\.\d+)?').firstMatch(text.trim());
+  final match = _scorePattern.firstMatch(text.trim());
   if (match == null) return null;
   final value = double.tryParse(match.group(0)!);
   if (value == null || value < 0 || value > 10) return null;
@@ -147,10 +160,8 @@ double? scoreValue(String text) {
 }
 
 double? catalogMetric(String text) {
-  final cleaned = text.toLowerCase().replaceAll(RegExp(r'[,，\s]'), '');
-  final match = RegExp(
-    r'^(\d+(?:\.\d+)?)([亿万千wkmb]?)(?:\+)?(?:次播放|次观看|人看过|热度|播放|观看|次)?\+?$',
-  ).firstMatch(cleaned);
+  final cleaned = text.toLowerCase().replaceAll(_metricNoisePattern, '');
+  final match = _metricPattern.firstMatch(cleaned);
   if (match == null) return null;
   final number = double.tryParse(match[1]!);
   if (number == null || !number.isFinite) return null;
@@ -170,7 +181,13 @@ double? catalogMetric(String text) {
 /// 源站顺序、名称、季号只依赖本地字段，恒可用。
 /// 服务端排序（如剧果 sort=hot/new）由调用方按源能力并入返回集合。
 Set<CatalogSort> catalogSortSupport(Iterable<Drama> items) {
-  final rows = items.toList();
+  final all = items.toList();
+  // 等距抽样：判据是「半数以上条目具备可比值」，字段分布在源站顺序里是
+  // 均匀的，抽 600 条与全量结论一致。剧库上万条时全量解析 4 个字段是
+  // 打开筛选面板要卡几百毫秒的主因（真机 18959 条实测）。
+  final rows = all.length <= 600
+      ? all
+      : [for (var index = 0; index < 600; index++) all[index * all.length ~/ 600]];
   var heat = 0;
   var views = 0;
   var score = 0;
@@ -256,20 +273,20 @@ int _seasonNumber(String label) {
 
 String _naturalTitle(String title) =>
     normalizedSearchText(title).replaceAllMapped(
-      RegExp(r'第([0-9零〇一二两兩三四五六七八九十百]+)([季部])'),
+      _seasonSuffixPattern,
       (match) => '第${_seasonNumber(match[1]!)}${match[2]}',
     );
 
-int naturalTitleCompare(String left, String right) {
-  final pattern = RegExp(r'\d+|\D+');
-  final a = pattern
-      .allMatches(_naturalTitle(left))
-      .map((match) => match[0]!)
-      .toList();
-  final b = pattern
-      .allMatches(_naturalTitle(right))
-      .map((match) => match[0]!)
-      .toList();
+/// 自然排序键：标题切成「数字 / 非数字」交替的 token 序列。
+///
+/// 排序时每条只算一次，比较阶段纯比 token；原实现每次两两比较都重新归一化
+/// 两个标题（n log n 次比较 → 上万次正则 + runes 遍历），是列表排序卡顿的主因。
+List<String> naturalTitleTokens(String title) => _naturalTokenPattern
+    .allMatches(_naturalTitle(title))
+    .map((match) => match[0]!)
+    .toList();
+
+int compareNaturalTokens(List<String> a, List<String> b) {
   for (var index = 0; index < a.length && index < b.length; index++) {
     final numberA = int.tryParse(a[index]);
     final numberB = int.tryParse(b[index]);
@@ -280,6 +297,9 @@ int naturalTitleCompare(String left, String right) {
   }
   return a.length.compareTo(b.length);
 }
+
+int naturalTitleCompare(String left, String right) =>
+    compareNaturalTokens(naturalTitleTokens(left), naturalTitleTokens(right));
 
 int _descending(num? a, num? b) => a == null
     ? (b == null ? 0 : 1)
@@ -388,13 +408,27 @@ List<Drama> sortCatalog(Iterable<Drama> rows, CatalogView view) {
     return value / maximum;
   }
 
+  // 排序键预计算：标题型排序原来在比较函数里对两个标题各做一次归一化
+  // （n log n 次比较 → 上万次正则），上千条时能卡几百毫秒。这里每条只算一次。
+  final nameKeys = view.sort == CatalogSort.name
+      ? <String, String>{
+          for (final drama in items) drama.id: normalizedSearchText(drama.title),
+        }
+      : const <String, String>{};
+  final seasonKeys = view.sort == CatalogSort.season
+      ? <String, List<String>>{
+          for (final drama in items) drama.id: naturalTitleTokens(drama.title),
+        }
+      : const <String, List<String>>{};
+
   items.sort((a, b) {
     final comparison = switch (view.sort) {
       CatalogSort.source => 0,
-      CatalogSort.name => normalizedSearchText(
-        a.title,
-      ).compareTo(normalizedSearchText(b.title)),
-      CatalogSort.season => naturalTitleCompare(a.title, b.title),
+      CatalogSort.name => nameKeys[a.id]!.compareTo(nameKeys[b.id]!),
+      CatalogSort.season => compareNaturalTokens(
+        seasonKeys[a.id]!,
+        seasonKeys[b.id]!,
+      ),
       _ => _descending(normalized(a), normalized(b)),
     };
     return comparison != 0

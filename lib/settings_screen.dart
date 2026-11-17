@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'admin_pin_dialog.dart';
 import 'core_bridge.dart';
 import 'activation/activation_flow.dart';
 import 'activation/license.dart';
@@ -17,6 +18,7 @@ import 'background_downloads.dart';
 import 'floating_card.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
+import 'motion_performance.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
 import 'remote_widgets.dart';
@@ -28,6 +30,7 @@ import 'live_sources_screen.dart';
 import 'app_icons.dart';
 import 'bug_report.dart';
 import 'cloud_backup_screen.dart';
+import 'ui_scale.dart';
 
 String storageSize(int bytes) {
   if (bytes < 0) return '暂不可用';
@@ -108,6 +111,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (record.isPermanent) return '永久授权';
     final remaining = record.remainingDays(DateTime.now());
     return '剩余 $remaining 天 · 到期后续费';
+  }
+
+  /// 电视端界面缩放：遥控器拖不了滑块，改成档位对话框（带当前对勾）。
+  Future<void> _chooseUiScale() async {
+    const options = [0.9, 1.0, 1.15, 1.3];
+    final current = widget.store.uiScale;
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (_) => TelevisionActionDialog(
+        title: '界面缩放',
+        options: [
+          for (final value in options)
+            TelevisionAction(
+              value: value.toStringAsFixed(2),
+              label: value == 1
+                  ? '${UiScale.label(value)}（默认）'
+                  : UiScale.label(value),
+              description: value == 1 ? '系统默认大小' : null,
+              icon: AppIcon(AppIcons.tune),
+              checked: (current - value).abs() < 0.001,
+            ),
+        ],
+      ),
+    );
+    final value = double.tryParse(selected ?? '');
+    if (value == null || !mounted) return;
+    UiScale.preview(value);
+    await saveUserChange(context, () => widget.store.setUiScale(value));
+    if (mounted) setState(() {});
   }
 
   Future<void> _chooseTheme() async {
@@ -226,7 +258,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               false;
         }
         if (!accepted || !mounted) return;
-        await widget.store.importBackup(content);
+        final pin = await showAdminPinDialog(
+          context,
+          message: '恢复备份会替换本机全部用户、追剧与设置，请输入管理员密码。',
+        );
+        if (pin == null || !mounted) return;
+        await widget.store.importBackup(content, pin: pin);
         if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (error) {
@@ -307,7 +344,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onPressed: () => Navigator.push(
         context,
         MaterialPageRoute<void>(
-          builder: (_) => LiveSourcesScreen(store: widget.store),
+          builder: (_) => LiveSourcesScreen(
+            store: widget.store,
+            repository: widget.repository,
+          ),
         ),
       ),
     ),
@@ -317,6 +357,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       title: '外观主题',
       subtitle: AppTheme.label(widget.store.themeMode),
       onPressed: _chooseTheme,
+    ),
+    (
+      id: 'ui-scale',
+      icon: AppIcon(AppIcons.tune),
+      title: '界面缩放',
+      subtitle: UiScale.label(widget.store.uiScale),
+      onPressed: _chooseUiScale,
     ),
     (
       id: 'glass-effect',
@@ -331,6 +378,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     ),
     (
+      id: 'motion-low-power',
+      icon: AppIcon(AppIcons.tune),
+      title: '轻量玻璃',
+      subtitle: MotionPerformance.lowPower.value
+          ? '已开启：磨砂减半、去掉内阴影（模糊保留）'
+          : '已关闭：满档磨砂 + 柔光内阴影',
+      onPressed: () {
+        unawaited(MotionPerformance.setLowPower(!MotionPerformance.lowPower.value));
+        setState(() {});
+      },
+    ),
+    (
+      id: 'show-network-speed',
+      icon: AppIcon(AppIcons.tune),
+      title: '播放页显示网速',
+      subtitle: widget.store.showNetworkSpeed ? '已开启：右上角显示实时网速' : '已关闭',
+      onPressed: () {
+        unawaited(
+          saveUserChange(
+            context,
+            () => widget.store.setShowNetworkSpeed(
+              !widget.store.showNetworkSpeed,
+            ),
+          ),
+        );
+        setState(() {});
+      },
+    ),
+    (
+      id: 'show-clock',
+      icon: AppIcon(AppIcons.tune),
+      title: '播放页显示时间',
+      subtitle: widget.store.showClock ? '已开启：右上角显示当前时间' : '已关闭',
+      onPressed: () {
+        unawaited(
+          saveUserChange(
+            context,
+            () => widget.store.setShowClock(!widget.store.showClock),
+          ),
+        );
+        setState(() {});
+      },
+    ),
+    (
       id: 'profiles',
       icon: AppIcon(AppIcons.people),
       title: '用户管理',
@@ -341,7 +432,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       id: 'bug-report',
       icon: AppIcon(AppIcons.edit),
       title: '反馈 Bug',
-      subtitle: '一键提交到 GitHub 或复制给开发者',
+      subtitle: '前往网页反馈区或复制给开发者',
       onPressed: () => showBugReportCard(context),
     ),
     if (widget.store.canDownload)
@@ -442,7 +533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     return RemoteList(
                       key: _listKey,
                       itemKeys: [for (final entry in entries) entry.id],
-                      itemExtent: RemoteListTile.extent,
+                      itemExtent: RemoteListTile.extentFor(context),
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       autofocus: true,
                       itemBuilder: (_, index, node, onFocus) => RemoteListTile(
@@ -516,7 +607,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute<void>(
-                    builder: (_) => LiveSourcesScreen(store: widget.store),
+                    builder: (_) => LiveSourcesScreen(
+              store: widget.store,
+              repository: widget.repository,
+            ),
                   ),
                 ),
               ),
@@ -527,6 +621,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(AppTheme.label(widget.store.themeMode)),
                 trailing: AppIcon(AppIcons.chevronRight),
                 onTap: _chooseTheme,
+              ),
+              // 界面缩放：拖动滑块即时预览（内存态），松手才落盘。
+              ValueListenableBuilder<double>(
+                valueListenable: UiScale.current,
+                builder: (context, scale, _) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListTile(
+                      key: const ValueKey('ui-scale-setting'),
+                      leading: AppIcon(AppIcons.tune),
+                      title: const Text('界面缩放'),
+                      subtitle: Text(
+                        '${UiScale.label(scale)} · 文字与随文字变化的控件按比例缩放',
+                      ),
+                      trailing: (scale - 1).abs() < 0.001
+                          ? null
+                          : TextButton(
+                              key: const ValueKey('ui-scale-reset'),
+                              onPressed: () {
+                                UiScale.preview(1);
+                                unawaited(
+                                  saveUserChange(
+                                    context,
+                                    () => widget.store.setUiScale(1),
+                                  ),
+                                );
+                              },
+                              child: const Text('重置'),
+                            ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Row(
+                        children: [
+                          Text(
+                            '小',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          Expanded(
+                            child: Slider(
+                              key: const ValueKey('ui-scale-slider'),
+                              value: scale,
+                              min: UiScale.min,
+                              max: UiScale.max,
+                              divisions:
+                                  ((UiScale.max - UiScale.min) / UiScale.step)
+                                      .round(),
+                              label: UiScale.label(scale),
+                              onChanged: UiScale.preview,
+                              onChangeEnd: (value) => unawaited(
+                                saveUserChange(
+                                  context,
+                                  () => widget.store.setUiScale(value),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '大',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
               ValueListenableBuilder<bool>(
                 valueListenable: GlassPreferences.enabled,
@@ -545,6 +705,67 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       saveUserChange(context, () => GlassPreferences.setEnabled(value)),
                 ),
               ),
+              ValueListenableBuilder<bool>(
+                valueListenable: MotionPerformance.lowPower,
+                builder: (context, lowPower, _) => SwitchListTile(
+                  key: const ValueKey('motion-low-power-setting'),
+                  value: lowPower,
+                  title: const Text('轻量玻璃'),
+                  subtitle: Text(
+                    lowPower
+                        ? '已开启：磨砂减半、去掉内阴影（模糊保留）'
+                        : '已关闭：满档磨砂 + 柔光内阴影',
+                  ),
+                  onChanged: (value) =>
+                      saveUserChange(context, () => MotionPerformance.setLowPower(value)),
+                ),
+              ),
+              SwitchListTile(
+                key: const ValueKey('blur-covers-button-setting'),
+                value: widget.store.blurCoversButton,
+                title: const Text('模糊封面按钮'),
+                subtitle: const Text('首页顶栏显示眼睛按钮，一键把封面糊掉'),
+                onChanged: (value) => saveUserChange(
+                  context,
+                  () => widget.store.setBlurCoversButton(value),
+                ),
+              ),
+              SwitchListTile(
+                key: const ValueKey('blur-covers-launch-setting'),
+                value: widget.store.blurCoversOnLaunch,
+                title: const Text('开屏自动模糊'),
+                subtitle: Text(
+                  widget.store.blurCoversButton
+                      ? '打开首页时封面先糊，点眼睛恢复'
+                      : '需先打开上面的「模糊封面按钮」',
+                ),
+                onChanged: widget.store.blurCoversButton
+                    ? (value) => saveUserChange(
+                        context,
+                        () => widget.store.setBlurCoversOnLaunch(value),
+                      )
+                    : null,
+              ),
+              SwitchListTile(
+                key: const ValueKey('show-network-speed-setting'),
+                value: widget.store.showNetworkSpeed,
+                title: const Text('播放页显示网速'),
+                subtitle: const Text('电视播放页右上角显示实时网速'),
+                onChanged: (value) => saveUserChange(
+                  context,
+                  () => widget.store.setShowNetworkSpeed(value),
+                ),
+              ),
+              SwitchListTile(
+                key: const ValueKey('show-clock-setting'),
+                value: widget.store.showClock,
+                title: const Text('播放页显示时间'),
+                subtitle: const Text('电视播放页右上角显示当前时间'),
+                onChanged: (value) => saveUserChange(
+                  context,
+                  () => widget.store.setShowClock(value),
+                ),
+              ),
               ListTile(
                 leading: AppIcon(AppIcons.people),
                 title: const Text('用户管理'),
@@ -555,7 +776,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 key: const ValueKey('bug-report-setting'),
                 leading: AppIcon(AppIcons.edit),
                 title: const Text('反馈 Bug'),
-                subtitle: const Text('一键提交到 GitHub 或复制给开发者'),
+                subtitle: const Text('前往网页反馈区或复制给开发者'),
                 trailing: AppIcon(AppIcons.chevronRight),
                 onTap: () => showBugReportCard(context),
               ),

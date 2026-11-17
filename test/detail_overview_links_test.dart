@@ -1,4 +1,5 @@
 import 'package:duanju_app/app_theme.dart';
+import 'package:duanju_app/app_build.dart';
 import 'package:duanju_app/detail_screen.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
@@ -33,6 +34,16 @@ Future<void> frames(WidgetTester tester, {int count = 24}) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // 本文件 fixture 锚点是 dongpiandi 源；默认变体只有 hongguo 源，简介页会被
+  // store.allowsSource 门控拦成「当前用户无权访问」。全源专属，默认变体跳过。
+  if (!allSourcesEnabled) {
+    test(
+      '需要 ALL_SOURCES=true 的全源变体',
+      () {},
+      skip: '默认变体仅 hongguo 源，dongpiandi 简介页被源门控拦截',
+    );
+    return;
+  }
 
   Future<LocalStore> localStore() async {
     // 默认档案受保护且 forceLogin 缺省开启 → store 会触发自锁，

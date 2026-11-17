@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:media_kit/media_kit.dart';
 
+import 'haptics.dart';
+import 'motion_tokens.dart';
 import 'screen_brightness.dart';
 import 'widgets.dart';
 
@@ -31,6 +33,7 @@ class PlayerInteractions extends ChangeNotifier {
     required this.onTogglePlayback,
     this.onFullscreen,
     this.onEpisode,
+    this.episodeAvailable,
     this.onSeek,
     this.initialBrightness = 1.0,
     this.initialVolume,
@@ -50,6 +53,10 @@ class PlayerInteractions extends ChangeNotifier {
   final VoidCallback onTogglePlayback;
   final VoidCallback? onFullscreen;
   final String Function(int direction)? onEpisode;
+
+  /// 该方向是否还有可切的分集：边界时竖滑改走橡皮筋阻尼，别让人误以为能切。
+  /// 不传（旧调用方/测试）视为总是可切。
+  final bool Function(int direction)? episodeAvailable;
   final Future<void> Function(Duration)? onSeek;
 
   /// 跨剧沿用的手感：遮罩亮度与播放器音量
@@ -63,6 +70,36 @@ class PlayerInteractions extends ChangeNotifier {
   Timer? _hintTimer;
   Timer? _rateEaseTimer;
   Future<void> _rates = Future<void>.value();
+  /// 竖屏全屏下「竖滑切集」的画面跟手位移（逻辑像素，上滑为正）。
+  /// 只在竖屏全屏形态被画面层读取；其它形态手势照常切集、不产生位移。
+  final ValueNotifier<double> episodeDrag = ValueNotifier<double>(0);
+  Timer? _dragRelease;
+
+  /// 松手后把画面弹回原位。测试环境直接归零，避免 fake-async 残留 timer。
+  void _releaseEpisodeDrag() {
+    _dragRelease?.cancel();
+    _dragRelease = null;
+    final start = episodeDrag.value;
+    if (start.abs() < 1 || Motion.inTest) {
+      episodeDrag.value = 0;
+      return;
+    }
+    final began = DateTime.now();
+    _dragRelease = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+      final double t = (DateTime.now().difference(began).inMilliseconds / 170)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      if (t >= 1) {
+        episodeDrag.value = 0;
+        timer.cancel();
+        _dragRelease = null;
+      } else {
+        final remaining = 1 - t;
+        episodeDrag.value = start * remaining * remaining;
+      }
+    });
+  }
+
   final Set<int> _pointers = {};
   int? _pointer;
   Offset? _origin;
@@ -90,7 +127,10 @@ class PlayerInteractions extends ChangeNotifier {
   double _originPositionMs = 0;
   double _viewHeight = 0.0;
   double _viewWidth = 0.0;
-  bool _episodeFired = false;
+  /// 竖滑手势的方向在起手时锁一次：中途回拖只收位移，不允许方向翻转
+  /// （否则预览会在上一集/下一集之间跳，看着像「弹回来」）。
+  bool? _episodeForward;
+  bool _episodeThresholdBuzzed = false;
   Timer? _hudTimer;
 
   GestureHudState get hudState => _hudState;
@@ -261,6 +301,9 @@ class PlayerInteractions extends ChangeNotifier {
 
   void cancel() {
     if (_disposed) return;
+    _dragRelease?.cancel();
+    _dragRelease = null;
+    episodeDrag.value = 0;
     if (_pointers.isNotEmpty) {
       _cancelUntilRelease = true;
       _ignoreTapUntil = DateTime.now().add(const Duration(milliseconds: 600));
@@ -283,6 +326,7 @@ class PlayerInteractions extends ChangeNotifier {
     required bool swipeEnabled,
     double width = 0.0,
     required double height,
+    bool suppressHold = false,
   }) {
     _pointers.add(event.pointer);
     if (_pointers.length != 1 || _cancelUntilRelease) {
@@ -303,7 +347,11 @@ class PlayerInteractions extends ChangeNotifier {
                 event.localPosition.dx < width - 24));
     _moved = _held = false;
     _swipeAction = SwipeAction.none;
-    _episodeFired = false;
+    _episodeForward = null;
+    _episodeThresholdBuzzed = false;
+    _dragRelease?.cancel();
+    _dragRelease = null;
+    episodeDrag.value = 0;
 
     if (_swipeEnabled && width > 0) {
       // 记录起始值，后续在 pointerMove 里根据方向选择分支
@@ -315,7 +363,10 @@ class PlayerInteractions extends ChangeNotifier {
       final pos = player.state.position.inMilliseconds;
       _originPositionMs = pos.isFinite ? pos.toDouble() : 0.0;
     }
-    _beginHold();
+    // 竖屏全屏下控制栏可见时，底部控制带也要放行竖滑切集。此时不能启动
+    // 长按计时：否则用户按住控制栏按钮会被抢成 2 倍速。竖滑本身由
+    // pointerMove 的方向锁判定，不依赖长按。
+    if (!suppressHold) _beginHold();
   }
 
   void pointerMove(PointerMoveEvent event) {
@@ -382,29 +433,72 @@ class PlayerInteractions extends ChangeNotifier {
       // 最终位置在 pointerUp 一次性提交。
       _showHud(SwipeAction.seek, progress, position: targetDur);
     } else if (_swipeAction == SwipeAction.episode) {
-      // 中间竖滑：上滑下一集、下滑上一集；达到阈值立即切一次，
-      // 本次手势内锁定，避免连滑连续跳集。阈值 20% 屏高——12% 太容易
-      // 在「想滚动一下」时误切集；跨阈值补一次中等震动告诉用户已触发。
-      if (_episodeFired || onEpisode == null) return;
-      final dy = _origin!.dy - event.localPosition.dy;
-      if (dy.abs() < _viewHeight * 0.20) return;
-      _episodeFired = true;
-      final forward = dy > 0;
-      unawaited(HapticFeedback.mediumImpact());
-      final label = onEpisode!(forward ? 1 : -1);
-      _showHud(SwipeAction.episode, forward ? 1 : -1, label: label);
+      // 竖滑切集：拖动全程只做「跟手位移 + 目标集预览」，真正换集推迟
+      // 到 pointerUp。旧实现在越过阈值那一帧就调 onEpisode → _play 里
+      // 同步走 cancel()，把 episodeDrag 归零、_origin 置空，画面当场
+      // 弹回原位、手势后半程还失效——正是「有时还会弹回来」。
+      final dy = _origin!.dy - event.localPosition.dy; // 上滑为正
+      _episodeForward ??= dy >= 0;
+      final forward = _episodeForward!;
+      // 沿锁定方向的净位移：中途反向回拖只收位移，不翻方向。
+      final signed = forward ? dy : -dy;
+      final available = episodeAvailable?.call(forward ? 1 : -1) ?? true;
+      // 边界用橡皮筋：位移压到约 1/3 且封顶 8% 屏高，明显「拉不动」，
+      // 配合预览里的「已经是最后一集」，不再误导用户以为还能切。
+      final factor = available ? 0.85 : 0.25;
+      final limit = _viewHeight * (available ? 0.32 : 0.08);
+      final magnitude = (signed * factor).clamp(0.0, limit);
+      episodeDrag.value = forward ? magnitude : -magnitude;
+      final crossed = signed >= _viewHeight * 0.20;
+      if (crossed != _episodeThresholdBuzzed) {
+        _episodeThresholdBuzzed = crossed;
+        if (crossed) {
+          AppHaptics.selection();
+          _showHud(
+            SwipeAction.episode,
+            forward ? 1 : -1,
+            label: available
+                ? (forward ? '松手看下一集' : '松手看上一集')
+                : (forward ? '已经是最后一集' : '已经是第一集'),
+          );
+        }
+      }
     }
   }
 
   void pointerUp(PointerUpEvent event) {
     _pointers.remove(event.pointer);
+    final origin = _origin;
+    final forward = _episodeForward ?? true;
+    final dy = origin != null
+        ? origin.dy - (_lastPosition ?? event.localPosition).dy
+        : 0.0;
+    final signed = forward ? dy : -dy;
+    // 松手才决定要不要换集：拖动中不碰播放器状态，全程画面跟手。
+    final episodeSwitch =
+        !_cancelUntilRelease &&
+        _pointer == event.pointer &&
+        origin != null &&
+        _swipeAction == SwipeAction.episode &&
+        onEpisode != null &&
+        signed >= _viewHeight * 0.20 &&
+        (episodeAvailable?.call(forward ? 1 : -1) ?? true);
+    if (episodeSwitch) {
+      // _play 里的 cancel() 会同步把位移归零（新集从原位出画），
+      // 不能同时跑弹簧回弹，否则会看到「先弹回再切」的两次位移。
+      _dragRelease?.cancel();
+      _dragRelease = null;
+    } else {
+      // 松手即开始回弹，所有收尾分支（含取消/异常）都不会留下位移。
+      _releaseEpisodeDrag();
+    }
     if (_cancelUntilRelease) {
       _ignoreTapUntil = DateTime.now().add(const Duration(milliseconds: 600));
       if (_pointers.isEmpty) _cancelUntilRelease = false;
       return;
     }
-    if (_pointer != event.pointer || _origin == null) return;
-    final delta = (_lastPosition ?? event.localPosition) - _origin!;
+    if (_pointer != event.pointer || origin == null) return;
+    final delta = (_lastPosition ?? event.localPosition) - origin;
 
     if (_swipeAction == SwipeAction.seek) {
       // 提交最终的 seek 位置（与滑动预览同一套自适应步长，保证所见即所得）
@@ -421,9 +515,21 @@ class PlayerInteractions extends ChangeNotifier {
       _scheduleDismissHud();
       enterQuietPeriod();
     } else if (_swipeAction == SwipeAction.brightness ||
-               _swipeAction == SwipeAction.volume ||
-               _swipeAction == SwipeAction.episode) {
+               _swipeAction == SwipeAction.volume) {
       _scheduleDismissHud();
+    } else if (_swipeAction == SwipeAction.episode) {
+      if (episodeSwitch) {
+        onEpisode!(forward ? 1 : -1);
+        // 宿主 _play 通常已用 cancel() 归零；状态守卫直接返回时也必须
+        // 收尾，不能把画面留在偏移位置或留下回弹定时器。
+        _dragRelease?.cancel();
+        _dragRelease = null;
+        episodeDrag.value = 0;
+      } else {
+        // 到了边界或没滑够：轻震一下，明确「这次没有切集」。
+        if (signed >= _viewHeight * 0.20) AppHaptics.light();
+        _scheduleDismissHud();
+      }
     }
 
     if (_moved || _held) {
@@ -560,6 +666,9 @@ class PlayerInteractions extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _dragRelease?.cancel();
+    _dragRelease = null;
+    episodeDrag.dispose();
     _holdTimer?.cancel();
     _hintTimer?.cancel();
     _hudTimer?.cancel();

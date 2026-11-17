@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core_bridge.dart';
 import 'detail_screen.dart';
+import 'floating_card.dart';
 import 'local_store.dart';
 import 'models.dart';
 
@@ -52,8 +53,8 @@ Future<List<Drama>> loadFeatured(
 ///
 /// 首页轮播直接播豆瓣「近期热门国产剧」榜（用户定调 2026-10-19）：榜
 /// 单条目本身上卡（豆瓣封面由封面下载层带站内 Referer 拉取），带蓝色
-/// 豆瓣徽章 + 评分摘要；点击经同名搜索在站源中找可播放内容进详情
-/// （openDoubanReferral）。榜单条目不足 [doubanMatchCount] 张由调用方
+/// 豆瓣徽章 + 评分摘要；点击经同名搜索聚合多个站源的命中，由用户选源
+/// 后进详情（openDoubanReferral）。榜单条目不足 [doubanMatchCount] 张由调用方
 /// 用当前源条目补位；黄果类锚点整体不拉榜、纯回退自家条目。
 ///
 /// - 缓存：按「当年天数|锚点」会话级缓存（含空结果），切站源/回首页
@@ -240,8 +241,177 @@ String _normalizeTitle(String title) =>
 /// 豆瓣条目点击跳转（全局单飞，榜单页与首页轮播共用）。
 bool _doubanReferralBusy = false;
 
-/// 豆瓣条目无播放链路：用标题在视频类启用源中搜同名内容（聚合站优先，
-/// 最多试 3 个源），命中即进详情；全部落空则提示手动搜索。
+/// 测试专用：重置单飞标志，隔离用例间的跳转状态。
+@visibleForTesting
+void resetDoubanReferralBusy() => _doubanReferralBusy = false;
+
+/// 同名跳转最多并发查的站源数。候选覆盖全部已启用大类（短剧/视频/
+/// 黄果/成人），不再只搜视频类——否则黑桃、红果等源永远进不了选择列表。
+const int referralSourceLimit = 8;
+
+/// 单源搜索超时：某个慢源不能拖住整个选择面板。
+const Duration referralSearchTimeout = Duration(seconds: 6);
+
+/// 大类轮转顺序：视频类 → 短剧类 → 黄果类 → 成人类。
+int _referralClassPriority(String classKey) => switch (classKey) {
+  'video' => 0,
+  'shortDrama' => 1,
+  'local' => 2,
+  'huangguo' => 3,
+  'adult' => 4,
+  _ => 5,
+};
+
+/// 候选站源：当前站源优先，其余按大类轮转取（每类每轮各取一个），
+/// 同类保持站源表顺序。轮转而非「按类排序后截断」，是为了不让源数量
+/// 最多的视频类独占全部名额，黑桃等黄果类源也能进选择列表。
+/// 榜单专用源（豆瓣）无播放链路，排除在外。
+@visibleForTesting
+List<String> doubanReferralSources(LocalStore store) {
+  final enabled = [
+    for (final site in store.sources)
+      if (!SourceSite.isRankingOnly(site.id)) site.id,
+  ];
+  final current = store.source;
+  final sources = <String>[];
+  if (enabled.contains(current)) sources.add(current);
+  final buckets = <String, List<String>>{};
+  for (final id in enabled) {
+    if (id == current) continue;
+    final key = SourceSite.byId(id)?.classKey ?? '';
+    buckets.putIfAbsent(key, () => <String>[]).add(id);
+  }
+  final keys = buckets.keys.toList()
+    ..sort(
+      (a, b) => _referralClassPriority(a).compareTo(
+        _referralClassPriority(b),
+      ),
+    );
+  for (var round = 0; sources.length < referralSourceLimit; round++) {
+    var added = false;
+    for (final key in keys) {
+      final bucket = buckets[key]!;
+      if (round >= bucket.length) continue;
+      sources.add(bucket[round]);
+      added = true;
+      if (sources.length >= referralSourceLimit) break;
+    }
+    if (!added) break;
+  }
+  return List.unmodifiable(sources);
+}
+
+/// 标题匹配档位：精确 > 结果包含榜名 > 榜名包含结果。规范化后比较
+/// （去标点/空白，容纳「名：副题」排版差异），短于 2 字不做包含匹配
+/// 以免单字标题把整页结果都误判成同名。
+@visibleForTesting
+int referralMatchScore(String query, String candidate) {
+  final a = _normalizeTitle(query);
+  final b = _normalizeTitle(candidate);
+  if (a.isEmpty || b.isEmpty) return 0;
+  if (a == b) return 3;
+  if (a.length >= 2 && b.contains(a)) return 2;
+  if (b.length >= 2 && a.contains(b)) return 1;
+  return 0;
+}
+
+class _ReferralMatch {
+  const _ReferralMatch(this.drama, this.score, this.order);
+  final Drama drama;
+  final int score;
+  final int order;
+}
+
+/// 单源只留最佳一条；失败/超时静默跳过，不影响其它源出结果。
+Future<_ReferralMatch?> _searchReferralSource(
+  AppRepository repository,
+  String source,
+  String title,
+  int order,
+) async {
+  try {
+    final page = await repository
+        .catalog(source, query: title)
+        .timeout(referralSearchTimeout);
+    _ReferralMatch? best;
+    for (final row in page.items) {
+      final score = referralMatchScore(title, row.title);
+      if (score == 0) continue;
+      if (best == null || score > best.score) {
+        best = _ReferralMatch(row, score, order);
+      }
+      if (score == 3) break;
+    }
+    return best;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 并发搜全部候选源，按匹配档位、源顺序排序并按剧集 ID 去重。
+Future<List<_ReferralMatch>> _collectReferralMatches(
+  AppRepository repository,
+  List<String> sources,
+  String title,
+) async {
+  final found = <_ReferralMatch>[];
+  await Future.wait([
+    for (var index = 0; index < sources.length; index++)
+      _searchReferralSource(repository, sources[index], title, index).then((
+        match,
+      ) {
+        if (match != null) found.add(match);
+      }),
+  ]);
+  final seen = <String>{};
+  final unique = <_ReferralMatch>[];
+  for (final match in found) {
+    if (seen.add(match.drama.id)) unique.add(match);
+  }
+  unique.sort((a, b) {
+    final byScore = b.score.compareTo(a.score);
+    return byScore != 0 ? byScore : a.order.compareTo(b.order);
+  });
+  return unique;
+}
+
+/// 多个站源都有同名内容时，列出来由用户选一个再进详情。
+/// [Builder] 保证 pop 用的是对话框内 context，不会误弹外层页面。
+Future<Drama?> _pickReferralMatch(
+  BuildContext context,
+  String title,
+  List<_ReferralMatch> matches,
+) {
+  return showFloatingDialog<Drama>(
+    context: context,
+    width: 340,
+    barrierLabel: '选择播放来源',
+    title: Text('「$title」的可播放来源'),
+    content: Builder(
+      builder: (dialogContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final match in matches)
+            FloatingOptionRow(
+              key: ValueKey('referral-${match.drama.source}'),
+              label:
+                  SourceSite.byId(match.drama.source)?.name ??
+                  match.drama.source,
+              subtitle: [
+                match.drama.title.trim(),
+                match.drama.episodeLabel,
+              ].where((part) => part.isNotEmpty).join(' · '),
+              onTap: () => Navigator.of(dialogContext).pop(match.drama),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// 豆瓣条目无播放链路：用标题在所有已启用站源中并发搜同名内容，
+/// 命中多条弹「选择播放来源」面板由用户挑源进详情；只命中一条直进，
+/// 全部落空则提示手动搜索。
 Future<void> openDoubanReferral(
   BuildContext context, {
   required AppRepository repository,
@@ -253,50 +423,39 @@ Future<void> openDoubanReferral(
   final messenger = ScaffoldMessenger.of(context);
   try {
     final title = drama.title.trim();
-    final videoSources = [
-      for (final site in store.sources)
-        if (site.classKey == SourceSite.douban.classKey) site.id,
-    ];
-    final targets = [
-      ...videoSources.where((id) => id == 'dongpiandi'),
-      ...videoSources.where((id) => id != 'dongpiandi'),
-    ];
-    if (targets.isNotEmpty && context.mounted) {
+    final sources = doubanReferralSources(store);
+    if (title.isEmpty || sources.isEmpty) {
       messenger.showSnackBar(
-        SnackBar(
-          content: Text('正在查找「$title」的同名站源内容…'),
-          duration: const Duration(seconds: 2),
-        ),
+        const SnackBar(content: Text('当前没有可用于查找的站源')),
       );
+      return;
     }
-    Drama? match;
-    for (final source in targets.take(3)) {
-      final page = await repository.catalog(source, query: title);
-      for (final row in page.items) {
-        final rowTitle = row.title.trim();
-        if (rowTitle.isEmpty) continue;
-        if (rowTitle == title ||
-            rowTitle.contains(title) ||
-            title.contains(rowTitle)) {
-          match = row;
-          break;
-        }
-      }
-      if (match != null) break;
-    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('正在查找「$title」的可播放来源…'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    final matches = await _collectReferralMatches(repository, sources, title);
     if (!context.mounted) return;
-    if (match == null) {
+    if (matches.isEmpty) {
       messenger.showSnackBar(
         SnackBar(content: Text('未在站源中找到「$title」，可到搜索页手动查找')),
       );
       return;
     }
-    final target = match;
+    Drama? target = matches.first.drama;
+    if (matches.length > 1) {
+      target = await _pickReferralMatch(context, title, matches);
+    }
+    if (target == null || !context.mounted) return;
+    // 闭包捕获的可空局部变量不会被流分析收窄，落成非空局部常量再用。
+    final chosen = target;
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
         builder: (_) => DetailScreen(
-          drama: target,
+          drama: chosen,
           repository: repository,
           store: store,
         ),

@@ -151,6 +151,14 @@ void main() {
       expect(player.state.playing, isTrue);
       expect(find.text('正在准备播放'), findsNothing);
       final old = repository.danmakuCalls.single;
+      // 手机半屏的选集网格在「简介」Tab 底部 ListView 视口外（懒构建），
+      // 先滚到可见再点，切到第 2 集。
+      await tester.dragUntilVisible(
+        find.byKey(const ValueKey('play-episode-2')),
+        find.byKey(const ValueKey('mobile-combined-list')),
+        const Offset(0, -120),
+      );
+      await settle(tester);
       await tester.tap(find.byKey(const ValueKey('play-episode-2')));
       await settle(tester);
       final current = repository.danmakuCalls.last;

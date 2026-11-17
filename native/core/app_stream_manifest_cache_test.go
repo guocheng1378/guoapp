@@ -21,6 +21,39 @@ func manifestCacheBytes(session *nativeStreamSession) int {
 	return total
 }
 
+// manifestCacheFixture 生成指定字节数的点播清单（带 #EXT-X-ENDLIST）。
+// 缓存只服务点播：直播清单不写也不命中，所以样本必须是 VOD。
+func manifestCacheFixture(size int) string {
+	const head = "#EXTM3U\n"
+	const tail = "\n#EXT-X-ENDLIST"
+	pad := size - len(head) - len(tail)
+	if pad < 0 {
+		pad = 0
+	}
+	return head + strings.Repeat("x", pad) + tail
+}
+
+func TestNativeManifestCacheSkipsLivePlaylist(t *testing.T) {
+	session := &nativeStreamSession{}
+	const base = "https://origin.test/live/index.m3u8"
+	live := "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:42\n#EXTINF:4.0,\nhttp://127.0.0.1:1/token/seg.ts\n"
+	session.nativeStoreManifest(base, "etag:v1", live)
+	if len(session.manifests) != 0 {
+		t.Fatalf("直播清单不应写入缓存，实际 %d 条", len(session.manifests))
+	}
+	// 旧版本可能把直播清单写进来了：命中时要丢弃，不能回放陈旧时间轴。
+	session.manifests = map[string]nativeManifestCache{
+		base: {validator: "etag:v1", rewritten: live},
+	}
+	session.manifestBytes = len(live)
+	if _, hit := session.nativeCachedManifest(base, "etag:v1"); hit {
+		t.Fatal("直播清单不应命中缓存")
+	}
+	if len(session.manifests) != 0 || session.manifestBytes != 0 {
+		t.Fatalf("应清掉直播缓存条目，实际 %d 条 %d 字节", len(session.manifests), session.manifestBytes)
+	}
+}
+
 func TestNativeManifestValidator(t *testing.T) {
 	header := http.Header{}
 	if got := nativeManifestValidator(header); got != "" {
@@ -39,7 +72,7 @@ func TestNativeManifestValidator(t *testing.T) {
 func TestNativeManifestCacheHitAndMiss(t *testing.T) {
 	session := &nativeStreamSession{}
 	const base = "https://origin.test/live/index.m3u8"
-	const rewritten = "#EXTM3U\n#EXTINF:4.0,\nhttp://127.0.0.1:1/token/seg.ts\n"
+	rewritten := manifestCacheFixture(96)
 	session.nativeStoreManifest(base, "etag:v1", rewritten)
 	if got, hit := session.nativeCachedManifest(base, "etag:v1"); !hit || got != rewritten {
 		t.Fatalf("同一校验符应命中并原样回放，hit=%v body=%q", hit, got)
@@ -79,8 +112,8 @@ func TestNativeManifestCacheSkipsUnstableUpstream(t *testing.T) {
 func TestNativeManifestCacheOverwriteKeepsAccounting(t *testing.T) {
 	session := &nativeStreamSession{}
 	const base = "https://origin.test/live/index.m3u8"
-	first := strings.Repeat("a", 100)
-	second := strings.Repeat("b", 40)
+	first := manifestCacheFixture(100)
+	second := manifestCacheFixture(40)
 	session.nativeStoreManifest(base, "etag:v1", first)
 	session.nativeStoreManifest(base, "etag:v2", second)
 	if got, hit := session.nativeCachedManifest(base, "etag:v2"); !hit || got != second {
@@ -102,7 +135,7 @@ func TestNativeManifestCacheOverwriteKeepsAccounting(t *testing.T) {
 
 func TestNativeManifestCacheEvictsByEntryCap(t *testing.T) {
 	session := &nativeStreamSession{}
-	body := strings.Repeat("x", 32)
+	body := manifestCacheFixture(32)
 	stored := nativeManifestCacheEntries + 6
 	for i := 0; i < stored; i++ {
 		session.nativeStoreManifest(fmt.Sprintf("https://origin.test/live/index-%02d.m3u8", i), "etag:v1", body)
@@ -130,7 +163,7 @@ func TestNativeManifestCacheEvictsByByteBudget(t *testing.T) {
 	session := &nativeStreamSession{}
 	// 每条 200KB：单条在上限内，但 11 条会越过 2MB 总预算。
 	size := 200 << 10
-	body := strings.Repeat("y", size)
+	body := manifestCacheFixture(size)
 	limit := nativeManifestCacheTotalMax/size + 1
 	for i := 0; i < limit; i++ {
 		session.nativeStoreManifest(fmt.Sprintf("https://origin.test/live/big-%02d.m3u8", i), "etag:v1", body)

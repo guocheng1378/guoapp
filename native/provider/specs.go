@@ -7,6 +7,8 @@ const (
 	SourceHuangguoAI = "huangguoai"
 	SourceCloudFront = "cloudfront"
 	SourceYeguo      = "yeguo"
+	// 黑桃（heitaodj.com）：上游 04c431c 新增的网页短剧源，归入黄果类。
+	SourceHeitao = "heitao"
 
 	SourceYaguo            = "yaguo"
 	SourceMaoguo           = "maoguo"
@@ -28,6 +30,10 @@ const (
 	SourceSorani           = "sorani"
 	SourceDongpiandi       = "dongpiandi"
 
+	// 云追视频（yunzhui）：影视聚合源，带日榜/总榜。游客身份 + AES-256-CBC
+	// 响应解密 + MD5 签名；域名池多域名轮转。仅真果鉴变体（RequiresAllSources）。
+	SourceYunzhui = "yunzhui"
+
 	// 成人源（CategoryAdult，maccms 采集站，Dart 侧 isRestricted 默认关闭）。
 	// 2026-10-19 探针剔除 7 个死源：maodou/naixx/shayu/jingpin（后端无响应）、
 	// lajiao/xiangjiao（整站超时）、xibao（TLS 证书无效）。
@@ -47,6 +53,13 @@ const (
 	SourceSouav   = "souav"
 	SourceCkzy    = "ckzy"
 	SourceAosika  = "aosika"
+
+	// 上游（Xanerix/guoapp）移植的内置站源：韩小圈（视频类）、禁果短剧（黄果类）、
+	// 笔盒（成人类）。前两者有上游 Go provider 可移植；笔盒上游亦无 provider，仅作
+	// 菜单占位（加载会走「暂不支持」分支）。
+	SourceHanxiaoquan = "hanxiaoquan"
+	SourceJinguoduanju = "jinguoduanju"
+	SourceBeabox      = "beabox"
 )
 
 type sourceEntry struct {
@@ -73,17 +86,49 @@ var sourceEntries = []sourceEntry{
 	},
 	{
 		spec:    Spec{ID: SourceHuangguoAI, Name: "黄果 AI", Base: "https://huangguoai.com", Kind: "web", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, RequiresAllSources: true},
-		aliases: []string{"huangguo", "huangguoai", "huangguoai.com"},
-		hosts:   []string{"huangguoai.com", ".ediayikma.cc", ".agdkczeyx.cc"},
+		aliases: []string{"huangguo", "huangguoai", "huangguoai.com", "huangguoai.io"},
+		// 2026-11-08 真网探活：huangguoai.com 主站超时；huangguoai.io、
+		// *.agdkczeyx.cc、*.lbvrhyir.cc 的 /api/edge/request 可用。
+		// 后缀登记让 provider.ForHost 能识别镜像域，否则镜像候选链不展开。
+		hosts: []string{"huangguoai.com", "huangguoai.io", ".ediayikma.cc", ".agdkczeyx.cc", ".lbvrhyir.cc", ".xxbgwypx.cc", ".jxqgmx5ga.cc"},
+	},
+	{
+		spec:    Spec{ID: SourceHeitao, Name: "黑桃", Base: "https://heitaodj.com", Kind: "web", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"heitao", "heitaodj.com", "www.heitaodj.com"},
+		hosts:   []string{"heitaodj.com", "www.heitaodj.com"},
+	},
+	// 上游（Xanerix/guoapp）移植：韩小圈（韩剧/韩综，视频类，jennyhow.com）。
+	{
+		spec:    Spec{ID: SourceHanxiaoquan, Name: "韩小圈", Base: "https://www.jennyhow.com", Kind: "web", Category: CategoryVideo, Family: FamilyHuangguo, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"hanxiaoquan", "韩小圈", "jennyhow.com", "www.jennyhow.com"},
+		hosts:   []string{"jennyhow.com", "www.jennyhow.com"},
+	},
+	// 上游（Xanerix/guoapp）移植：禁果短剧（黄果类短剧，jinguoduanju.app）。
+	{
+		spec:    Spec{ID: SourceJinguoduanju, Name: "禁果短剧", Base: "https://jinguoduanju.app", Kind: "web", Category: CategoryShortDrama, Family: FamilyHuangguo, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"jinguoduanju", "禁果短剧", "jinguoduanju.app", "jgdj.app"},
+		hosts:   []string{"jinguoduanju.app", "www.jinguoduanju.app", "play.jinguoduanju.app", "jgdj.app", "www.jgdj.app"},
+	},
+	// 笔盒（成人类）。上游无 Go provider；本仓库按线上逆向接入：
+	// 发布网关 beabox.cc/bihe198.com/beabox.live 内嵌 __ENC_DOMAINS（secureKey XOR）
+	// 给出当前 bh*.top 真实域；API 走 /api/vod/* 且响应为 AES-128-CBC 密文。
+	{
+		spec:    Spec{ID: SourceBeabox, Name: "笔盒", Base: "https://beabox.cc", Kind: "web", Category: CategoryAdult, Family: FamilyHuangguo, Browser: true, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"beabox", "笔盒", "beabox.cc", "www.beabox.cc", "beabox.live", "bihe198.com", "beabox.net", "www.beabox.net"},
+		hosts:   []string{"beabox.cc", "www.beabox.cc", "beabox.live", "bihe198.com", "beabox.net", "www.beabox.net"},
 	},
 	{
 		spec:    Spec{ID: SourceCloudFront, Name: "黄果旧版", Base: "https://d2pypzndaqisk.cloudfront.net", Kind: "api", Category: CategoryVideo, Family: FamilyHuangguo, RequiresAllSources: true},
 		aliases: []string{"cloudfront"},
 	},
 	{
-		spec:    Spec{ID: SourceYeguo, Name: "野果", Base: "https://www.yeguodj.com", Kind: "api", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, Searcher: true, Paged: true, RequiresAllSources: true},
-		aliases: []string{"yeguo", "ygdj7.com", "www.ygdj7.com", "attract.vgbyziuz.cc", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", "ocdjlxow.cc", "www.ocdjlxow.cc", "awlaxemk.cc", "vuenadqi.cc"},
-		hosts:   []string{"ygdj7.com", "www.ygdj7.com", "attract.vgbyziuz.cc", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", ".buxefaex.cc", ".fzchosdi.cc", ".awlaxemk.cc", ".vuenadqi.cc", ".vgbyziuz.cc", "ocdjlxow.cc", "www.ocdjlxow.cc", ".ocdjlxow.cc"},
+		// 2026-11-14 真网实测：www.yeguodj.com 无 DNS 解析、*.vgbyziuz.cc
+		// 全线超时，analyze.buxefaex.cc / delta.ygrwdsgt.cc 仍存活。默认
+		// 入口改为存活线路，运行时自发现（provider_yeguo_client.go）不再
+		// 从死域名起步。
+		spec:    Spec{ID: SourceYeguo, Name: "野果", Base: "https://analyze.buxefaex.cc", Kind: "api", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"yeguo", "ygdj7.com", "www.ygdj7.com", "attract.vgbyziuz.cc", "as.vgbyziuz.cc", "anyway.vgbyziuz.cc", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", "ocdjlxow.cc", "www.ocdjlxow.cc", "awlaxemk.cc", "vuenadqi.cc"},
+		hosts:   []string{"ygdj7.com", "www.ygdj7.com", "attract.vgbyziuz.cc", "analyze.buxefaex.cc", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com", ".buxefaex.cc", ".fzchosdi.cc", ".awlaxemk.cc", ".vuenadqi.cc", ".vgbyziuz.cc", ".ygrwdsgt.cc", "ocdjlxow.cc", "www.ocdjlxow.cc", ".ocdjlxow.cc"},
 	},
 	{
 		spec:    Spec{ID: SourceYaguo, Name: "芽果", Base: "https://app.whjzjx.cn", Kind: "api", Category: CategoryShortDrama, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
@@ -179,6 +224,11 @@ var sourceEntries = []sourceEntry{
 		spec:    Spec{ID: SourceDongpiandi, Name: "真果·鉴", Base: "https://dongpiandi.ai", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
 		aliases: []string{"dongpiandi", "真果·鉴", "dongpiandi.ai"},
 		hosts:   []string{"dongpiandi.ai", "www.dongpiandi.ai"},
+	},
+	{
+		spec:    Spec{ID: SourceYunzhui, Name: "云追", Base: "https://u.gslock.com/", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
+		aliases: []string{"yunzhui", "云追", "u.gslock.com"},
+		hosts:   []string{"u.gslock.com", "u.alvzz.com", "u.irltk.com", "u.yyxdmn.com", "dyup.ruxiangsuisu.cn", "chw.ycblhs.com"},
 	},
 	// ---- 成人源（CategoryAdult，均为 maccms_api 采集站；受限名单见 models.dart）----
 	{

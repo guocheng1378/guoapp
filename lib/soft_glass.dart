@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'folme.dart';
 import 'glass_preferences.dart';
 import 'motion.dart';
+import 'motion_performance.dart';
 import 'route_transition.dart';
 
 /// 柔光玻璃（HyperOS 4「生命感美学 · 柔光玻璃」）材质唯一真源。
@@ -310,6 +312,8 @@ class SoftGlassSurface extends StatelessWidget {
     this.borderRadius,
     this.tint,
     this.edgeColor,
+    this.edgeProx,
+    this.edgeFor,
     this.selected = false,
     this.padding = EdgeInsets.zero,
     this.constraints,
@@ -328,6 +332,8 @@ class SoftGlassSurface extends StatelessWidget {
     this.borderRadius,
     this.tint,
     this.edgeColor,
+    this.edgeProx,
+    this.edgeFor,
     this.selected = false,
     this.padding = EdgeInsets.zero,
     this.constraints,
@@ -359,6 +365,20 @@ class SoftGlassSurface extends StatelessWidget {
   /// 随滚动变化的描边。
   final Color? edgeColor;
 
+  /// 描边「接近度」信号（0..1）：传入时描边亮度由 painter 直接监听该信号
+  /// 重绘，**不再重建整个玻璃面**。
+  ///
+  /// 为什么必须走 painter：[edgeColor] 是一条随滚动连续变化的 1px 描边，
+  /// 若由上层 `ListenableBuilder` 驱动，每次取值变化都会重建
+  /// `ClipPath + Stack + AnimatedContainer + CustomPaint` 整棵子树。首页
+  /// 分类条 20+ 颗胶囊 × 滚动前 50px 的 10 个档位 = 两三百次子树重建，
+  /// 每次都要重建裁剪层 → 滚动起手必掉帧（这才是滚动卡顿的主源，
+  /// 与模糊无关：把模糊关掉也照样卡）。
+  final ValueListenable<double>? edgeProx;
+
+  /// 由 [edgeProx] 的当前值算描边色（null = 直接用 [edgeColor]）。
+  final Color Function(double prox)? edgeFor;
+
   /// 选中态（实底 + 选中前景，保证可读）。
   final bool selected;
 
@@ -378,10 +398,17 @@ class SoftGlassSurface extends StatelessWidget {
   ///
   /// 静态缓存：`Listenable.merge` 每次新建会让 `ListenableBuilder` 反复
   /// remove/add 监听，且是纯开销——三路都是单例，合并一次即可。
+  /// 只挂「低频」信号：材质配方、玻璃总开关、轻量玻璃开关、回退动画。
+  ///
+  /// 不要挂逐帧或每次进场都翻的信号——`ListenableBuilder` 一响，屏幕上
+  /// 每一枚玻璃面都要整棵子树重建（含 BackdropFilter / CustomPaint /
+  /// AnimatedContainer），一屏几十枚就是一帧掉到底。进/出场降级曾挂在
+  /// `RouteTransitionSignal.transitioning` 上，实测比它省下的高斯采样还贵。
   static final Listenable _listenable = Listenable.merge([
     SoftGlassStore.state,
     GlassPreferences.enabled,
     RouteTransitionSignal.reversing,
+    MotionPerformance.lowPower,
   ]);
 
   /// 模糊核按 σ 复用：ImageFilter 不可变，每次 build 新建只会制造 GC
@@ -409,14 +436,14 @@ class SoftGlassSurface extends StatelessWidget {
     final route = ModalRoute.of(context);
     final popup = route is PopupRoute ? route.animation : null;
     if (popup == null) return _surface(context, brightness, primary, false);
+    // 两棵子树预先建好，动画每帧只在二者间切一次引用：同一实例连续帧
+    // 会被 Element 的 widget 相等短路，不再逐帧重建整枚玻璃面。
+    final settled = _surface(context, brightness, primary, false);
+    final animating = _surface(context, brightness, primary, true);
     return AnimatedBuilder(
       animation: popup,
-      builder: (context, _) => _surface(
-        context,
-        brightness,
-        primary,
-        popup.status != AnimationStatus.completed,
-      ),
+      builder: (context, _) =>
+          popup.status != AnimationStatus.completed ? animating : settled,
     );
   }
 
@@ -435,9 +462,16 @@ class SoftGlassSurface extends StatelessWidget {
         final spec = SoftGlassStore.state.value;
         final glass = GlassPreferences.enabled.value;
         final dark = brightness == Brightness.dark;
-        // 回退动画期：整页每帧重绘，任何模糊都会放大成本 → 临时去掉
-        // 磨砂与内阴影（动画结束下一帧自动恢复）。
-        final cheap = RouteTransitionSignal.reversing.value || animating;
+        // 动效期（回退/进场/弹窗动画）与「轻量玻璃」开关：**只降采样，
+        // 绝不关模糊**。模糊是这套材质的本体——把它抹成 0 等于换了一套 UI，
+        // 而实测把模糊关掉页照样卡（真正的大头是每档重建整棵胶囊子树，
+        // 见 [edgeProx]），所以这里改为保留模糊、只缩 σ 并跳过两次大半径
+        // `MaskFilter.blur`（内阴影/内高光，动画期肉眼无从分辨）。
+        final motion = RouteTransitionSignal.reversing.value || animating;
+        final cheap = motion || MotionPerformance.lowPower.value;
+        final sigmaScale = MotionPerformance.lowPower.value
+            ? MotionPerformance.lowPowerSigmaScale
+            : (motion ? MotionPerformance.motionSigmaScale : 1.0);
         // 玻璃关闭 → 降级为不透明浮层（低端设备更流畅，且不再采样背景）。
         final fallback = dark
             ? const Color(0xFF1E2026)
@@ -452,8 +486,13 @@ class SoftGlassSurface extends StatelessWidget {
             (glass
                 ? SoftGlassTokens.edge(spec, brightness)
                 : (dark ? Colors.white24 : Colors.black12));
-        final blur = (glass && !cheap)
-            ? (sigma ?? spec.blurSigma).clamp(0.0, SoftGlassSpec.maxBlurSigma)
+        // σ=0 是「用户显式要清透到底」的唯一合法零模糊路径（调参台可设）。
+        final baseSigma = (sigma ?? spec.blurSigma).clamp(
+          0.0,
+          SoftGlassSpec.maxBlurSigma,
+        );
+        final blur = (glass && baseSigma > 0.01)
+            ? baseSigma * sigmaScale
             : 0.0;
         final radiusValue = SoftGlassTokens.radius(shape, radius, Size.zero);
         final body = Stack(
@@ -483,6 +522,9 @@ class SoftGlassSurface extends StatelessWidget {
                     borderRadius: borderRadius,
                     edgeColor: edgeColor,
                     cheap: cheap,
+                    // 玻璃关闭时描边走静态色，不挂接近度监听。
+                    edgeProx: glass ? edgeProx : null,
+                    edgeFor: glass ? edgeFor : null,
                   ),
                 ),
               ),
@@ -535,7 +577,9 @@ class SoftGlassPainter extends CustomPainter {
     required this.borderRadius,
     required this.edgeColor,
     this.cheap = false,
-  });
+    this.edgeProx,
+    this.edgeFor,
+  }) : super(repaint: edgeProx);
 
   final SoftGlassSpec spec;
   final SoftGlassShape shape;
@@ -544,8 +588,26 @@ class SoftGlassPainter extends CustomPainter {
   final Color edgeColor;
 
   /// 降级模式：跳过内阴影/内高光（两次大半径 `MaskFilter.blur`），
-  /// 只留渐变描边。回退动画期整页每帧重绘，模糊成本被放大，必须砍掉。
+  /// 只留渐变描边。**不影响磨砂**——模糊永远保留，见 [SoftGlassSurface]。
   final bool cheap;
+
+  /// 描边亮度信号：值变化只触发本 painter 重绘（1px 描边），不重建
+  /// 玻璃面子树，也不重采样 backdrop。
+  final ValueListenable<double>? edgeProx;
+  final Color Function(double prox)? edgeFor;
+
+  /// 形状路径按尺寸缓存：`paint` 每帧都跑，`Path` 反复构造纯粹是分配开销。
+  static final Map<Object, Path> _pathCache = <Object, Path>{};
+
+  Path _cachedPath(Size size) {
+    final key = Object.hash(size.width, size.height, shape, radius, borderRadius);
+    if (_pathCache.length > 64) _pathCache.clear();
+    final cached = _pathCache[key];
+    if (cached != null) return cached;
+    final path = _path(size);
+    _pathCache[key] = path;
+    return path;
+  }
 
   /// 形状路径：非均匀圆角优先；胶囊按**实际短边**算半径（真胶囊）。
   static Path pathOf(
@@ -589,7 +651,7 @@ class SoftGlassPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-    final path = _path(size);
+    final path = _cachedPath(size);
     final r = math.min(size.width, size.height) * 0.45;
     if (r > 0.5 && !cheap) {
       canvas.save();
@@ -618,7 +680,11 @@ class SoftGlassPainter extends CustomPainter {
       }
       canvas.restore();
     }
-    // 渐变描边：上缘亮、下缘淡。
+    // 渐变描边：上缘亮、下缘淡。接近度亮起直接在这里取值——信号变化只
+    // 重绘这条 1px 描边，不重建子树、不重采样 backdrop。
+    final edge = edgeProx == null
+        ? edgeColor
+        : (edgeFor?.call(edgeProx!.value) ?? edgeColor);
     if (spec.edge > 0.001) {
       canvas.drawPath(
         path,
@@ -629,8 +695,8 @@ class SoftGlassPainter extends CustomPainter {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              edgeColor,
-              edgeColor.withValues(alpha: edgeColor.a * 0.15),
+              edge,
+              edge.withValues(alpha: edge.a * 0.15),
             ],
           ).createShader(Offset.zero & size),
       );
@@ -644,7 +710,10 @@ class SoftGlassPainter extends CustomPainter {
       oldDelegate.radius != radius ||
       oldDelegate.borderRadius != borderRadius ||
       oldDelegate.edgeColor != edgeColor ||
-      oldDelegate.cheap != cheap;
+      oldDelegate.cheap != cheap ||
+      // 接近度信号的取值变化由 `repaint` 直接驱动重绘，这里只比较承载者
+      // 是否换了一路信号（同值/同实例不重绘）。
+      oldDelegate.edgeProx != edgeProx;
 }
 
 /// 柔光形状裁剪器：胶囊半径依赖**实际短边**，必须在布局期由 size 决定，

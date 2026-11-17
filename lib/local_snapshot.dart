@@ -33,6 +33,7 @@ class LocalSnapshot {
     'seriesCandidates',
     'mediaHistory',
     'source',
+    'groupSources',
     'hideVip',
     'playback',
     'downloadPreferences',
@@ -60,6 +61,24 @@ class LocalSnapshot {
     'episodeProgress',
   };
 
+  /// 布尔型字段的短名白名单（`profile.<id>.hideVip` 这类按最后一段匹配）。
+  ///
+  /// 新增任何布尔字段都必须登记到这里，否则 [_validate] 会按 String 校验，
+  /// 整份快照抛 FormatException → 用户被 `_block()` 锁死。与 [libraryKeys]
+  /// 放在一起，避免「字段加了、白名单忘了」在运行期才炸。
+  static const boolKeys = {
+    'hideVip',
+    'autoExport',
+    'exportPosters',
+    'forceLogin',
+    'restrictedUnlocked',
+    'dongpiandiOfficialOnly',
+    'blurCoversButton',
+    'blurCoversOnLaunch',
+    'showNetworkSpeed',
+    'showClock',
+  };
+
   static const globalKeys = {
     'profiles',
     'activeProfile',
@@ -70,6 +89,12 @@ class LocalSnapshot {
     'forceLogin',
     'restrictedUnlocked',
     'dongpiandiOfficialOnly',
+    'blurCoversButton',
+    'blurCoversOnLaunch',
+    'blurCoversBySource',
+    'uiScale',
+    'showNetworkSpeed',
+    'showClock',
     'sourceSwitches',
     'liveSources',
     'customSources',
@@ -85,7 +110,7 @@ class LocalSnapshot {
       globalKeys.contains(key) ||
       libraryKeys.contains(key) ||
       RegExp(
-        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks|episodeProgress)$',
+        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|groupSources|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks|episodeProgress)$',
       ).hasMatch(key);
 
   /// 是否为需要落文件的重键（默认档顶层键或 profile 档键）。
@@ -142,14 +167,7 @@ class LocalSnapshot {
 
   void _validate(Map<String, Object> values) {
     for (final entry in values.entries) {
-      final boolean = {
-        'hideVip',
-        'autoExport',
-        'exportPosters',
-        'forceLogin',
-        'restrictedUnlocked',
-        'dongpiandiOfficialOnly',
-      }.contains(entry.key.split('.').last);
+      final boolean = boolKeys.contains(entry.key.split('.').last);
       if (!owns(entry.key) ||
           (boolean ? entry.value is! bool : entry.value is! String)) {
         throw const FormatException('本地配置字段无效');
@@ -231,7 +249,9 @@ class LocalSnapshot {
         throw StateError('本地配置未能保存');
       }
     } catch (_) {
-      await _rollbackFiles(doneWrites, doneDeletes);
+      if (!await _rollbackFiles(doneWrites, doneDeletes)) {
+        throw const SnapshotRecoveryRequired();
+      }
       try {
         await preferences.reload();
         if (preferences.get(storageKey) != previous) {
@@ -254,12 +274,14 @@ class LocalSnapshot {
     }
   }
 
-  /// 把本批已执行的文件操作恢复到提交前状态；恢复失败静默吞掉
-  /// （上层按 blob 回滚结果决定是否抛 SnapshotRecoveryRequired）。
-  Future<void> _rollbackFiles(
+  /// 把本批已执行的文件操作恢复到提交前状态；返回是否全部回滚成功。
+  /// 回滚失败必须让上层升级为 [SnapshotRecoveryRequired]——文件层与 blob
+  /// 不一致时继续跑只会写坏更多数据。
+  Future<bool> _rollbackFiles(
     List<String> doneWrites,
     List<String> doneDeletes,
   ) async {
+    var ok = true;
     for (final key in doneWrites) {
       try {
         final previousValue = _fileKeys.contains(key)
@@ -270,14 +292,19 @@ class LocalSnapshot {
         } else {
           await files.delete(key);
         }
-      } catch (_) {}
+      } catch (_) {
+        ok = false;
+      }
     }
     for (final key in doneDeletes) {
       try {
         final previousValue = _values[key];
         if (previousValue is String) await files.write(key, previousValue);
-      } catch (_) {}
+      } catch (_) {
+        ok = false;
+      }
     }
+    return ok;
   }
 }
 

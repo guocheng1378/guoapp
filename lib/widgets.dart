@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -98,10 +99,15 @@ class DramaCover extends StatelessWidget {
     required this.drama,
     required this.repository,
     this.radius = 14,
+    this.blurred = false,
   });
   final Drama drama;
   final AppRepository repository;
   final double radius;
+
+  /// 模糊封面（移植自 Xanerix/guoapp 29e1afe）：只糊海报本身，
+  /// 集数/VIP 角标与标题保持清晰。
+  final bool blurred;
   static const imagesDisabled = bool.fromEnvironment('DISABLE_REMOTE_IMAGES');
 
   @override
@@ -126,11 +132,23 @@ class DramaCover extends StatelessWidget {
         children: [
           placeholder,
           if (!imagesDisabled && drama.id.isNotEmpty)
-            CachedCoverImage(
-              key: ValueKey('${drama.id}\u0000${drama.cover}'),
-              drama: drama,
-              repository: repository,
-              placeholder: placeholder,
+            Positioned.fill(
+              child: blurred
+                  ? ImageFiltered(
+                      imageFilter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                      child: CachedCoverImage(
+                        key: ValueKey('${drama.id}\u0000${drama.cover}'),
+                        drama: drama,
+                        repository: repository,
+                        placeholder: placeholder,
+                      ),
+                    )
+                  : CachedCoverImage(
+                      key: ValueKey('${drama.id}\u0000${drama.cover}'),
+                      drama: drama,
+                      repository: repository,
+                      placeholder: placeholder,
+                    ),
             ),
           Positioned.fill(
             child: IgnorePointer(
@@ -212,7 +230,22 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       widget.drama.id,
     );
     widget.repository.catalogUpdates.addListener(_metadataChanged);
-    _file = widget.repository.cover(widget.drama).catchError((_) => '');
+    _file = _traceCover(widget.repository.cover(widget.drama));
+  }
+
+  /// 封面失败留一条可诊断日志（成功路径不打，避免上万条卡片刷爆 logcat）。
+  Future<String> _traceCover(Future<String> future) {
+    final started = DateTime.now();
+    return future.then<String>(
+      (path) => path,
+      onError: (Object error) {
+        debugPrint(
+          '[cover] ERR id=${widget.drama.id} '
+          '${DateTime.now().difference(started).inMilliseconds}ms $error',
+        );
+        return '';
+      },
+    );
   }
 
   @override
@@ -231,7 +264,7 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       _coverRevision = widget.repository.catalogUpdates.coverRevision(
         widget.drama.id,
       );
-      _file = widget.repository.cover(widget.drama).catchError((_) => '');
+      _file = _traceCover(widget.repository.cover(widget.drama));
     }
   }
 
@@ -275,10 +308,12 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
       setState(() {
         _coverFailed = _retryOnFailure = false;
         _failedPath = null;
-        _file = widget.repository.cover(
-          widget.repository.catalogUpdates.current(widget.drama),
-          force: true,
-        ).catchError((_) => '');
+        _file = _traceCover(
+          widget.repository.cover(
+            widget.repository.catalogUpdates.current(widget.drama),
+            force: true,
+          ),
+        );
       });
     }
   }
@@ -311,6 +346,10 @@ class _CachedCoverImageState extends State<CachedCoverImage> {
         fit: BoxFit.cover,
         cacheWidth: 440,
         excludeFromSemantics: true,
+        // 首帧未就绪时继续显示占位（否则 Image 会先画一张空白，
+        // 看起来和「一直没加载」完全一样，排查时极易误判）。
+        frameBuilder: (context, child, frame, wasSyncLoaded) =>
+            frame == null && !wasSyncLoaded ? widget.placeholder : child,
         errorBuilder: (_, error, stack) => _failed(snapshot.data),
       );
     },
@@ -328,18 +367,27 @@ class DramaTile extends StatelessWidget {
     this.onFocus,
     this.actions,
     this.badge,
+    this.sourceTag,
     this.selected,
     this.onMore,
     this.onLongPress,
+    this.blurred = false,
   });
   final Drama drama;
   final AppRepository repository;
   final VoidCallback onTap;
+
+  /// 模糊封面（首页「模糊封面」开关打开时由调用方传入）
+  final bool blurred;
   final String? subtitle;
   final FocusNode? focusNode;
   final VoidCallback? onFocus;
   final Widget? actions;
   final String? badge;
+
+  /// 封面左上角的站源小标（最近观看/追剧页：「来自哪个源」一眼可见）。
+  /// 空串/未传不渲染。
+  final String? sourceTag;
   final bool? selected;
   final VoidCallback? onMore;
   final VoidCallback? onLongPress;
@@ -381,7 +429,44 @@ class DramaTile extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              DramaCover(drama: drama, repository: repository),
+              DramaCover(
+                drama: drama,
+                repository: repository,
+                blurred: blurred,
+              ),
+              // 站源小标：贴左上角，右上角留给「更多」/多选圆标。
+              if (sourceTag != null && sourceTag!.isNotEmpty)
+                Positioned(
+                  left: 6,
+                  top: 6,
+                  right: actions != null && selected == null ? 44 : 6,
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: .62),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 2,
+                        ),
+                        child: Text(
+                          sourceTag!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: television ? 13 : (compact ? 9.5 : 10.5),
+                            height: 1.25,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (badge != null && badge!.isNotEmpty)
                 Positioned(
                   left: 6,
@@ -505,6 +590,7 @@ class StatusPanel extends StatelessWidget {
     this.icon,
     this.action = '重试',
     this.secondaryAction,
+    this.extraActions,
   });
   final String title;
   final String message;
@@ -512,6 +598,9 @@ class StatusPanel extends StatelessWidget {
   final Widget? icon;
   final String action;
   final Widget? secondaryAction;
+
+  /// 主操作与次要操作之外的补充入口（如播放失败时的「换个源找」）。
+  final Widget? extraActions;
   @override
   Widget build(BuildContext context) => Center(
     child: SingleChildScrollView(
@@ -548,6 +637,10 @@ class StatusPanel extends StatelessWidget {
           if (secondaryAction != null) ...[
             const SizedBox(height: 8),
             secondaryAction!,
+          ],
+          if (extraActions != null) ...[
+            const SizedBox(height: 8),
+            extraActions!,
           ],
         ],
       ),

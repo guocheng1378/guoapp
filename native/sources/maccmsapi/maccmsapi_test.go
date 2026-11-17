@@ -3,6 +3,7 @@ package maccmsapi
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -187,6 +188,90 @@ func TestVodDurationSeconds(t *testing.T) {
 		if got := vodDurationSeconds(json.RawMessage(tc.raw)); got != tc.want {
 			t.Fatalf("vodDurationSeconds(%s) = %v, want %v", tc.raw, got, tc.want)
 		}
+	}
+}
+
+// 上游 fork 把搜索与目录统一成「带 page+query 的目录请求」。此前视频源
+// Search 硬编码 pg=1，而 Dart 白名单声明这些源可分页，上拉会反复拿到第一页。
+func TestSearchPageUsesKeywordAndPage(t *testing.T) {
+	host := &fakeHost{body: `{"code":1,"page":2,"pagecount":3,"total":48,"list":[{"vod_id":77,"vod_name":"搜索样本"}]}`}
+	items, more, err := newTestSource().SearchPage(context.Background(), host, "都市 剧", 2)
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	want := "&wd=" + url.QueryEscape("都市 剧") + "&pg=2"
+	if !strings.Contains(host.address, want) {
+		t.Fatalf("搜索地址应携带关键词与页码，want %q in %q", want, host.address)
+	}
+	if !more {
+		t.Fatal("pagecount=3 且当前第 2 页时应还有下一页")
+	}
+	if len(items) != 1 || items[0].SourceID != "77" {
+		t.Fatalf("搜索结果解析异常: %+v", items)
+	}
+}
+
+func TestSearchPageLastPageHasNoMoreAndEmptyIsNotError(t *testing.T) {
+	host := &fakeHost{body: `{"code":0,"msg":"no data","page":3,"pagecount":3,"total":0,"list":[]}`}
+	items, more, err := newTestSource().SearchPage(context.Background(), host, "冷门剧", 3)
+	if err != nil {
+		t.Fatalf("搜索无命中应是空态而非错误: %v", err)
+	}
+	if len(items) != 0 || more {
+		t.Fatalf("末页应返回空且无下一页: items=%d more=%v", len(items), more)
+	}
+}
+
+// 搜索结果必须与目录条目同构，否则搜索态下评分/地区/年份/时长/题材
+// 等筛选排序维度全部拿不到值，短剧与长剧也判不出来。
+func TestSearchPageMapsFullMetadata(t *testing.T) {
+	host := &fakeHost{body: catalogFixture}
+	items, _, err := newTestSource().SearchPage(context.Background(), host, "剧", 1)
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("期望 3 条，得到 %d", len(items))
+	}
+	first := items[0]
+	if first.Desc != "简介" || first.CategoryName != "短剧" || first.ChannelName != "影视工厂" {
+		t.Fatalf("搜索结果缺简介/分类/频道: %+v", first)
+	}
+	if first.Area != "香港" || first.Year != "2024" || first.Score != "9.2" {
+		t.Fatalf("搜索结果缺地区/年份/评分: %+v", first)
+	}
+	if first.Duration != float64(2712) || first.OnlineDate == "" {
+		t.Fatalf("搜索结果缺时长/上线日期: %+v", first)
+	}
+	if len(items[1].Actors) != 0 {
+		t.Fatalf("无主演字段时应为空: %v", items[1].Actors)
+	}
+}
+
+func TestSearchPageRejectsInvalidKeyword(t *testing.T) {
+	host := &fakeHost{body: catalogFixture}
+	source := newTestSource()
+	for _, query := range []string{"", "  ", strings.Repeat("甲", 81), "甲\x00乙"} {
+		if _, _, err := source.SearchPage(context.Background(), host, query, 1); err == nil {
+			t.Fatalf("非法搜索词 %q 应被拒绝", query)
+		}
+	}
+	if host.address != "" {
+		t.Fatalf("非法搜索词不应发出请求，实际: %s", host.address)
+	}
+}
+
+func TestSearchUsesFirstPage(t *testing.T) {
+	host := &fakeHost{body: catalogFixture}
+	items, err := newTestSource().Search(context.Background(), host, "剧")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !strings.Contains(host.address, "pg=1") {
+		t.Fatalf("单页搜索应请求第一页: %s", host.address)
+	}
+	if len(items) != 3 {
+		t.Fatalf("期望 3 条，得到 %d", len(items))
 	}
 }
 

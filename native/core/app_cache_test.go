@@ -125,7 +125,13 @@ func TestNativeCoverFormatsFailuresAndOfflineFallback(t *testing.T) {
 	if _, err := engine.covers.load(context.Background(), drama, false); err == nil || len(engine.covers.entries) != 0 {
 		t.Fatal("invalid cover was cached")
 	}
-	path, err := engine.covers.load(context.Background(), drama, false)
+	// 失败冷却：同一 URL 的非强制重试在冷却期内直接回报失败——列表反复重建
+	// 时会重跑注定失败的下载（重试风暴），把 12 个并发槽全占住，正常封面永远
+	// 排在队尾。用户点「重试海报」走 force，立即绕过冷却。
+	if _, err := engine.covers.load(context.Background(), drama, false); err == nil {
+		t.Fatal("failure cooldown did not suppress the immediate retry")
+	}
+	path, err := engine.covers.load(context.Background(), drama, true)
 	if err != nil {
 		t.Fatal("cover failure could not be retried", err)
 	}
@@ -184,28 +190,29 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if !strings.HasPrefix(r.URL.Path, "/ai-") && !strings.HasPrefix(r.URL.Path, "/chigua/") {
-			t.Error("unexpected path", r.URL.Path)
+		target := huangguoEdgeTarget(t, r)
+		if !strings.HasPrefix(target.Path, "/api/videos/category/") {
+			t.Error("unexpected path", target.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		page := 1
-		if trimmed := strings.Trim(r.URL.Path, "/"); strings.Contains(trimmed, "/") {
-			if n, err := strconv.Atoi(trimmed[strings.LastIndex(trimmed, "/")+1:]); err == nil && n > 1 {
-				page = n
-			}
+		page, _ := strconv.Atoi(target.Query().Get("page"))
+		if page < 1 {
+			page = 1
 		}
 		count := 35
 		if page > 1 {
 			count = 1
 		}
-		var cards []string
+		rows := make([]map[string]any, 0, count)
 		for index := 0; index < count; index++ {
 			id := strconv.Itoa(page*100 + index)
-			title := fmt.Sprintf("合成剧集%d", page*100+index)
-			cards = append(cards, fmt.Sprintf(`<article class="o5-card"><a href="https://huangguoai.com/d/%s/" class="o5-card__poster"><img src="https://example.test/cover-%s.jpg"/></a><div class="o5-card__body"><h3><a href="https://huangguoai.com/d/%s/" class="o5-card__title">%s</a></h3><span class="o5-card__ep">全</span></div></article>`, id, id, id, title))
+			rows = append(rows, map[string]any{
+				"id": id, "title": fmt.Sprintf("合成剧集%d", page*100+index),
+				"cover": "https://example.test/cover-" + id + ".jpg",
+			})
 		}
-		fmt.Fprintf(w, "<html><body><div class='o5-grid'>%s</div></body></html>", strings.Join(cards, ""))
+		fmt.Fprintf(w, "%s", huangguoEdgeReply(rows))
 	}))
 	defer upstream.Close()
 	directory := t.TempDir()
@@ -218,12 +225,15 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 		engine.downloader.limiter = newRequestLimiter(3, 0)
 		return engine
 	}
+	// 「全部」会并发请求映射表里的每个分类；分类表按站点真值增删时，
+	// 断言必须跟着表长走，不能写死 5/10/15/20。
+	perPage := int32(len(nativeAICategories))
 	engine := open()
 	first, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1})
 	if err != nil || len(first.Items) != 35 || !first.Fresh || !first.HasMore {
 		t.Fatal("first catalog request failed", err, first)
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 5 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != perPage {
 		t.Fatal("fresh catalog caused another request", err, calls.Load())
 	}
 	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 2}); err != nil {
@@ -234,10 +244,10 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	if len(cached.Items) != 36 || cached.Page != 2 || cached.HasMore || !cached.Fresh {
 		t.Fatal("cached pagination state did not survive a restart", cached)
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 10 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 2*perPage {
 		t.Fatal("restart bypassed fresh disk cache", err, calls.Load())
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1, Force: true}); err != nil || calls.Load() != 15 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1, Force: true}); err != nil || calls.Load() != 3*perPage {
 		t.Fatal("manual refresh reused old data", err, calls.Load())
 	}
 	state := engine.catalogStates[sourceHuangguoAI]
@@ -246,7 +256,7 @@ func TestNativeCatalogCacheFreshnessPagingAndRefresh(t *testing.T) {
 	if engine.nativeCached(sourceHuangguoAI).Fresh {
 		t.Fatal("expired catalog is marked fresh")
 	}
-	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 20 {
+	if _, err := engine.nativeCatalog(context.Background(), nativeInput{Source: sourceHuangguoAI, Page: 1}); err != nil || calls.Load() != 4*perPage {
 		t.Fatal("expired catalog was not updated", err, calls.Load())
 	}
 }

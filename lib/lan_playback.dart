@@ -103,6 +103,12 @@ extension LanPlayback on LanController {
     if (pending?.id != id && _playReceipts.containsKey(id))
       return _playReceipts[id]!;
     if (path == 'play/prepare') {
+      // 发送端失败重试会复用同一个 id：上次的取消/失败回执必须先作废，
+      // 否则 prepare 会被回执短路，用户点「重试」永远返回「已取消」。
+      final receipt = _playReceipts[id];
+      if (receipt != null && receipt['state'] != 'completed') {
+        _playReceipts.remove(id);
+      }
       final intent = LanPlaybackIntent.fromJson(body['intent']);
       if (!store.allowsSource(intent.drama.source) ||
           !remote.sources.contains(intent.drama.source)) {
