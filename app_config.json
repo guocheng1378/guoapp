@@ -12,7 +12,7 @@
         "enabled": true,
         "build": 2303,
         "version": "0.2.96-2303",
-        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2303-arm64-v8a.apk",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2303-arm64-v8a.apk",
         "notes": "站源改为在线模块分发：安装包不再内置 48 个站源模块，首启按需从在线仓库安装；「站源管理」统一管模块/自定义/直播，卸载即移除；在线模块商店按短剧/视频/成人分类，未解锁不显示，支持一键加载本组；修复黄果AI无法使用（host 能力补齐 + POST 信封 + 镜像轮转）；站源模块与站源管理合并且装完自动启用；模糊封面改为已装模块分组的眼睛按钮；修复在线模块下载 sha 校验导致的安装失败。"
     },
     "sourceConfig": {
