@@ -3,24 +3,23 @@
     "announcement": {
         "enabled": true,
         "title": "欢迎使用真果鉴",
-        "message": "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可复制反馈内容；购码、续费与反馈也可访问网页反馈区。",
+        "message": "感谢使用真果鉴！遇到问题或有建议，点右上角「⋯」→「设置与备份」→「反馈 Bug」即可联系我们（反馈卡内附 QQ：963484350）。",
         "button": "我知道了",
-        "link": "https://guoapp.dpdns.org/forum.html",
+        "link": "",
         "image": "https://raw.githubusercontent.com/guocheng1378/guoapp/main/notice_banner.png"
     },
     "update": {
         "enabled": true,
-        "build": 2290,
-        "version": "0.2.96-2290",
-        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2290-arm64-v8a.apk",
-        "notes": "站源模块体系对齐上游：\r\n\r\n1. 模块单模块热重载：安装/更新模块后只重载该模块，不再整体重注册；修复带媒体/排序能力的模块丢失弹幕、封面、推荐、联想、榜单能力的问题；修复卸载模块后域名后缀归属残留。\r\n2. 播放链路诊断：新增流代理诊断日志，播放失败时可按短哈希会话、脱敏地址、错误分类在 app.log 定位根因，不再只有「暂时无法播放」。\r\n3. 模块播放凭证（mediaAuth）：模块可按域名与路径为媒体请求签发自定义请求头，凭证被拒后自动重签；不影响红果等内置源播放。\r\n4. 模块管理页：安装确认卡展示版本、域名、功能与限制级；已装模块显示提供能力与榜单；坏模块直接显示错误原因。\r\n5. 模块在线分发：索引与下载走自有 guoapp-modules 仓库，支持地址直装与一键更新，无需更新本体。"
+        "build": 2303,
+        "version": "v0.2.96-2303",
+        "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2303/zhenguojian-0.2.96+2303-arm64-v8a.apk",
+        "notes": "站源改为在线模块分发：安装包不再内置 48 个站源模块，首启按需从在线仓库安装；「站源管理」统一管模块/自定义/直播，卸载即移除；在线模块商店按短剧/视频/成人分类，未解锁不显示，支持一键加载本组；修复黄果AI无法使用（host 能力补齐 + POST 信封 + 镜像轮转）；站源模块与站源管理合并且装完自动启用；模糊封面改为已装模块分组的眼睛按钮；修复在线模块下载 sha 校验导致的安装失败。"
     },
     "sourceConfig": {
         "huangguoAIMirrors": [
             "https://www.agdkczeyx.cc",
-            "https://huangguoai.io",
             "https://thu.agdkczeyx.cc",
-            "https://thu.lbvrhyir.cc"
+            "https://pku.xxbgwypx.cc"
         ]
     }
 }
