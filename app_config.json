@@ -11,9 +11,9 @@
     "update": {
         "enabled": true,
         "build": 2305,
-        "version": "v0.2.96-2305",
-        "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2305/zhenguojian-0.2.96+2305-arm64-v8a.apk",
-        "notes": "修复黄果AI、黄果视频及多个在线模块（野果/剧果/禁果短剧/韩小圈/黑桃/鬼片/帝果/笔盒等）只有1集的问题：底层分集ID生成忽略集数标识，多集被去重成1集，现已全部恢复。"
+        "version": "0.2.96-2305",
+        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2305-arm64-v8a.apk",
+        "notes": "Fix only-1-episode bug in huangguoai / huangguo-video and other online modules (chapter id generation ignored episode key, dedup collapsed all episodes into 1)."
     },
     "sourceConfig": {
         "huangguoAIMirrors": [
