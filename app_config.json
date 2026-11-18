@@ -12,7 +12,7 @@
         "enabled": true,
         "build": 2305,
         "version": "0.2.96-2305",
-        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2305-arm64-v8a.apk",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2305-arm64-v8a.apk",
         "notes": "Fix only-1-episode bug in huangguoai / huangguo-video and other online modules (chapter id generation ignored episode key, dedup collapsed all episodes into 1)."
     },
     "sourceConfig": {
