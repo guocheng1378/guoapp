@@ -1,0 +1,25 @@
+{
+  "id": "yunzhui",
+  "name": "云追",
+  "version": "1.0.1",
+  "category": "video",
+  "description": "云追视频 · 影视聚合 · 频道目录 · 搜索 · 多线路取流（AES-CBC 响应 + MD5 签名）",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["u.gslock.com", "u.alvzz.com", "u.irltk.com", "u.yyxdmn.com"],
+  "capabilities": ["catalog", "detail", "search", "media", "rankings"],
+  "aliases": ["yunzhui", "云追", "u.gslock.com", "u.alvzz.com", "u.irltk.com", "u.yyxdmn.com"],
+  "baseUrl": "https://u.gslock.com/",
+  "referer": "https://u.gslock.com/",
+  "rankings": [
+    { "id": "yunzhui-daily-drama", "name": "国产剧日榜", "description": "云追国产剧每日热度。" },
+    { "id": "yunzhui-daily-movie", "name": "电影日榜", "description": "云追电影每日热度。" },
+    { "id": "yunzhui-daily-variety", "name": "综艺日榜", "description": "云追综艺每日热度。" },
+    { "id": "yunzhui-daily-short", "name": "短剧日榜", "description": "云追短剧每日热度。" },
+    { "id": "yunzhui-total-drama", "name": "国产剧总榜", "description": "云追国产剧总热度。" },
+    { "id": "yunzhui-total-movie", "name": "电影总榜", "description": "云追电影总热度。" },
+    { "id": "yunzhui-total-variety", "name": "综艺总榜", "description": "云追综艺总热度。" },
+    { "id": "yunzhui-total-short", "name": "短剧总榜", "description": "云追短剧总热度。" }
+  ],
+  "requiresAllSources": true
+}

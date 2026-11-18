@@ -51,9 +51,18 @@ func nativeCatalogKey(source, category, sort string) string {
 	return key
 }
 
+// huangdouModuleCategoryPattern 对齐黄豆 H5 模块 validCategory 的复合分类 id：
+// f|{cat_id}|{order}|{source}。模块自己会再校验一遍，这里挡住注入与超长值。
+var huangdouModuleCategoryPattern = regexp.MustCompile(`^f\|[0-9]{1,10}\|[a-z:._-]{0,32}\|[a-z0-9:._-]{0,32}$`)
+
 func validNativeCategory(source, category string) bool {
 	if category == "" {
 		return true
+	}
+	// 黄豆由 JS 模块接管时分类 id 是 f|... 复合格式，通用规则会把 | 判非法。
+	// 仅对该模块接管的源放行，且用同规格正则约束；模块未接管仍走下面的通用校验。
+	if source == sourceHuangdou && moduleDeclaresCapability(source, "catalog") {
+		return category == "@new" || category == "@hot" || huangdouModuleCategoryPattern.MatchString(category)
 	}
 	if len(category) > 128 || strings.ContainsAny(category, "|/\\\x00\r\n") {
 		return false
@@ -101,6 +110,17 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 	all := []nativeCategory{{Name: "全部"}}
 	switch source {
 	case sourceHongguo:
+		// 红果内嵌 JS 模块优先提供分类（含上游新增的听书分类）；失败回落
+		// 静态 hongguoAppGenres，保证模块异常时分类栏不空。
+		if module, jsErr := engine.downloader.hongguoJS(); jsErr == nil {
+			if cats, jsErr := module.categories(); jsErr == nil && len(cats) > 0 {
+				result := []nativeCategory{{Name: "全部"}}
+				for _, cat := range cats {
+					result = append(result, nativeCategory{ID: cat.ID, Name: cat.Name})
+				}
+				return result, nil
+			}
+		}
 		for _, genre := range hongguoAppGenres {
 			all = append(all, nativeCategory{ID: genre.key, Name: genre.name})
 		}
@@ -108,7 +128,11 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 	case sourceHuangguoAI:
 		return append(all, nativeAICategories...), nil
 	case sourceHuangdou:
-		return all, nil
+		// 黄豆由 JS 模块接管后走通用 duanju 分类路径拿站点真实分类
+		// （最新/热门/黄豆原创/UP原创）；模块未接管时保持旧的静态「全部」。
+		if !moduleDeclaresCapability(source, "catalog") {
+			return all, nil
+		}
 	}
 	engine.mu.Lock()
 	cached := append([]nativeCategory{}, engine.categoryOptions[source]...)

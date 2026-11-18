@@ -235,10 +235,35 @@ func (d *Downloader) loadRankingPage(ctx context.Context, board rankingBoard, pa
 
 // fetchRankingPage：按榜单站源分发。豆瓣走官方合集抓取，站源榜各有链路。
 func (d *Downloader) fetchRankingPage(ctx context.Context, board rankingBoard, page int) (rankingPage, error) {
+	// 模块站源：由模块提供榜单（模块没提供则回退内置链路）。
+	if ranker, ok := moduleCapabilityProvider(board.Source).(moduleRankingProvider); ok {
+		items, err := ranker.ModuleRankingPage(ctx, d.host(), board.ID, page)
+		if !errors.Is(err, errModuleCapabilityUnsupported) {
+			if err != nil {
+				return rankingPage{}, err
+			}
+			result := rankingPage{BoardID: board.ID, Page: page}
+			for index, drama := range items {
+				result.Items = append(result.Items, rankingItem{Rank: index + 1, Drama: drama})
+			}
+			result.HasMore = false
+			return result, nil
+		}
+	}
 	switch board.Source {
 	case sourceDouban:
 		return d.fetchDoubanRankingPage(ctx, board, page)
 	case sourceHongguo:
+		// 红果内嵌 JS 模块优先；失败回落 Go 官方榜抓取。
+		if module, jsErr := d.hongguoJS(); jsErr == nil {
+			// JS rankingPage 接受 boardId（如 hongguo-hot），内部查 upstreamKey。
+			if jsPage, jsErr := module.rankingPage(board.ID, page); jsErr == nil && len(jsPage.Items) > 0 {
+				return rankingPage{
+					BoardID: board.ID, Page: page, Items: jsPage.Items,
+					HasMore: jsPage.HasMore, TotalPages: jsPage.TotalPage,
+				}, nil
+			}
+		}
 		return d.fetchHongguoRankingPage(ctx, board, page)
 	case sourceHuangdou:
 		var decoded any

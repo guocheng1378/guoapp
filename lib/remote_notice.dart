@@ -1,10 +1,11 @@
 // 启动远程公告 / 版本更新提示。
 //
-// 配置文件即公开仓库 main 分支根目录的 `app_config.json`——在 GitHub
-// 网页编辑提交后，对全部装机下次启动生效，无需自有服务器、无需发版：
+// 配置文件即 `app_config.json`——在仓库 main 分支网页编辑提交后，对全部
+// 装机下次启动生效，无需发版：
 //
-// - 拉取按 remoteNoticeUrls 顺序回退：raw 优先（改文件即时生效），
-//   jsdelivr 为国内可达性兜底（分支引用可能有最长约 12h 缓存延迟）。
+// - 拉取按 effectiveRemoteNoticeUrls 顺序回退：自建源优先（国内直连稳定），
+//   GitHub 镜像 / raw 兜底。sourceConfig.appConfigUrl 可把自建源置顶换域，
+//   下发后本地持久化，下次启动即用新地址（换源不发版）。
 // - 全链路静默容错：任何网络/解析失败都不弹、不报错、不卡启动。
 // - 会话内只尝试一次（顶层守卫），profile 切换不会重复弹。
 // - FLUTTER_TEST 环境默认直通不拉网（与 activation_flow 同款守卫），
@@ -16,6 +17,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app_build.dart';
@@ -24,13 +26,14 @@ import 'core_bridge.dart';
 import 'folme.dart';
 import 'glass.dart';
 
-/// 回退拉取地址（顺序即回退优先级）：
-/// 1) raw.githubusercontent：改文件即时生效，但国内常被墙（约 3s 超时后跳下一源）；
-/// 2) 国内 GitHub 文件代理 / 镜像（ghproxy 系、kkgithub）：即时、绕墙；
-/// 3) jsdelivr 多域名兜底：国内一般可达，但分支引用最长约 12h 缓存延迟。
+/// 默认回退拉取地址（顺序即回退优先级）：
+/// 1) 自建源：国内直连稳定，配置改完立即生效；
+/// 2) GitHub 文件代理 / 镜像（ghproxy 系、kkgithub）：绕墙兜底；
+/// 3) jsdelivr 多域名：国内一般可达，但分支引用最长约 12h 缓存延迟；
+/// 4) raw.githubusercontent：改文件即时生效，但国内常被墙。
 /// 任一源返回非 200 / 非 JSON 都会自动跳下一个，全失败才静默。
 const List<String> remoteNoticeUrls = <String>[
-  'https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
+  'https://guoapp.dpdns.org/zhenguojian/app_config.json',
   'https://ghproxy.net/https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
   'https://mirror.ghproxy.com/https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
   'https://raw.kkgithub.com/guocheng1378/guoapp/main/app_config.json',
@@ -38,7 +41,65 @@ const List<String> remoteNoticeUrls = <String>[
   'https://cdn.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
   'https://gcore.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
   'https://testingcf.jsdelivr.net/gh/guocheng1378/guoapp@main/app_config.json',
+  'https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json',
 ];
+
+/// 配置源自建地址覆盖（sourceConfig.appConfigUrl）：拉到的配置若带该字段，
+/// 持久化到本地，下次启动置顶使用，实现「换源不发版」。合法性由这里与 Go
+/// 核心双向校验（仅 http/https），非法值静默忽略、不影响默认链。
+/// 仅有 [_store] 已由 main 注入时才写盘，测试环境天然不污染真实偏好。
+abstract final class RemoteConfigSourceStore {
+  static const String storageKey = 'remote_config_source.app_config_url.v1';
+  static SharedPreferences? _store;
+  static String _override = '';
+
+  static String get override => _override;
+
+  static Future<void> load(SharedPreferences prefs) async {
+    _store = prefs;
+    _override = _sanitize(prefs.getString(storageKey) ?? '');
+  }
+
+  /// 拉取链：覆盖置顶，其后默认自建源 → GitHub 镜像 → raw；同域去重。
+  static List<String> effectiveUrls() {
+    if (_override.isEmpty) return remoteNoticeUrls;
+    return <String>[
+      _override,
+      ...remoteNoticeUrls.where((url) => url != _override),
+    ];
+  }
+
+  /// 配置解析后调用：合法则立即置顶并落盘。返回是否接受。
+  static Future<bool> applyFromConfig(Map<String, dynamic> sourceConfig) async {
+    final raw = sourceConfig['appConfigUrl'];
+    if (raw is! String) return false;
+    final clean = _sanitize(raw);
+    if (clean.isEmpty || clean == _override) return clean.isNotEmpty;
+    _override = clean;
+    final store = _store;
+    if (store != null) {
+      try {
+        await store.setString(storageKey, clean);
+      } on Object {
+        // 落盘失败不影响本次会话的置顶生效。
+      }
+    }
+    return true;
+  }
+
+  static String _sanitize(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    final uri = Uri.tryParse(text);
+    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) {
+      return '';
+    }
+    return text;
+  }
+
+  /// 仅测试用：复位内存覆盖（不触盘）。
+  static void resetForTest() => _override = '';
+}
 
 /// 配置未提供 update.url 时的默认下载页。
 const String defaultReleasesUrl =
@@ -174,14 +235,15 @@ int? parseBuildNumber(String version) {
 /// 测试注入口：返回配置原文（null=拉取失败）。
 typedef RemoteConfigFetcher = Future<String?> Function();
 
-/// 逐个尝试 [remoteNoticeUrls]，全部失败返回 null（静默）。
+/// 逐个尝试 [RemoteConfigSourceStore.effectiveUrls]（含 appConfigUrl 覆盖置顶），
+/// 全部失败返回 null（静默）。
 ///
 /// 200 但内容不以 `{` 开头（CDN 防爬挑战页/HTML）同样视为失败，
 /// 交由下一地址兜底。
 Future<String?> fetchRemoteNoticeConfig() async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
   try {
-    for (final url in remoteNoticeUrls) {
+    for (final url in RemoteConfigSourceStore.effectiveUrls()) {
       try {
         final request = await client
             .getUrl(Uri.parse(url))
@@ -252,8 +314,10 @@ Future<void> maybeShowRemoteNotice(
 
   // sourceConfig 段与弹窗内容无关：无论是否弹卡都先转发核心热更；失败
   // 静默（核心校验拒绝 / 桥不可用都保持当前生效值），不阻塞弹窗链路。
+  // appConfigUrl 同时置顶下次启动的配置源（本地持久化），与核心转发互不依赖。
   final sourceConfig = config.sourceConfig;
   if (sourceConfig != null && sourceConfig.isNotEmpty) {
+    unawaited(RemoteConfigSourceStore.applyFromConfig(sourceConfig));
     try {
       await (debugApplySourceConfig ?? applyNativeSourceConfig)(sourceConfig);
     } on Object {

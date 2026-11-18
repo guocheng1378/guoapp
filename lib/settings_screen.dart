@@ -18,15 +18,15 @@ import 'background_downloads.dart';
 import 'floating_card.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
+import 'js_module_screen.dart';
 import 'motion_performance.dart';
 import 'local_store.dart';
 import 'profiles_screen.dart';
+import 'pure_black_preferences.dart';
 import 'remote_widgets.dart';
-import 'sources_screen.dart';
 import 'widgets.dart';
 import 'resource_settings_screen.dart';
 import 'lan_screen.dart';
-import 'live_sources_screen.dart';
 import 'app_icons.dart';
 import 'bug_report.dart';
 import 'cloud_backup_screen.dart';
@@ -320,33 +320,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     ),
-    if (widget.repository.supportsSourceManagement)
-      (
-        id: 'sources',
-        icon: AppIcon(AppIcons.dns),
-        title: '站源管理',
-        subtitle: '独立更新、连接与播放检测',
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute<void>(
-            builder: (_) => SourcesScreen(
-              repository: widget.repository,
-              store: widget.store,
-            ),
-          ),
-        ),
-      ),
     (
-      id: 'live-sources',
-      icon: AppIcon(AppIcons.tv),
-      title: '直播源管理',
-      subtitle: '自填 m3u / txt 直播订阅链接',
+      id: 'js-modules',
+      icon: AppIcon(AppIcons.tune),
+      title: '站源模块',
+      subtitle: '内置站源的更新与检测、自定义直播源、模块安装都在这里',
       onPressed: () => Navigator.push(
         context,
         MaterialPageRoute<void>(
-          builder: (_) => LiveSourcesScreen(
-            store: widget.store,
+          builder: (_) => JsModuleScreen(
             repository: widget.repository,
+            store: widget.store,
           ),
         ),
       ),
@@ -374,6 +358,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : '已关闭：不透明浮层（低端设备更流畅，顶栏渐变仍保留）',
       onPressed: () {
         unawaited(GlassPreferences.setEnabled(!GlassPreferences.enabled.value));
+        setState(() {});
+      },
+    ),
+    (
+      id: 'pure-black',
+      icon: AppIcon(AppIcons.tune),
+      title: '纯黑深色模式',
+      subtitle: PureBlackPreferences.enabled.value
+          ? '已开启：深色界面底色为纯黑（适合 OLED 屏幕）'
+          : '已关闭：深色界面为深空灰',
+      onPressed: () {
+        unawaited(PureBlackPreferences.setEnabled(!PureBlackPreferences.enabled.value));
         setState(() {});
       },
     ),
@@ -582,38 +578,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
-              if (widget.repository.supportsSourceManagement)
-                ListTile(
-                  leading: AppIcon(AppIcons.dns),
-                  title: const Text('站源管理'),
-                  subtitle: const Text('独立更新、连接与播放检测'),
-                  trailing: AppIcon(AppIcons.chevronRight),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => SourcesScreen(
-                        repository: widget.repository,
-                        store: widget.store,
-                      ),
-                    ),
-                  ),
-                ),
-              ListTile(
-                key: const ValueKey('live-sources-setting'),
-                leading: AppIcon(AppIcons.tv),
-                title: const Text('直播源管理'),
-                subtitle: const Text('自填 m3u / txt 直播订阅链接'),
-                trailing: AppIcon(AppIcons.chevronRight),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) => LiveSourcesScreen(
-              store: widget.store,
-              repository: widget.repository,
-            ),
-                  ),
-                ),
-              ),
               ListTile(
                 key: const ValueKey('theme-setting'),
                 leading: AppIcon(AppIcons.palette),
@@ -706,6 +670,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               ValueListenableBuilder<bool>(
+                valueListenable: PureBlackPreferences.enabled,
+                builder: (context, pureBlack, _) => SwitchListTile(
+                  key: const ValueKey('pure-black-setting'),
+                  value: pureBlack,
+                  title: const Text('纯黑深色模式'),
+                  subtitle: Text(
+                    pureBlack
+                        ? '已开启：深色界面底色为纯黑（适合 OLED 屏幕）'
+                        : '已关闭：深色界面为深空灰',
+                  ),
+                  onChanged: (value) =>
+                      saveUserChange(context, () => PureBlackPreferences.setEnabled(value)),
+                ),
+              ),
+              ValueListenableBuilder<bool>(
                 valueListenable: MotionPerformance.lowPower,
                 builder: (context, lowPower, _) => SwitchListTile(
                   key: const ValueKey('motion-low-power-setting'),
@@ -719,32 +698,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (value) =>
                       saveUserChange(context, () => MotionPerformance.setLowPower(value)),
                 ),
-              ),
-              SwitchListTile(
-                key: const ValueKey('blur-covers-button-setting'),
-                value: widget.store.blurCoversButton,
-                title: const Text('模糊封面按钮'),
-                subtitle: const Text('首页顶栏显示眼睛按钮，一键把封面糊掉'),
-                onChanged: (value) => saveUserChange(
-                  context,
-                  () => widget.store.setBlurCoversButton(value),
-                ),
-              ),
-              SwitchListTile(
-                key: const ValueKey('blur-covers-launch-setting'),
-                value: widget.store.blurCoversOnLaunch,
-                title: const Text('开屏自动模糊'),
-                subtitle: Text(
-                  widget.store.blurCoversButton
-                      ? '打开首页时封面先糊，点眼睛恢复'
-                      : '需先打开上面的「模糊封面按钮」',
-                ),
-                onChanged: widget.store.blurCoversButton
-                    ? (value) => saveUserChange(
-                        context,
-                        () => widget.store.setBlurCoversOnLaunch(value),
-                      )
-                    : null,
               ),
               SwitchListTile(
                 key: const ValueKey('show-network-speed-setting'),
@@ -779,6 +732,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: const Text('前往网页反馈区或复制给开发者'),
                 trailing: AppIcon(AppIcons.chevronRight),
                 onTap: () => showBugReportCard(context),
+              ),
+              ListTile(
+                key: const ValueKey('js-modules-setting'),
+                leading: const AppIcon(AppIcons.tune),
+                title: const Text('站源模块'),
+                subtitle: const Text('在线仓库、zip 或地址安装模块；内置源开关与检测也在里面'),
+                trailing: AppIcon(AppIcons.chevronRight),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => JsModuleScreen(
+                      repository: widget.repository,
+                      store: widget.store,
+                    ),
+                  ),
+                ),
               ),
               if (widget.store.canDownload)
                 ListTile(

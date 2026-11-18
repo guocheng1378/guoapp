@@ -73,6 +73,13 @@ type PagedSearcher interface {
 	SearchPage(ctx context.Context, host Host, query string, page int) ([]Drama, bool, error)
 }
 
+// WarningSearcher 是搜索带警告的可选扩展（上游 SearchWithWarning）：源站
+// 部分结果失败时把原因带回界面，而不是整页报错或静默丢结果。
+type WarningSearcher interface {
+	Provider
+	SearchPageWithWarning(ctx context.Context, host Host, query string, page int) ([]Drama, bool, string, error)
+}
+
 type Prober interface {
 	Provider
 	Probe(ctx context.Context, host Host) (string, error)

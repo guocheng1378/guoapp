@@ -16,7 +16,14 @@ class RankingBoard {
   /// 解析首段为站源；未知前缀返回空串（由调用方按不可用站源拒绝）。
   static String sourceForID(String id) {
     final head = id.split('-').first;
-    return SourceSite.byId(head)?.id ?? '';
+    final site = SourceSite.byId(head);
+    if (site != null) return site.id;
+    // 黄果 AI 榜单历史 id 前缀是 `huangguo-*`（hot/recommend/potential），
+    // 而站源 id 是 `huangguoai`——`byId('huangguo')` 为 null，不特判会让
+    // 榜单取数授权拿到空源、抛「当前版本不包含此站源」。目前没有任何
+    // `huangguo-*` 榜属于黄果旧版（huangguo-video 无榜定义），此映射安全。
+    if (head == 'huangguo') return 'huangguoai';
+    return '';
   }
   factory RankingBoard.fromJson(Map<String, dynamic> json) => RankingBoard(
     id: json['id'] as String? ?? '',

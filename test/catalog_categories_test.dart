@@ -185,6 +185,15 @@ void main() {
   testWidgets(
     'each Huangguo entry loads only its own catalog and rejects stale replies',
     (tester) async {
+      // 黄果 AI / 黄果旧版现在由 JS 模块提供实现：站源列表（values）
+      // 只含已装模块。测试环境模拟「两个模块已安装」。
+      SourceSite.registerModuleSites([
+        if (SourceSite.byId('huangguoai') != null)
+          SourceSite.byId('huangguoai')!,
+        if (SourceSite.byId('cloudfront') != null)
+          SourceSite.byId('cloudfront')!,
+      ]);
+      addTearDown(() => SourceSite.registerModuleSites(const []));
       final repository = CategoryRepository();
       await mount(
         tester,
@@ -323,10 +332,8 @@ void main() {
     (tester) async {
       final repository = CategoryRepository();
       await mount(tester, repository);
-      // 榜单入口收进「⋯ → 榜单」。
-      await tester.tap(find.byTooltip('更多'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('榜单').last);
+      // 榜单入口已从「更多」菜单提到顶栏图标（home_screen 注释：菜单不再重复）。
+      await tester.tap(find.byKey(const ValueKey('open-rankings')));
       await tester.pumpAndSettle();
       expect(repository.rankRequests, ['hongguo-hot|1|false']);
       expect(find.text('总热播榜'), findsOneWidget);

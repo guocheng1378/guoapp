@@ -170,7 +170,14 @@ class CatalogBrowser {
     }
   }
 
-  Future<void> _each<T>(List<T> entries, Future<void> Function(T) visit) async {
+  /// [parallel] 是并发 worker 数：目录/分类沿用 2（避免一次打爆站点），
+  /// 搜索态要更高——分组里常有 10+ 个源，并发 2 时慢源（如 AI 聚合的真果·鉴
+  /// 动辄 5~10s）会占住 worker，其余源排队几十秒，用户只看到第一个源的结果。
+  Future<void> _each<T>(
+    List<T> entries,
+    Future<void> Function(T) visit, {
+    int parallel = 2,
+  }) async {
     var index = 0;
     Future<void> worker() async {
       while (index < entries.length) {
@@ -179,7 +186,9 @@ class CatalogBrowser {
       }
     }
 
-    await Future.wait(List.generate(min(2, entries.length), (_) => worker()));
+    await Future.wait(
+      List.generate(min(max(1, parallel), entries.length), (_) => worker()),
+    );
   }
 
   Future<String?> loadCategories(
@@ -506,7 +515,7 @@ class CatalogBrowser {
         // 缓存突然没有了」。错误仍通过 failures 以横幅/警告呈现。
         failures[source] = error.toString();
       }
-    });
+    }, parallel: query.isEmpty ? 2 : 8);
     final result = snapshot();
     // 强制刷新失败时即便仍保有缓存条目也要把错误抛给 UI（错误横幅）。
     // 条目本身不再清空：交给首页在 catch 里保留旧列表，避免「下拉刷新

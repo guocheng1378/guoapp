@@ -89,6 +89,7 @@ type Drama struct {
 	Tags              []string           `json:"tags,omitempty"`
 	Actors            []string           `json:"actors,omitempty"`
 	ReleaseStatus     string             `json:"releaseStatus,omitempty"`
+	ContentKind       string             `json:"contentKind,omitempty"`
 	SortMetadata      *SortMetadataState `json:"sortMetadata,omitempty"`
 }
 

@@ -641,4 +641,64 @@ void main() {
       expect(find.text('home-body'), findsOneWidget);
     });
   });
+
+  group('配置源自建地址（sourceConfig.appConfigUrl）', () {
+    setUp(() => RemoteConfigSourceStore.resetForTest());
+    tearDown(() => RemoteConfigSourceStore.resetForTest());
+
+    test('默认链自建源置顶、raw 殿后且无重复', () {
+      final urls = RemoteConfigSourceStore.effectiveUrls();
+      expect(urls.first, 'https://guoapp.dpdns.org/zhenguojian/app_config.json');
+      expect(urls.last,
+          'https://raw.githubusercontent.com/guocheng1378/guoapp/main/app_config.json');
+      expect(urls.toSet().length, urls.length);
+    });
+
+    test('合法 appConfigUrl 置顶并保留默认链', () async {
+      const override = 'https://cdn.example.org/cfg/app_config.json';
+      expect(await RemoteConfigSourceStore.applyFromConfig(<String, dynamic>{
+        'appConfigUrl': override,
+      }), isTrue);
+      final urls = RemoteConfigSourceStore.effectiveUrls();
+      expect(urls.first, override);
+      expect(urls[1], 'https://guoapp.dpdns.org/zhenguojian/app_config.json');
+      expect(RemoteConfigSourceStore.override, override);
+    });
+
+    test('非法/缺失 appConfigUrl 被忽略，不改默认链', () async {
+      for (final value in <Object?>[
+        'ftp://bad.example.org/app_config.json',
+        'not-a-url',
+        42,
+        null,
+      ]) {
+        expect(await RemoteConfigSourceStore.applyFromConfig(<String, dynamic>{
+          'appConfigUrl': value,
+        }), isFalse);
+      }
+      expect(RemoteConfigSourceStore.override, '');
+      expect(RemoteConfigSourceStore.effectiveUrls().first,
+          'https://guoapp.dpdns.org/zhenguojian/app_config.json');
+    });
+
+    testWidgets('弹窗段拉到含 appConfigUrl 的配置时置顶生效', (tester) async {
+      await _pumpToNotice(
+        tester,
+        _host(
+          version: '0.2.96+100',
+          config: RemoteNoticeConfig(
+            announcement: _announceOnly.announcement,
+            sourceConfig: const <String, dynamic>{
+              'appConfigUrl': 'https://cdn.example.org/new/app_config.json',
+            },
+          ),
+          applySourceConfig: (_) async {},
+        ),
+      );
+      expect(RemoteConfigSourceStore.override,
+          'https://cdn.example.org/new/app_config.json');
+      expect(RemoteConfigSourceStore.effectiveUrls().first,
+          'https://cdn.example.org/new/app_config.json');
+    });
+  });
 }

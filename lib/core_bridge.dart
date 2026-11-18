@@ -723,6 +723,100 @@ class NativeRepository extends AppRepository {
   int _readSequence = 0;
   final _activeReads = <String, int>{};
 
+  /// 列出运行时 JS 站源模块（<数据目录>/modules）。模块不在安装包里，
+  /// 改源只需换模块文件，不必重新发版。
+  Future<List<Map<String, dynamic>>> jsModules() async {
+    final data = await _call({'action': 'modules'});
+    final items = data['items'];
+    if (items is! List) return const [];
+    return [
+      for (final item in items)
+        if (item is Map) Map<String, dynamic>.from(item),
+    ];
+  }
+
+  /// 从本地 zip 安装站源模块，返回模块 id（失败抛异常）。
+  Future<String> installJsModule(String zipPath) async {
+    final data = await _call({
+      'action': 'installModule',
+      'command': zipPath,
+    });
+    return (data['id'] as String?) ?? '';
+  }
+
+  /// 安装前预检：返回模块信息（域名/功能/限制级/是否覆盖已装版本）与安装令牌。
+  /// [zipPath] / [address] / [indexed] 三选一。
+  Future<Map<String, dynamic>> prepareJsModule({
+    String? zipPath,
+    String? address,
+    String? indexed,
+  }) async {
+    final data = await _call({
+      'action': 'prepareModule',
+      if (zipPath != null) 'command': zipPath,
+      if (address != null) 'address': address,
+      if (indexed != null) 'source': indexed,
+    });
+    return Map<String, dynamic>.from(data);
+  }
+
+  /// 凭预检令牌安装（一次性）。
+  Future<String> installJsModuleToken(String token) async {
+    final data = await _call({'action': 'installModule', 'command': token});
+    return (data['id'] as String?) ?? '';
+  }
+
+  /// 已安装模块详情（含加载失败原因、是否内置、已装版本）。
+  Future<List<Map<String, dynamic>>> jsModuleInfos() async {
+    final data = await _call({'action': 'moduleInfos'});
+    final items = data['items'];
+    if (items is! List) return const [];
+    return [
+      for (final item in items)
+        if (item is Map) Map<String, dynamic>.from(item),
+    ];
+  }
+
+  /// 在线模块商店条目：内置模块 + 联网索引（联网失败时只有内置项）。
+  /// 在线模块商店条目：内置模块 + 联网索引（联网失败时只有内置项，
+  /// 失败原因通过 [lastModuleStoreWarning] 读取）。
+  Future<List<Map<String, dynamic>>> jsModuleStore() async {
+    final data = await _call({'action': 'moduleStore'});
+    lastModuleStoreWarning = data['warning'] as String?;
+    final items = data['items'];
+    if (items is! List) return const [];
+    return [
+      for (final item in items)
+        if (item is Map) Map<String, dynamic>.from(item),
+    ];
+  }
+
+  /// 最近一次 [jsModuleStore] 的索引拉取失败原因（成功时为空）。
+  static String? lastModuleStoreWarning;
+
+  /// 从在线仓库安装/更新一个模块，返回模块 id（失败抛异常）。
+  Future<String> installJsModuleOnline(String id) async {
+    final data = await _call({
+      'action': 'installModuleOnline',
+      'command': id,
+    });
+    return (data['id'] as String?) ?? id;
+  }
+
+  /// 从地址安装模块 zip（第三方模块直链，不必上架索引）。
+  Future<String> installJsModuleFromAddress(String url) async {
+    final data = await _call({
+      'action': 'installModuleAddress',
+      'command': url,
+    });
+    return (data['id'] as String?) ?? '';
+  }
+
+  /// 卸载一个已安装模块。
+  Future<void> uninstallJsModule(String id) async {
+    await _call({'action': 'uninstallModule', 'command': id});
+  }
+
   @override
   Future<Map<String, dynamic>> lan(
     String command,

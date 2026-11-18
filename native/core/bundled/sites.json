@@ -1,0 +1,773 @@
+{
+  "modules": [
+    {
+      "id": "yingshigongchang",
+      "name": "影视工厂",
+      "version": "1.0.1",
+      "description": "影视工厂 · maccms 采集站",
+      "base": "http://cj.lziapi.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "yingshigongchang",
+        "影视工厂",
+        "cj.lziapi.com"
+      ],
+      "hosts": [
+        "cj.lziapi.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "360zy",
+      "name": "360",
+      "version": "1.0.1",
+      "description": "360 · maccms 采集站",
+      "base": "https://360zy.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "360zy",
+        "360",
+        "360zy.com"
+      ],
+      "hosts": [
+        "360zy.com",
+        "www.360zy.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "modu",
+      "name": "魔都",
+      "version": "1.0.1",
+      "description": "魔都 · maccms 采集站",
+      "base": "https://caiji.moduapi.cc",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "modu",
+        "魔都",
+        "moduapi.cc",
+        "caiji.moduapi.cc"
+      ],
+      "hosts": [
+        "caiji.moduapi.cc",
+        "moduapi.cc"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "dytt",
+      "name": "电影天堂",
+      "version": "1.0.1",
+      "description": "电影天堂 · maccms 采集站",
+      "base": "http://caiji.dyttzyapi.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "dytt",
+        "电影天堂",
+        "dyttzyapi.com",
+        "caiji.dyttzyapi.com"
+      ],
+      "hosts": [
+        "caiji.dyttzyapi.com",
+        "dyttzyapi.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "shandian",
+      "name": "闪电",
+      "version": "1.0.1",
+      "description": "闪电 · maccms 采集站",
+      "base": "http://sdzyapi.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "shandian",
+        "闪电",
+        "sdzyapi.com"
+      ],
+      "hosts": [
+        "sdzyapi.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "hongniu",
+      "name": "红牛",
+      "version": "1.0.1",
+      "description": "红牛 · maccms 采集站",
+      "base": "https://www.hongniuzy2.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "hongniu",
+        "红牛",
+        "hongniuzy2.com"
+      ],
+      "hosts": [
+        "www.hongniuzy2.com",
+        "hongniuzy2.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "niuniuzy",
+      "name": "牛牛",
+      "version": "1.0.1",
+      "description": "牛牛 · maccms 采集站",
+      "base": "http://api.niuniuzy.me",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "niuniuzy",
+        "牛牛",
+        "niuniuzy.me",
+        "api.niuniuzy.me"
+      ],
+      "hosts": [
+        "api.niuniuzy.me",
+        "niuniuzy.me"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "wsyzy",
+      "name": "无水印",
+      "version": "1.0.1",
+      "description": "无水印 · maccms 采集站",
+      "base": "https://api.wsyzy.net",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "wsyzy",
+        "无水印",
+        "wsyzy.net",
+        "api.wsyzy.net"
+      ],
+      "hosts": [
+        "api.wsyzy.net",
+        "wsyzy.net"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "zy155",
+      "name": "155",
+      "version": "1.0.1",
+      "description": "155 · maccms 采集站",
+      "base": "https://155api.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "zy155",
+        "155",
+        "155api.com",
+        "155zy2.com"
+      ],
+      "hosts": [
+        "155api.com",
+        "155zy2.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "yutu",
+      "name": "玉兔",
+      "version": "1.0.1",
+      "description": "玉兔 · maccms 采集站",
+      "base": "https://apiyutu.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "yutu",
+        "apiyutu.com"
+      ],
+      "hosts": [
+        "apiyutu.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "fanhao",
+      "name": "番号",
+      "version": "1.0.1",
+      "description": "番号 · maccms 采集站",
+      "base": "http://fhapi9.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "fanhao",
+        "fhapi9.com"
+      ],
+      "hosts": [
+        "fhapi9.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "lsbzy",
+      "name": "老色逼",
+      "version": "1.0.1",
+      "description": "老色逼 · maccms 采集站",
+      "base": "https://apilsbzy1.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "lsbzy",
+        "apilsbzy1.com"
+      ],
+      "hosts": [
+        "apilsbzy1.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "hsck",
+      "name": "黄色仓库",
+      "version": "1.0.1",
+      "description": "黄色仓库 · maccms 采集站",
+      "base": "https://hsckzy.xyz",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "hsck",
+        "hsckzy.xyz"
+      ],
+      "hosts": [
+        "hsckzy.xyz"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "danaizi",
+      "name": "大奶子",
+      "version": "1.0.1",
+      "description": "大奶子 · maccms 采集站",
+      "base": "https://apidanaizi.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "danaizi",
+        "apidanaizi.com"
+      ],
+      "hosts": [
+        "apidanaizi.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "jkun",
+      "name": "jkun",
+      "version": "1.0.1",
+      "description": "jkun · maccms 采集站",
+      "base": "https://jkunzyapi.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "jkun",
+        "jkunzyapi.com"
+      ],
+      "hosts": [
+        "jkunzyapi.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "lebo",
+      "name": "乐播",
+      "version": "1.0.1",
+      "description": "乐播 · maccms 采集站",
+      "base": "https://lbapi9.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "lebo",
+        "lbapi9.com"
+      ],
+      "hosts": [
+        "lbapi9.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "senlin",
+      "name": "森林",
+      "version": "1.0.1",
+      "description": "森林 · maccms 采集站",
+      "base": "https://beiyong.slapibf.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "senlin",
+        "slapibf.com",
+        "beiyong.slapibf.com"
+      ],
+      "hosts": [
+        "beiyong.slapibf.com",
+        "slapibf.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "doudou",
+      "name": "豆豆",
+      "version": "1.0.1",
+      "description": "豆豆 · maccms 采集站",
+      "base": "https://api.douapi.cc",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "doudou",
+        "doudouzy.com",
+        "api.douapi.cc"
+      ],
+      "hosts": [
+        "api.douapi.cc",
+        "doudouzy.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "didi",
+      "name": "滴滴",
+      "version": "1.0.1",
+      "description": "滴滴 · maccms 采集站",
+      "base": "https://api.ddapi.cc",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "didi",
+        "didizy.com",
+        "api.ddapi.cc"
+      ],
+      "hosts": [
+        "api.ddapi.cc",
+        "didizy.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "heiliao",
+      "name": "黑料",
+      "version": "1.0.1",
+      "description": "黑料 · maccms 采集站",
+      "base": "https://www.heiliaozyapi.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "heiliao",
+        "黑料",
+        "heiliaozy.cc",
+        "heiliaozyapi.com"
+      ],
+      "hosts": [
+        "www.heiliaozyapi.com",
+        "heiliaozyapi.com",
+        "heiliaozy.cc"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "taohua",
+      "name": "桃花",
+      "version": "1.0.1",
+      "description": "桃花 · maccms 采集站",
+      "base": "https://thzy1.me",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "taohua",
+        "桃花",
+        "thzy1.me",
+        "thzy8.me"
+      ],
+      "hosts": [
+        "thzy1.me",
+        "thzy8.me"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "souav",
+      "name": "souav",
+      "version": "1.0.1",
+      "description": "souav · maccms 采集站",
+      "base": "https://api.souavzyw.net",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "souav",
+        "souavzyw.com",
+        "api.souavzyw.net"
+      ],
+      "hosts": [
+        "api.souavzyw.net",
+        "souavzyw.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "ckzy",
+      "name": "CK",
+      "version": "1.0.1",
+      "description": "CK · maccms 采集站",
+      "base": "https://ckzy.me",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "ckzy",
+        "CK",
+        "ckzy.me"
+      ],
+      "hosts": [
+        "ckzy.me"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "aosika",
+      "name": "奥斯卡",
+      "version": "1.0.1",
+      "description": "奥斯卡 · maccms 采集站",
+      "base": "https://aosikazy.com",
+      "category": "adult",
+      "adult": true,
+      "requiresAllSources": true,
+      "aliases": [
+        "aosika",
+        "奥斯卡",
+        "aosikazy.com"
+      ],
+      "hosts": [
+        "aosikazy.com"
+      ],
+      "implementation": "maccmsapi",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ]
+    },
+    {
+      "id": "huaguo",
+      "name": "花生",
+      "version": "1.0.1",
+      "description": "花生 · 网页型短剧采集站",
+      "base": "https://www.zywest263.com",
+      "category": "shortDrama",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "huaguo",
+        "huasheng",
+        "花生",
+        "www.zywest263.com"
+      ],
+      "hosts": [
+        "www.zywest263.com",
+        "zywest263.com"
+      ],
+      "implementation": "maccmsweb",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ],
+      "config": {
+        "profile": "huaguo",
+        "categories": [
+          {
+            "id": "27",
+            "name": "短剧"
+          }
+        ],
+        "defaultCategory": "27",
+        "catalogRoot": "/",
+        "catalogTemplate": "/search.html?page={page}&searchtype=5&tid={category}&year=",
+        "catalogMode": "query",
+        "searchTemplate": "/search.html?searchword={query}",
+        "searchEncode": "query",
+        "detailTemplates": [
+          "/zywview/{id}.html",
+          "/zywdetail/{id}.html",
+          "/detail/{id}.html"
+        ]
+      }
+    },
+    {
+      "id": "wangguo",
+      "name": "短剧网站",
+      "version": "1.0.1",
+      "description": "短剧网站 · 网页型短剧采集站",
+      "base": "https://www.duanju2.com",
+      "category": "shortDrama",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "wangguo",
+        "duanjuwangzhan",
+        "短剧网站",
+        "www.duanju2.com"
+      ],
+      "hosts": [
+        "www.duanju2.com",
+        "duanju2.com"
+      ],
+      "implementation": "maccmsweb",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ],
+      "config": {
+        "profile": "wangguo",
+        "categories": [
+          {
+            "id": "",
+            "name": "全部"
+          }
+        ],
+        "catalogTemplate": "/show/duanju-----------.html",
+        "catalogMode": "dashes",
+        "searchTemplate": "/search/{query}----------1---.html",
+        "searchEncode": "path",
+        "detailTemplates": [
+          "/vod/{id}.html",
+          "/index.php/vod/detail/id/{id}.html",
+          "/detail/{id}.html"
+        ]
+      }
+    },
+    {
+      "id": "faguo",
+      "name": "168影院",
+      "version": "1.0.1",
+      "description": "168影院 · 网页型影视采集站",
+      "base": "https://www.xzyx168.com",
+      "category": "video",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "faguo",
+        "168",
+        "xzyx168",
+        "www.xzyx168.com"
+      ],
+      "hosts": [
+        "www.xzyx168.com",
+        "xzyx168.com"
+      ],
+      "implementation": "maccmsweb",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ],
+      "config": {
+        "profile": "faguo",
+        "categories": [
+          {
+            "id": "",
+            "name": "全部"
+          }
+        ],
+        "catalogTemplate": "/xzyxvt/{page}zmn.html",
+        "catalogMode": "zmn",
+        "searchTemplate": "/xzyxvc/{query}-wdyswzqun1num.html",
+        "searchEncode": "path",
+        "detailTemplates": [
+          "/xzyxvd/{id}.html",
+          "/detail/{id}.html",
+          "/voddetail/{id}.html"
+        ]
+      }
+    },
+    {
+      "id": "wuguo",
+      "name": "五五",
+      "version": "1.0.1",
+      "description": "五五 · 网页型短剧采集站",
+      "base": "https://www.duanju55.com",
+      "category": "shortDrama",
+      "adult": false,
+      "requiresAllSources": true,
+      "aliases": [
+        "wuguo",
+        "wuwu",
+        "五五",
+        "www.duanju55.com"
+      ],
+      "hosts": [
+        "www.duanju55.com",
+        "duanju55.com"
+      ],
+      "implementation": "maccmsweb",
+      "capabilities": [
+        "catalog",
+        "detail",
+        "search"
+      ],
+      "config": {
+        "profile": "wuguo",
+        "categories": [
+          {
+            "id": "",
+            "name": "全部"
+          }
+        ],
+        "catalogRoot": "/",
+        "catalogTemplate": "/page/{page}.html",
+        "catalogMode": "pagepath",
+        "searchTemplate": "/index.php/vod/search/page/1/wd/{query}.html",
+        "searchEncode": "path",
+        "detailTemplates": [
+          "/index.php/vod/detail/id/{id}.html",
+          "/dramaDetail/{id}.html",
+          "/detail/{id}.html"
+        ]
+      }
+    }
+  ]
+}

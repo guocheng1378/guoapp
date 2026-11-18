@@ -196,6 +196,49 @@ func IsCustomSourceID(id string) bool {
 	return strings.HasPrefix(strings.TrimSpace(id), CustomIDPrefix)
 }
 
+// AliasOwner 返回别名归属的站源 id；别名未被登记时返回空串。
+// 运行时注册的模块用它判断别名是否已被别的站源占用。
+func AliasOwner(alias string) string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return aliasIndex[strings.ToLower(strings.TrimSpace(alias))]
+}
+
+// Unregister 移除一个运行时注册的 provider（站源模块卸载/测试清理用）。
+// 只删注册表项，不动内置源表（sourceEntries）：内置源被误删后本次进程内
+// 无法恢复，所以调用方必须先确认该 id 属于可卸载的模块。
+// 顺带清掉该 id 占用的别名与域名归属，避免卸载后别名仍指向已不存在的源。
+func Unregister(id string) bool {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	key := canonicalLocked(id)
+	if _, found := registry[key]; !found {
+		return false
+	}
+	delete(registry, key)
+	delete(implemented, key)
+	for alias, owner := range aliasIndex {
+		if owner == key {
+			delete(aliasIndex, alias)
+		}
+	}
+	for host, owner := range hostIndex {
+		if owner == key {
+			delete(hostIndex, host)
+		}
+	}
+	// 域名后缀是切片索引（按注册顺序 append），重注册同一个模块前必须清掉
+	// 它旧的后缀归属，否则单模块热重载会让后缀条目不断累积。
+	kept := suffixHosts[:0]
+	for _, entry := range suffixHosts {
+		if entry.id != key {
+			kept = append(kept, entry)
+		}
+	}
+	suffixHosts = kept
+	return true
+}
+
 // UnregisterCustom 移除一个动态注册的自定义站源。只接受 custom- 前缀的
 // ID（内置源一律拒绝），返回是否确有移除。已不存在的 ID 幂等返回 false。
 func UnregisterCustom(id string) bool {

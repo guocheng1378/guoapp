@@ -24,6 +24,20 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 	if !valid {
 		return "", errors.New("无效的剧集 ID")
 	}
+	// 模块站源：由模块给出封面地址（模块没提供则回退内置实现）。
+	if cover, ok := moduleCapabilityProvider(source).(moduleCoverProvider); ok {
+		address, err := cover.ModuleCoverAddress(ctx, d.host(), providerDramaFromNative(drama), id)
+		if !errors.Is(err, errModuleCapabilityUnsupported) {
+			if err != nil {
+				return address, err
+			}
+			// 模块导出但返回空串（如黄果视频的 `cover || ""`）：回落内置取图，
+			// 否则该源封面长期空白。
+			if strings.TrimSpace(address) != "" {
+				return address, nil
+			}
+		}
+	}
 	switch source {
 	case sourceHongguo:
 		if !hongguoNumericID.MatchString(id) {
@@ -90,6 +104,9 @@ func (d *Downloader) nativeCoverAddress(ctx context.Context, drama nativeDrama) 
 		return nativeNormalize(fresh).Cover, err
 	case sourceJinguoduanju:
 		fresh, _, err := d.fetchJinguoDuanjuDetail(ctx, id)
+		return nativeNormalize(fresh).Cover, err
+	case sourceBeabox:
+		fresh, _, err := d.fetchBeaboxDetail(ctx, id)
 		return nativeNormalize(fresh).Cover, err
 	}
 	return "", errors.New("该站源暂无封面补齐接口")

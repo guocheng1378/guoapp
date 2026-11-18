@@ -21,13 +21,14 @@ import 'catalog_sort_sheet.dart';
 import 'home_carousel.dart';
 import 'recommendations_screen.dart';
 import 'rankings_screen.dart';
+import 'js_module_screen.dart';
 import 'route_transition.dart';
 import 'detail_screen.dart';
 import 'playback_launch_screen.dart';
 import 'downloads_screen.dart';
 import 'download_summary.dart';
-import 'featured_catalog.dart';
 import 'local_store.dart';
+import 'ui_scale.dart';
 import 'lan_screen.dart';
 import 'live_screen.dart';
 import 'models.dart';
@@ -59,6 +60,21 @@ const _liveEntryChoice = '__live_tv__';
 
 /// 站源菜单「切换分类…」条目的哨兵值（显性跨类入口，见 _showSourceMenu）。
 const _switchCategoryChoice = '__switch_category__';
+
+/// 搜索结果是否可放行。
+///
+/// 服务端精准搜索（红果、剧果/黄果AI/黑桃）信任服务端结果；maccms 系
+/// 视频源（duanjuPaged）的 wd 搜索是模糊匹配、会返回标题与关键词无关的
+/// 条目，本地剧库匹配 / 忽略 query 的目录接口（真果·鉴、韩小圈等）同理，
+/// 必须再过一遍 matchesDramaQuery 复核。旧实现把 maccms 在线搜索结果
+/// 无条件放行，视频类搜索因此混入大量不匹配剧集。
+bool acceptsSearchHit(Drama drama, String query, SourceSite? site) {
+  if (query.isEmpty) return true;
+  final trustedServerSearch =
+      (site?.onlineSearch ?? false) && !(site?.duanjuPaged ?? false);
+  if (trustedServerSearch) return true;
+  return matchesDramaQuery(drama, query);
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -121,10 +137,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   // 按钮是否出现由设置决定，开屏是否先模糊由另一个设置决定。
   bool _blurCovers = false;
 
-  bool get _blurring =>
-      widget.store.blurCoversButton &&
-      _blurCovers &&
-      !AppLayout.isTelevision(context);
+  // 顶栏眼睛按钮移除后，「是否糊封面」只看当前源的记忆（在「已装模块」
+  // 页按分组开关写入）。
+  bool get _blurring => _blurCovers && !AppLayout.isTelevision(context);
   // 下载全局汇总：已消费过的批次结束事件序号（防重复弹提示）。
   int _seenSummaryBatch = 0;
   // 手机端二次退出保护：首次按返回的时间戳，2 秒内再按才真正退出。
@@ -184,18 +199,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   List<SourceGroup> get _sourceCategories {
     final sources = _visibleSources;
-    final huangguo = sources
-        .where((source) => source.inHuangguoCategory)
-        .toList();
+    // 用户定调（2026-11-18）：分组里的源按使用频率排，不再把某个源硬置顶。
+    // 未使用过（次数 0）的源保持定义顺序，避免每次 build 时相互跳动。
+    final usage = widget.store.sourceUsage;
+    final huangguo = SourceSite.orderByUsage(
+      sources.where((source) => source.inHuangguoCategory),
+      usage,
+    );
     final rest = sources
         .where((source) => !source.inHuangguoCategory)
         .toList();
-    final shortDrama = rest.where((source) => source.isShortDrama).toList();
-    final video = SourceSite.orderVideoGroup(
-      rest.where((source) => source.isVideoSource),
+    final shortDrama = SourceSite.orderByUsage(
+      rest.where((source) => source.isShortDrama),
+      usage,
     );
-    final local = rest.where((source) => source.isLocalSource).toList();
-    final adult = rest.where((source) => source.isAdultSource).toList();
+    final video = SourceSite.orderByUsage(
+      rest.where((source) => source.isVideoSource),
+      usage,
+    );
+    final local = SourceSite.orderByUsage(
+      rest.where((source) => source.isLocalSource),
+      usage,
+    );
+    final adult = SourceSite.orderByUsage(
+      rest.where((source) => source.isAdultSource),
+      usage,
+    );
     return [
       if (shortDrama.isNotEmpty) SourceGroup('cat-short', '短剧类', shortDrama),
       if (video.isNotEmpty) SourceGroup('cat-video', '视频类', video),
@@ -471,6 +500,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _onMoreSelected(String value) {
     if (value == 'rankings') {
       _openRankings();
+    } else if (value == 'modules') {
+      _manageModules();
     } else if (value == 'sources') {
       _manageSources();
     } else if (value == 'settings') {
@@ -543,6 +574,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  /// 顶栏图标按钮：尺寸跟随界面缩放（clamp 0.9~1.1）。
+  ///
+  /// AppIcon 的 size 是固定值、不读 textScaler，必须显式乘；IconButton 的
+  /// padding/constraints 也要一起缩，否则外框仍是 48dp（只缩了图标）。
+  Widget _navIcon(
+    String icon, {
+    Key? key,
+    required String tooltip,
+    required VoidCallback onPressed,
+    Color? color,
+  }) {
+    final factor = UiScale.buttonFactor(context);
+    return IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      iconSize: 24 * factor,
+      padding: EdgeInsets.all(12 * factor),
+      constraints: BoxConstraints(
+        minWidth: 48 * factor,
+        minHeight: 48 * factor,
+      ),
+      icon: AppIcon(icon, size: 24 * factor, color: color),
+    );
+  }
+
   /// 顶栏独立玻璃胶囊岛：手机端把标题/按钮各自包成悬浮岛，
   /// TV/桌面保持原样（glass=false）。
   Widget _navPill(Widget child, {required bool glass}) {
@@ -550,7 +607,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return Padding(
       // 颗间距 10px：四颗是独立胶囊岛（对齐小米主题商店顶栏图标钮），
       // 之前 left:4 等于没有间隙，三颗贴死读作一坨。
-      padding: const EdgeInsets.only(left: 10),
+      padding: EdgeInsets.only(left: 10 * UiScale.buttonFactor(context)),
       // demo 雾玻璃配方（FogPill）：σ 真磨砂 + 半透玻璃底 + 白描边
       // 随滚动亮起（回顶熄灭）。不再用瓷面岛——瓷面半透白瓷（0.72 白）
       // 叠在雾面上读作一层透明膜，也让顶栏区域雾感与分类条不一致。
@@ -574,10 +631,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       anchorKey: _moreMenuKey,
       entries: [
         // 「更新剧库」入口已移除：首页内容区有下拉刷新，菜单不再重复。
-        if (_tab == 0 && !_showRecommendations)
-          const GlassMenuEntry('rankings', '榜单'),
+        // 「榜单」已提到顶栏图标，菜单不再重复。
         if (widget.repository.supportsSourceManagement)
-          const GlassMenuEntry('sources', '站源管理'),
+          const GlassMenuEntry('modules', '站源模块'),
         const GlassMenuEntry('users', '用户管理'),
         const GlassMenuEntry('settings', '设置与备份'),
         const GlassMenuEntry('display', '界面模式'),
@@ -656,6 +712,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (!_searchVisible && hadQuery) _searchChanged('');
   }
 
+  /// 站源模块页（含从 zip 安装与内置站源管理入口）。
+  void _manageModules() {
+    _pauseCatalog();
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => JsModuleScreen(
+          repository: widget.repository,
+          store: widget.store,
+        ),
+      ),
+    );
+  }
+
   void _openRankings() {
     _pauseCatalog();
     Navigator.push<void>(
@@ -678,6 +748,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         builder: (_) => SourcesScreen(
           repository: widget.repository,
           store: widget.store,
+          // 站源管理入口要看全部站点卡片（含模块源/自定义源），与播放失败
+          // 页的「站源诊断」同口径；默认 builtin 只列直播/TVBox 会像空白页。
+          mode: SourcesScreenMode.all,
           initialSource: _source.id,
         ),
       ),
@@ -1432,7 +1505,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // 筛选选项按「当前其它过滤态下选中必有内容」聚合：浏览池已含
     // 分类/搜索/VIP/站源开关过滤，聚合某维度选项时跳过该维度自身、
     // 其余筛选维度照常生效——显示的每个选项选中后都不会得到空列表；
-    // 无该字段数据的源（短剧类/青空等）选项为空，面板对应节整体隐藏。
+    // 无该字段数据的源（如部分短剧类源）选项为空，面板对应节整体隐藏。
     // 切源/切档后持久化的 area/year 在新池可能已不存在：先清掉悬空
     // 值再聚合选项，否则另一维度也被它过滤成空、面板整节消失。
     //
@@ -1551,14 +1624,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// 轮播卡点击：豆瓣条目无播放链路，同名搜索进详情；其余照常直进播放。
   void _openCarouselDrama(Drama drama) {
     if (drama.source == SourceSite.douban.id) {
-      unawaited(
-        openDoubanReferral(
-          context,
-          repository: widget.repository,
-          store: widget.store,
-          drama: drama,
-        ),
-      );
+      // 豆瓣条目无播放链路（用户定调 2026-11-18）：走搜索，而不是自动跨源
+      // 搜完直跳命中源——冷门片常只有真果·鉴（AI 聚合）命中，表现为
+      // 「点豆瓣卡只跳转真果鉴」。首页本就是搜索宿主，直接复用。
+      searchAllSources(drama.title);
       return;
     }
     _openDrama(drama);
@@ -1824,16 +1893,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // getter 求值（这是那 480ms 的大头）。
     final allowed = <String, bool>{};
     final sites = <String, SourceSite?>{};
-    final serverSearched = <String, bool>{};
 
     SourceSite? siteOf(String source) => sites.containsKey(source)
         ? sites[source]
         : (sites[source] = SourceSite.byId(source));
-
-    bool searchesOnline(String source) => serverSearched.putIfAbsent(
-          source,
-          () => SourceSite.searchesOnline(source),
-        );
 
     bool passes(Drama drama) {
       final source = drama.source;
@@ -1848,12 +1911,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
       if (hideVip && source == 'huangdou' && drama.vip) return false;
       if (query.isEmpty) return true;
-      // 只有「该条目所属站源确实做了在线搜索」才信任服务端结果。
-      // 旧实现用分组级 _onlineSearch（组内任一源支持就算数），于是走
-      // 本地剧库匹配 / 忽略 query 返回全量目录的源，条目也一律放行，
-      // 搜索结果里混入大量不匹配剧集。
-      if (searchesOnline(source)) return true;
-      return matchesDramaQuery(drama, query);
+      return acceptsSearchHit(drama, query, siteOf(source));
     }
 
     return _items.where(passes).toList();
@@ -2117,28 +2175,53 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               child: KeyedSubtree(
                                 // 胶囊菜单锚点仍用 _sourceMenuKey（GlobalKey）。
                                 key: _sourceMenuKey,
-                                child: SizedBox(
-                                  height: 48,
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Flexible(
-                                        child: Text(
-                                          _group.name.isEmpty
-                                              ? appName
-                                              : _group.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 13,
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final multiSource = _sourceCategories
+                                        .expand((c) => c.sources)
+                                        .length > 1;
+                                    // 窄屏（如 density 540 的 320dp 设备 + 一排
+                                    // 工具岛）里箭头会把源名挤成 0 宽：空间不足
+                                    // 先让出箭头，再不足只显示源名首字——否则顶栏
+                                    // 只剩一颗圆点箭头，用户看不出当前站源
+                                    //（症状：「导航只出真果鉴」）。整颗胶囊仍可
+                                    // 点击/长按切换。
+                                    final showArrow =
+                                        multiSource && constraints.maxWidth >= 110;
+                                    final compactLabel = constraints.maxWidth < 64;
+                                    final name = _group.name.isEmpty
+                                        ? appName
+                                        : _group.name;
+                                    final factor = UiScale.buttonFactor(
+                                      context,
+                                    );
+                                    return SizedBox(
+                                      height: 48 * factor,
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              compactLabel
+                                                  ? name.substring(0, 1)
+                                                  : name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 13,
+                                              ),
+                                            ),
                                           ),
-                                        ),
+                                          if (showArrow)
+                                            AppIcon(
+                                              AppIcons.expandMore,
+                                              size: 24 * factor,
+                                            ),
+                                        ],
                                       ),
-                                      if (_sourceCategories.expand((c) => c.sources).length > 1)
-                                        AppIcon(AppIcons.expandMore),
-                                    ],
-                                  ),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
@@ -2177,47 +2260,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 if (_tab == 1)
                   _navPill(
                     glass: floatingNav,
-                    IconButton(
+                    _navIcon(
+                      AppIcons.sync,
                       key: const ValueKey('follow-lan-sync'),
                       tooltip: '追剧同步',
                       onPressed: () => openLanSync(context),
-                      icon: AppIcon(AppIcons.sync),
                     ),
                   ),
                 if (_tab == 0) ...[
                   // 站源岛已移回 title 槽贴左：actions 删除多选按钮后
-                  // title 宽度充裕，站源名不再截断；actions 仅留工具岛贴右。
-                  if (widget.store.blurCoversButton && !television)
-                    _navPill(
-                      glass: floatingNav,
-                      IconButton(
-                        key: const ValueKey('toggle-blur-covers'),
-                        tooltip: _blurring ? '显示封面' : '模糊封面',
-                        onPressed: () {
-                          final next = !_blurCovers;
-                          setState(() => _blurCovers = next);
-                          // 记忆：只记当前源，下次这个源仍保持这次的样子。
-                          unawaited(
-                            saveUserChange(
-                              context,
-                              () => widget.store.setBlurCoversFor(
-                                _source.id,
-                                next,
-                              ),
-                            ),
-                          );
-                        },
-                        icon: AppIcon(
-                          _blurring
-                              ? AppIcons.visibilityOff
-                              : AppIcons.visibility,
-                        ),
-                      ),
-                    ),
+                  // title 宽度充裕，actions 仅留工具岛贴右。
+                  // 「模糊封面」按钮已从顶栏移除，改到「已装模块」页按分组开关。
                   if (!_showRecommendations)
                     _navPill(
                       glass: floatingNav,
-                      IconButton(
+                      _navIcon(
+                        AppIcons.sort,
                         key: _sortMenuKey,
                         tooltip:
                             '排序与筛选 · ${widget.store.catalogView.sort.label}',
@@ -2228,20 +2286,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 widget.store.catalogView.release.isNotEmpty
                             ? Theme.of(context).colorScheme.primary
                             : null,
-                        icon: AppIcon(AppIcons.sort),
                       ),
                     ),
                   _navPill(
                     glass: floatingNav,
-                    IconButton(
+                    _navIcon(
+                      _searchVisible ? AppIcons.searchOff : AppIcons.search,
                       key: const ValueKey('toggle-search'),
                       tooltip: _searchVisible ? '收起搜索' : '搜索',
-                      icon: _searchVisible
-                          ? AppIcon(AppIcons.searchOff)
-                          : AppIcon(AppIcons.search),
                       onPressed: _toggleSearch,
                     ),
                   ),
+                  if (!_showRecommendations)
+                    _navPill(
+                      glass: floatingNav,
+                      _navIcon(
+                        AppIcons.leaderboard,
+                        key: const ValueKey('open-rankings'),
+                        tooltip: '榜单',
+                        onPressed: _openRankings,
+                      ),
+                    ),
                 ],
                 television
                     ? PopupMenuButton<String>(
@@ -2250,8 +2315,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         itemBuilder: (_) => [
                           if (widget.repository.supportsSourceManagement)
                             const PopupMenuItem(
-                              value: 'sources',
-                              child: Text('站源管理'),
+                              value: 'modules',
+                              child: Text('站源模块'),
                             ),
                           const PopupMenuItem(
                             value: 'users',
@@ -2273,13 +2338,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       )
                     : _navPill(
                         glass: floatingNav,
-                        IconButton(
+                        _navIcon(
+                          AppIcons.moreVert,
                           key: _moreMenuKey,
                           tooltip: '更多',
                           onPressed: () => _showMoreMenu(
                             narrow: constraints.maxWidth < 400,
                           ),
-                          icon: AppIcon(AppIcons.moreVert),
                         ),
                       ),
               ],

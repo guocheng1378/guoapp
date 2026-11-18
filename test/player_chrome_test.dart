@@ -9,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'fixtures.dart';
 import 'player_fixtures.dart';
 
 /// 新版播放器控制层的三件结构性改动：

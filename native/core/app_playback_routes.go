@@ -238,15 +238,29 @@ func (engine *nativeEngine) nativePlaybackRoutes(ctx context.Context, session st
 	}
 	if len(choice.media) < 2 &&
 		sourceFromDramaID(choice.task.DramaID) == sourceDongpiandi {
-		lines := engine.downloader.dongpiandiRouteLines(ctx, choice.task)
-		if len(lines) > 0 {
-			lines = dongpiandiCurateLines(ctx, lines, 1200*time.Millisecond)
+		// 模块接管时优先用模块线路表（JS 侧已完成票据兑换与排序择优），
+		// 失败/未导出回落内置 Go 线路解析。
+		var options []providerMedia
+		if routes, ok := moduleCapabilityProvider(canonicalProviderSource(choice.task.Chapter.Source)).(moduleRoutesProvider); ok {
+			if fromModule, err := routes.ModuleRoutes(ctx, engine.downloader.host(), choice.task); err == nil && len(fromModule) > 0 {
+				options = fromModule
+			}
+		}
+		if len(options) == 0 {
+			lines := engine.downloader.dongpiandiRouteLines(ctx, choice.task)
+			if len(lines) > 0 {
+				lines = dongpiandiCurateLines(ctx, lines, 1200*time.Millisecond)
+				for _, line := range lines {
+					options = append(options, dongpiandiLineMedia(line))
+				}
+			}
+		}
+		if len(options) > 0 {
 			seen := map[string]bool{}
 			for _, option := range choice.media {
 				seen[option.URL] = true
 			}
-			for _, line := range lines {
-				option := dongpiandiLineMedia(line)
+			for _, option := range options {
 				if option.URL == "" || seen[option.URL] {
 					continue
 				}

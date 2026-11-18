@@ -229,6 +229,14 @@ func (d *Downloader) resolveHongguoMedia(ctx context.Context, task Task) (provid
 	if !hongguoNumericID.MatchString(videoID) || !hongguoNumericID.MatchString(seriesID) {
 		return providerMedia{}, fmt.Errorf("红果章节 ID 无效，请重新获取章节")
 	}
+	// 优先用上游官方 JS 模块原样取流：其内部已包含 multi_video_model 新接口、
+	// V5 播放签名（X-Khronos/X-Helios/X-Medusa）、主/辅助设备轮换与网页兜底。
+	// 下面的 Go 实现仅作为模块不可用时的退路保留。
+	if module, moduleErr := d.hongguoJS(); moduleErr == nil {
+		if media, jsErr := module.resolveMedia(ctx, "hongguo:"+seriesID, videoID); jsErr == nil {
+			return media, nil
+		}
+	}
 	// App 取流优先：video_model 接口直接给出完整播放地址 + CENC 密钥
 	// （spade_a 解出），是唯一能同时拿到两者的路径。站点 2026-10-26 把
 	// 受保护 play-info 接口改成返回加密 DASH（play_info.kid +

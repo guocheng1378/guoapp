@@ -27,7 +27,6 @@ const (
 	SourceHongniu          = "hongniu"
 	SourceNiuniuZY         = "niuniuzy"
 	SourceWsyzy            = "wsyzy"
-	SourceSorani           = "sorani"
 	SourceDongpiandi       = "dongpiandi"
 
 	// 云追视频（yunzhui）：影视聚合源，带日榜/总榜。游客身份 + AES-256-CBC
@@ -85,7 +84,10 @@ var sourceEntries = []sourceEntry{
 		hosts:   []string{"huangju.net", "www.huangju.net", "api.huangju.net"},
 	},
 	{
-		spec:    Spec{ID: SourceHuangguoAI, Name: "黄果 AI", Base: "https://huangguoai.com", Kind: "web", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, RequiresAllSources: true},
+		// 2026-11-18：Base 从死域 huangguoai.com 改为活域 www.agdkczeyx.cc。
+		// JS 模块的 edgeCall() 经 host.preferredSite()→duanjuBaseURL() 读 spec.Base
+		// 作为播放握手域名；旧主站已超时，导致「有目录、点播握手超时」。
+		spec:    Spec{ID: SourceHuangguoAI, Name: "黄果 AI", Base: "https://www.agdkczeyx.cc", Kind: "web", Category: CategoryShortDrama, Family: FamilyHuangguo, Browser: true, RequiresAllSources: true},
 		aliases: []string{"huangguo", "huangguoai", "huangguoai.com", "huangguoai.io"},
 		// 2026-11-08 真网探活：huangguoai.com 主站超时；huangguoai.io、
 		// *.agdkczeyx.cc、*.lbvrhyir.cc 的 /api/edge/request 可用。
@@ -214,11 +216,6 @@ var sourceEntries = []sourceEntry{
 		spec:    Spec{ID: SourceWsyzy, Name: "无水印", Base: "https://api.wsyzy.net", Kind: "maccms_api", Category: CategoryVideo, Family: FamilyDuanju, Paged: true, RequiresAllSources: true},
 		aliases: []string{"wsyzy", "无水印", "wsyzy.net", "api.wsyzy.net"},
 		hosts:   []string{"api.wsyzy.net", "wsyzy.net"},
-	},
-	{
-		spec:    Spec{ID: SourceSorani, Name: "青空", Base: "https://www.sorani.net", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
-		aliases: []string{"sorani", "青空", "sorani.net", "www.sorani.net"},
-		hosts:   []string{"www.sorani.net", "sorani.net"},
 	},
 	{
 		spec:    Spec{ID: SourceDongpiandi, Name: "真果·鉴", Base: "https://dongpiandi.ai", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},

@@ -8,9 +8,24 @@ import (
 	"unicode/utf8"
 )
 
-func (engine *nativeEngine) suggestions(ctx context.Context, query string) ([]string, error) {
+func (engine *nativeEngine) suggestions(ctx context.Context, source, query string) ([]string, error) {
 	if strings.TrimSpace(query) == "" {
 		return []string{}, nil
+	}
+	// 模块站源：由模块提供搜索联想（模块没提供则回退内置实现）。
+	if suggester, ok := moduleCapabilityProvider(source).(moduleSuggester); ok {
+		items, err := suggester.ModuleSuggestions(ctx, engine.downloader.host(), query)
+		if !errors.Is(err, errModuleCapabilityUnsupported) {
+			return items, err
+		}
+	}
+	// 红果内嵌 JS 模块优先（上游联想词更全）；失败回落内置 Go 实现。
+	if canonicalProviderSource(source) == sourceHongguo {
+		if module, jsErr := engine.downloader.hongguoJS(); jsErr == nil {
+			if words, jsErr := module.suggestions(query); jsErr == nil && len(words) > 0 {
+				return words, nil
+			}
+		}
 	}
 	items, err := engine.downloader.hongguoSearchSuggestions(ctx, query)
 	names := make([]string, 0, len(items))

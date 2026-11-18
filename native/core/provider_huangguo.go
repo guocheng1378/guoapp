@@ -41,7 +41,9 @@ const (
 )
 
 var (
-	huangguoAIBaseURL = "https://huangguoai.com"
+	// 2026-11-18：旧主站 huangguoai.com 已超时；providerBaseURL 的 fallback
+	// 改用活域，避免未配置热更镜像时黄果 AI 全链落到死域。
+	huangguoAIBaseURL = "https://www.agdkczeyx.cc"
 	// 2026-10-22 探活：ksb6 连接超时（域名失效，恢复后仍可被轮到），
 	// agdkczeyx/hgai5/pages.dev 存活；agdkczeyx 目录、详情、播放地址齐全，升首位。
 	// pages.dev 历史上是空壳，垫底兜底。可经 config.source（applySourceConfig）远程热更。
@@ -321,6 +323,17 @@ func (d *Downloader) GetHuangguoChapters(ctx context.Context, source, sourceID s
 		return drama.DisplayTitle(), chapters, err
 	case sourceCloudFront:
 		return d.fetchLegacyChapters(ctx, sourceID)
+	case sourceHanxiaoquan:
+		// Huangguo family 的源，站源健康检测/媒体解析走本入口；App 详情
+		// 主路径在 app_runtime.go 另有 case，故只测播放看不出这里的缺口。
+		drama, chapters, err := d.fetchHanxiaoquanDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
+	case sourceJinguoduanju:
+		drama, chapters, err := d.fetchJinguoDuanjuDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
+	case sourceBeabox:
+		drama, chapters, err := d.fetchBeaboxDetail(ctx, sourceID)
+		return drama.DisplayTitle(), chapters, err
 	default:
 		if isDuanjuProviderSource(source) {
 			drama, chapters, err := d.fetchDuanjuDetail(ctx, source, sourceID)

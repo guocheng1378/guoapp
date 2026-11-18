@@ -232,12 +232,18 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	if chapter.Source == sourceYeguo {
 		return d.resolveYeguoMedia(ctx, task)
 	}
-	if chapter.Source == sourceSorani {
-		return d.resolveSoraniMedia(ctx, task)
-	}
 	if isDuanjuProviderSource(chapter.Source) {
 		if chapter.Source == sourceDongpiandi {
-			// 真果·鉴：站点推荐线路常失效/过慢，播放期做存活验证与实测换线。
+			// 真果·鉴：JS 模块接管时优先走模块的 resolveMedia（官方票据兑换/
+			// 线路解析全在模块 JS 里）；模块未接管或取流失败时回落内置 Go
+			// 实现（存活验证与实测换线），保证核心源永不因模块故障黑屏。
+			if moduleDeclaresCapability(sourceDongpiandi, "media") {
+				if resolver, ok := duanjuSourceFor(d, sourceDongpiandi).(provider.MediaResolver); ok {
+					if media, err := resolver.ResolveMedia(ctx, d.host(), task); err == nil {
+						return providerMediaFromResolved(media), nil
+					}
+				}
+			}
 			return d.resolveDongpiandiMedia(ctx, task)
 		}
 		return d.resolveDuanjuMedia(ctx, task)

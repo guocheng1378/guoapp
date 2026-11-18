@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -30,6 +31,15 @@ type nativeHomeSection struct {
 func (engine *nativeEngine) nativeHomeFeed(ctx context.Context, input nativeInput) (any, error) {
 	if canonicalProviderSource(input.Source) != sourceDongpiandi {
 		return nil, fmt.Errorf("当前站源不支持主页板块")
+	}
+	// 模块接管时优先用模块组装好的首页板块（已含真实字段与剧卡），失败回落 Go。
+	if home, ok := moduleCapabilityProvider(canonicalProviderSource(input.Source)).(moduleHomeProvider); ok {
+		if raw, err := home.ModuleHomeFeed(ctx, engine.downloader.host(), input.Force); err == nil && len(raw) > 0 {
+			var result map[string]any
+			if json.Unmarshal(raw, &result) == nil && len(result) > 0 {
+				return result, nil
+			}
+		}
 	}
 	sections, err := cachedDongpiandiHome(ctx, input.Force)
 	if err != nil {
@@ -74,6 +84,14 @@ func (engine *nativeEngine) nativeHomeSection(ctx context.Context, input nativeI
 		return nil, fmt.Errorf("当前站源不支持主页板块")
 	}
 	page := max(1, input.Page)
+	if home, ok := moduleCapabilityProvider(canonicalProviderSource(input.Source)).(moduleHomeProvider); ok {
+		if raw, err := home.ModuleHomeSection(ctx, engine.downloader.host(), input.Category, page); err == nil && len(raw) > 0 {
+			var result map[string]any
+			if json.Unmarshal(raw, &result) == nil && len(result) > 0 {
+				return result, nil
+			}
+		}
+	}
 	d := engine.downloader
 	if d == nil {
 		return nil, fmt.Errorf("核心未就绪")

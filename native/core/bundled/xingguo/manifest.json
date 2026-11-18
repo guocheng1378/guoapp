@@ -1,0 +1,15 @@
+{
+  "id": "xingguo",
+  "name": "星果",
+  "version": "1.0.1",
+  "category": "shortDrama",
+  "description": "短剧 · 分类搜索 · 直链分集",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["read.api.duodutek.com", "img.novel.wsljf.xyz"],
+  "capabilities": ["catalog", "detail", "search"],
+  "aliases": ["xingguo", "xingxing", "星星", "read.api.duodutek.com"],
+  "baseUrl": "http://read.api.duodutek.com",
+  "referer": "http://read.api.duodutek.com/",
+  "requiresAllSources": true
+}

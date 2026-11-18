@@ -2,12 +2,22 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
 // nativeHomeCalendar 输出站点追剧周表（App 内的「本周追剧」）：按天分组，
 // 每天一组条目；站点没给星期标签时本地按日期推。
 func (engine *nativeEngine) nativeHomeCalendar(ctx context.Context, input nativeInput) (map[string]any, error) {
+	// 模块接管时优先用模块组装好的周表，失败回落 Go。
+	if home, ok := moduleCapabilityProvider(canonicalProviderSource(input.Source)).(moduleHomeProvider); ok {
+		if raw, err := home.ModuleHomeCalendar(ctx, engine.downloader.host(), input.Force); err == nil && len(raw) > 0 {
+			var result map[string]any
+			if json.Unmarshal(raw, &result) == nil && len(result) > 0 {
+				return result, nil
+			}
+		}
+	}
 	days, err := cachedDongpiandiCalendar(ctx, input.Force)
 	if err != nil {
 		return nil, err

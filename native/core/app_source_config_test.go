@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // resetSourceConfigForTest 记录进入时的热更值，测试结束后恢复，
 // 避免污染同包其它测试的内置兜底状态。
@@ -12,11 +16,18 @@ func resetSourceConfigForTest(t *testing.T) {
 	prevHuangjuAPI := huangjuAPIBaseURLHot
 	huangjuConfigMu.RUnlock()
 	prevHosts := providerHostsSeed()
+	prevIndexOverride, prevFileOverride := jsModuleSourceOverrides()
+	prevAppConfigURL := appConfigSourceURL()
 	t.Cleanup(func() {
 		setHuangguoAIMirrors(prevMirrors)
 		setDongpiandiBaseURL(prevDongpiandi)
 		setHuangjuAPIBase(prevHuangjuAPI)
 		setProviderHosts(prevHosts)
+		setJSModuleSourceURL("")
+		jsModuleSourceMu.Lock()
+		jsModuleIndexOverride, jsModuleFileOverride = prevIndexOverride, prevFileOverride
+		jsModuleSourceMu.Unlock()
+		setAppConfigSourceURL(prevAppConfigURL)
 	})
 }
 
@@ -306,5 +317,103 @@ func TestDuanjuBaseURLProviderHosts(t *testing.T) {
 	downloader := &Downloader{providerHosts: map[string]string{"yaguo": "https://yaguo-mirror.example.com"}}
 	if got := downloader.duanjuBaseURL("yaguo"); got != "https://yaguo-mirror.example.com" {
 		t.Fatalf("duanjuBaseURL 未消费覆盖：%s", got)
+	}
+}
+
+// TestApplySourceConfigRemoteSourceURLs 新的两个远程配置源字段经 config.source
+// 热更生效：moduleIndexUrl 同时置顶索引与模块文件基址（文件 URL 由索引目录推导、
+// repo 只留给 GitHub 兜底）；appConfigUrl 记录供 Dart 拉取链置顶消费。
+func TestApplySourceConfigRemoteSourceURLs(t *testing.T) {
+	resetSourceConfigForTest(t)
+	value, err := applySourceConfig(map[string]any{
+		"moduleIndexUrl": "https://cdn.example.org/modules/index.json",
+		"appConfigUrl":   "https://cdn.example.org/zhenguojian/app_config.json",
+	})
+	if err != nil {
+		t.Fatalf("applySourceConfig: %v", err)
+	}
+	if result, ok := value.(map[string]any); !ok || result["applied"] != true {
+		t.Fatalf("applied 期望 true，实际 %v", value)
+	}
+	indexOverride, fileOverride := jsModuleSourceOverrides()
+	if indexOverride != "https://cdn.example.org/modules/index.json" {
+		t.Fatalf("索引覆盖未生效：%q", indexOverride)
+	}
+	if fileOverride != "https://cdn.example.org/modules/%[2]s/%[3]s" {
+		t.Fatalf("模块文件基址未随索引覆盖推导：%q", fileOverride)
+	}
+	if got := appConfigSourceURL(); got != "https://cdn.example.org/zhenguojian/app_config.json" {
+		t.Fatalf("appConfigUrl 未记录：%q", got)
+	}
+	// 覆盖作为首选、内置自建源殿后，且同域不重复。
+	indexes := effectiveJSModuleIndexAddresses()
+	if len(indexes) == 0 || indexes[0] != indexOverride {
+		t.Fatalf("索引覆盖未置顶：%v", indexes)
+	}
+	files := effectiveJSModuleFileAddresses()
+	if len(files) == 0 || files[0] != fileOverride {
+		t.Fatalf("模块文件覆盖未置顶：%v", files)
+	}
+	for _, list := range [][]string{indexes, files} {
+		seen := map[string]bool{}
+		for _, addr := range list {
+			if seen[addr] {
+				t.Fatalf("地址链含重复项：%v", list)
+			}
+			seen[addr] = true
+		}
+	}
+}
+
+// TestSourceConfigURLsDefaultChain 未配置时走内置自建源优先链（自建 → jsDelivr → raw）。
+func TestSourceConfigURLsDefaultChain(t *testing.T) {
+	resetSourceConfigForTest(t)
+	setJSModuleSourceURL("")
+	indexes := effectiveJSModuleIndexAddresses()
+	if indexes[0] != jsModuleSelfHostedIndexURL ||
+		!strings.Contains(indexes[1], "jsdelivr") ||
+		!strings.Contains(indexes[2], "raw.githubusercontent") {
+		t.Fatalf("默认索引链顺序不符：%v", indexes)
+	}
+	files := effectiveJSModuleFileAddresses()
+	if !strings.Contains(files[0], "guoapp.dpdns.org/modules") ||
+		!strings.Contains(files[1], "jsdelivr") ||
+		!strings.Contains(files[2], "raw.githubusercontent") {
+		t.Fatalf("默认模块文件链顺序不符：%v", files)
+	}
+	// 自建模板用 tag/文件名直取，repo 仅用于 GitHub 兜底。
+	got := fmt.Sprintf(files[0], "owner/repo", "v1.2.3", jsModuleManifestFile)
+	if got != "https://guoapp.dpdns.org/modules/v1.2.3/"+jsModuleManifestFile {
+		t.Fatalf("自建模块文件 URL 形态错误：%q", got)
+	}
+}
+
+// TestApplySourceConfigRejectsBadRemoteSourceURLs 新字段非法时整段拒绝，
+// 当前生效覆盖不被污染（与既有 sourceConfig 字段同语义）。
+func TestApplySourceConfigRejectsBadRemoteSourceURLs(t *testing.T) {
+	resetSourceConfigForTest(t)
+	setJSModuleSourceURL("https://keep.example.org/modules/index.json")
+	setAppConfigSourceURL("https://keep.example.org/zhenguojian/app_config.json")
+	for _, cfg := range []map[string]any{
+		{"moduleIndexUrl": 42},
+		{"moduleIndexUrl": "ftp://bad.example.org/index.json"},
+		{"moduleIndexUrl": "   "},
+		{"appConfigUrl": 42},
+		{"appConfigUrl": "not-a-url"},
+	} {
+		value, err := applySourceConfig(cfg)
+		if err != nil {
+			t.Fatalf("非法下发不应报错：%v", err)
+		}
+		if result, ok := value.(map[string]any); !ok || result["applied"] != false {
+			t.Fatalf("非法字段应整段拒绝：%v -> %v", cfg, value)
+		}
+	}
+	indexOverride, _ := jsModuleSourceOverrides()
+	if indexOverride != "https://keep.example.org/modules/index.json" {
+		t.Fatalf("非法下发污染了模块源覆盖：%q", indexOverride)
+	}
+	if got := appConfigSourceURL(); got != "https://keep.example.org/zhenguojian/app_config.json" {
+		t.Fatalf("非法下发污染了配置源覆盖：%q", got)
 	}
 }

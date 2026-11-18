@@ -27,6 +27,17 @@ abstract final class UiScale {
   /// 百分比文案：1 → 100%。
   static String label(double value) => '${(normalize(value) * 100).round()}%';
 
+  /// 按钮/图标尺寸的跟随倍率：比文字缩放更保守，clamp 在 0.9~1.1。
+  ///
+  /// 只缩文字不缩按钮会让「界面缩放」观感割裂（字小了、顶栏圆钮还是原大）；
+  /// 但 85%~130% 全量跟随会把 320dp 窄屏顶栏挤爆（站源名再次被压掉），
+  /// 所以按钮尺寸只跟随一小段——缩小跟得上，放大不失控。
+  static double buttonFactor(BuildContext context) {
+    final scaler = MediaQuery.maybeOf(context)?.textScaler;
+    if (scaler == null) return 1;
+    return (scaler.scale(14) / 14).clamp(0.9, 1.1);
+  }
+
   /// 拖动中的即时预览（不落盘）。
   static void preview(double value) => current.value = normalize(value);
 

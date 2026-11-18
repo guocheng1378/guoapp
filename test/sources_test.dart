@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:duanju_app/live_source_entry.dart';
 import 'package:duanju_app/local_profiles.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
@@ -63,6 +64,32 @@ class SourceFixtureRepository extends FixtureRepository {
 }
 
 void main() {
+  testWidgets('diagnostics button opens the full source list, not the empty live-only view', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = LocalStore(await SharedPreferences.getInstance());
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SourceDiagnosticsButton(
+            repository: SourceFixtureRepository(),
+            store: store,
+            drama: FixtureRepository.free,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('站源诊断'));
+    await tester.pumpAndSettle();
+    // all 模式应渲染站点分类卡片；默认 builtin 只列直播/TVBox，
+    // 就是播放失败页点「站源诊断」看到空白页的根因。
+    expect(find.byKey(const ValueKey('category-toggle-short')), findsOneWidget);
+    expect(find.text('直播与 TVBox'), findsNothing);
+  });
+
   testWidgets('source list keeps bottom content above system navigation', (
     tester,
   ) async {
@@ -77,6 +104,7 @@ void main() {
         home: SourcesScreen(
           repository: SourceFixtureRepository(),
           store: store,
+          mode: SourcesScreenMode.all,
         ),
       ),
     );
@@ -96,7 +124,7 @@ void main() {
         ..pending = Completer<SourceStatus>();
       await tester.pumpWidget(
         MaterialApp(
-          home: SourcesScreen(repository: repository, store: store),
+          home: SourcesScreen(repository: repository, store: store, mode: SourcesScreenMode.all),
         ),
       );
       await tester.pumpAndSettle();
@@ -152,7 +180,7 @@ void main() {
       final repository = SourceFixtureRepository();
       await tester.pumpWidget(
         MaterialApp(
-          home: SourcesScreen(repository: repository, store: store),
+          home: SourcesScreen(repository: repository, store: store, mode: SourcesScreenMode.all),
         ),
       );
       await tester.pumpAndSettle();
@@ -201,7 +229,7 @@ void main() {
           ..pending = Completer<SourceStatus>();
         await tester.pumpWidget(
           MaterialApp(
-            home: SourcesScreen(repository: repository, store: store),
+            home: SourcesScreen(repository: repository, store: store, mode: SourcesScreenMode.all),
           ),
         );
         await tester.pumpAndSettle();
@@ -316,7 +344,7 @@ void main() {
             ).copyWith(textScaler: const TextScaler.linear(1.5)),
             child: child!,
           ),
-          home: SourcesScreen(repository: repository, store: store),
+          home: SourcesScreen(repository: repository, store: store, mode: SourcesScreenMode.all),
         ),
       );
       await tester.pumpAndSettle();
@@ -339,4 +367,37 @@ void main() {
       store.dispose();
     },
   );
+
+  testWidgets('内置站源页含自定义直播源分区并能增删', (tester) async {
+    tester.view.physicalSize = const Size(390, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    SharedPreferences.setMockInitialValues({});
+    final store = LocalStore(await SharedPreferences.getInstance());
+    await store.setLiveSourceEntries([
+      const LiveSourceEntry(url: 'https://example.test/live.m3u8'),
+    ]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SourcesScreen(
+          repository: SourceFixtureRepository(),
+          store: store,
+          mode: SourcesScreenMode.custom,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 自定义源模式：分区存在、默认展开，能看到已存的直播源与添加入口。
+    expect(find.byKey(const ValueKey('category-toggle-live-sources')),
+        findsOneWidget);
+    expect(find.text('自定义直播源'), findsWidgets);
+    expect(find.text('https://example.test/live.m3u8'), findsOneWidget);
+    expect(find.byKey(const ValueKey('live-source-add')), findsOneWidget);
+    // 删除即时落盘。
+    await tester.tap(find.byKey(const ValueKey('live-source-remove-0')));
+    await tester.pumpAndSettle();
+    expect(store.liveSourceEntries, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+    store.dispose();
+  });
 }

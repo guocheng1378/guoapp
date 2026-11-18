@@ -1,9 +1,11 @@
+import 'package:duanju_app/detail_screen.dart';
 import 'package:duanju_app/fog_tuning.dart';
 import 'package:duanju_app/glass.dart';
 import 'package:duanju_app/local_store.dart';
 import 'package:duanju_app/models.dart';
 import 'package:duanju_app/ranking_models.dart';
 import 'package:duanju_app/rankings_screen.dart';
+import 'package:duanju_app/source_search.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -86,6 +88,18 @@ void main() {
     // 视频类/黄果类榜不出现。
     expect(find.text('实时热门电影'), findsNothing);
     expect(find.text('黄豆热播榜'), findsNothing);
+  });
+
+  testWidgets('点豆瓣榜单条目走搜索请求，不再直跳某个站源详情', (tester) async {
+    await mount(tester, initialCategory: 'video');
+    SourceSearchBus.pending.value = null;
+    addTearDown(() => SourceSearchBus.pending.value = null);
+    await tester.tap(find.text('榜单条目').first);
+    await tester.pumpAndSettle();
+    // 旧行为：自动跨源搜完直接 push 命中源（常只有真果·鉴）的详情页。
+    expect(find.byType(DetailScreen), findsNothing);
+    // 新行为：写一条按剧名的搜索请求，由首页消费后走搜索。
+    expect(SourceSearchBus.pending.value?.query, '榜单条目');
   });
 
   testWidgets('未解锁时黄果类/成人类不暴露', (tester) async {

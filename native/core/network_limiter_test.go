@@ -77,6 +77,44 @@ func TestForegroundBackoffUnchanged(t *testing.T) {
 	}
 }
 
+// 403 单次失败不再冻结整个域名：站点偶发一次 403 只是瞬时风控或单条链接失效。
+func TestCatalogForbiddenBlocksOnlyAfterConsecutiveFailures(t *testing.T) {
+	limiter := newRequestLimiter(3, 0)
+	const host = "flaky.example.test"
+	for attempt := 1; attempt < catalogBlockThreshold; attempt++ {
+		request := limiterTestRequest(t, "https://"+host+"/a", context.Background())
+		limiter.observe(request, limiterTestResponse(http.StatusForbidden))
+		limiter.mu.Lock()
+		blocked := limiter.backoffs[host] != nil
+		limiter.mu.Unlock()
+		if blocked {
+			t.Fatalf("第 %d 次 403 就冻结了域名", attempt)
+		}
+	}
+	request := limiterTestRequest(t, "https://"+host+"/a", context.Background())
+	limiter.observe(request, limiterTestResponse(http.StatusForbidden))
+	limiter.mu.Lock()
+	blocked := limiter.backoffs[host] != nil
+	limiter.mu.Unlock()
+	if !blocked {
+		t.Fatalf("连续 %d 次 403 后应冻结域名", catalogBlockThreshold)
+	}
+}
+
+// 429 仍是一次就冻结：站点明确限流且通常带 Retry-After，必须立即照办。
+func TestCatalogTooManyRequestsStillBlocksImmediately(t *testing.T) {
+	limiter := newRequestLimiter(3, 0)
+	const host = "limited.example.test"
+	request := limiterTestRequest(t, "https://"+host+"/a", context.Background())
+	limiter.observe(request, limiterTestResponse(http.StatusTooManyRequests))
+	limiter.mu.Lock()
+	blocked := limiter.backoffs[host] != nil
+	limiter.mu.Unlock()
+	if !blocked {
+		t.Fatal("429 应立即冻结域名")
+	}
+}
+
 // 冷却隔离：后台冷却表挡得住预取自己，挡不住前台。
 func TestPrefetchCooldownBlocksOnlyItsOwnLane(t *testing.T) {
 	limiter := newRequestLimiter(3, 0)
@@ -185,5 +223,47 @@ func TestDetailActionHonoursBackgroundCooldownIsolation(t *testing.T) {
 	limiter.mu.Unlock()
 	if foreground == nil {
 		t.Fatal("a foreground detail 429 must still cool the foreground down")
+	}
+}
+
+// Media CDN 403 is transient (hotlink guard, short throttle); it must NOT be
+// recorded as a host-level cooldown. Otherwise the very next segment request
+// to the same CDN is refused by our own limiter and playback stalls. This
+// mirrors the upstream observeMedia behaviour.
+func TestMediaForbiddenDoesNotRegisterBackoff(t *testing.T) {
+	limiter := newRequestLimiter(3, 0)
+	const host = "media-cdn.example.test"
+	request := limiterTestRequest(t, "https://"+host+"/seg.ts", context.Background())
+
+	limiter.observeMedia(request, limiterTestResponse(http.StatusForbidden))
+
+	limiter.mu.Lock()
+	backoff := limiter.backoffs[host]
+	limiter.mu.Unlock()
+	if backoff != nil {
+		t.Fatal("media 403 must not create a host cooldown")
+	}
+	release, err := limiter.acquire(request.Context(), request)
+	if err != nil {
+		t.Fatalf("media request blocked after a 403: %v", err)
+	}
+	release()
+}
+
+// A real Cloudflare challenge on a media request still deserves a cooldown.
+func TestMediaCloudflareChallengeStillRegistersBackoff(t *testing.T) {
+	limiter := newRequestLimiter(3, 0)
+	const host = "media-challenge.example.test"
+	request := limiterTestRequest(t, "https://"+host+"/seg.ts", context.Background())
+	response := limiterTestResponse(http.StatusForbidden)
+	response.Header.Set("Cf-Mitigated", "challenge")
+
+	limiter.observeMedia(request, response)
+
+	limiter.mu.Lock()
+	backoff := limiter.backoffs[host]
+	limiter.mu.Unlock()
+	if backoff == nil {
+		t.Fatal("media Cloudflare challenge must still cool the host down")
 	}
 }

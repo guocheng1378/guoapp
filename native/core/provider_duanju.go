@@ -24,7 +24,6 @@ const (
 	sourceDytt             = provider.SourceDytt
 	sourceNiuniu           = provider.SourceNiuniuZY
 	sourceWsyzy            = provider.SourceWsyzy
-	sourceSorani           = provider.SourceSorani
 	sourceDongpiandi       = provider.SourceDongpiandi
 
 	duanjuMaxBodyBytes = provider.MaxBodyBytes
@@ -52,7 +51,6 @@ var (
 	dyttBaseURL             = "http://caiji.dyttzyapi.com"
 	niuniuzyBaseURL         = "http://api.niuniuzy.me"
 	wsyzyBaseURL            = "https://api.wsyzy.net"
-	soraniBaseURL           = "https://www.sorani.net"
 )
 
 type duanjuSourceSpec = provider.Spec
@@ -94,6 +92,10 @@ func duanjuSourceForHost(host string) string {
 func validDuanjuCategory(source, category string) bool {
 	if category == "" {
 		return true
+	}
+	// 黄豆 JS 模块接管后用 f|... 复合分类 id，同 validNativeCategory 放行口径。
+	if canonicalProviderSource(source) == sourceHuangdou && moduleDeclaresCapability(source, "catalog") {
+		return category == "@new" || category == "@hot" || huangdouModuleCategoryPattern.MatchString(category)
 	}
 	if len(category) > 128 || strings.ContainsAny(category, "|/\\\x00\r\n") {
 		return false

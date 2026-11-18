@@ -28,12 +28,13 @@ type nativeStreamAsset struct {
 }
 
 type nativeStreamSession struct {
-	credentials *providerMediaCredentials
-	mu          sync.Mutex
-	assets      map[string]nativeStreamAsset
-	referer     string
-	key         []byte
-	ctx         context.Context
+	credentials  *providerMediaCredentials
+	mu           sync.Mutex
+	assets       map[string]nativeStreamAsset
+	referer      string
+	key          []byte
+	diagnosticID string
+	ctx          context.Context
 	cancel      context.CancelFunc
 	lastUsed    time.Time
 	// seq 是会话的单调使用序号（打开与每次请求都推进），逐出时按它排序。
@@ -54,6 +55,11 @@ type nativeStreamSession struct {
 	manifests     map[string]nativeManifestCache
 	manifestBytes int
 	manifestSeq   int64
+	// CENC 加密媒体：key 来自站源，布局在首次请求时解析并缓存；解密在
+	// 本机流代理层完成，输出明文 mp4，播放器无需任何 CENC/DRM 支持。
+	cencKey []byte
+	cencMu  sync.Mutex
+	cenc    *cencLayout
 }
 
 // nativeRenewResult 是一次后台重签的结果。
@@ -139,7 +145,23 @@ func (stream *nativeStreamServer) nativeTouch(session *nativeStreamSession) {
 func (stream *nativeStreamServer) nativeRequest(request *http.Request) (*http.Response, error) {
 	client := *stream.downloader.client
 	client.Timeout = 0
-	return stream.downloader.doMediaRequestWithClient(request, &client)
+	info, _ := request.Context().Value(nativeStreamDiagnosticKey{}).(nativeStreamDiagnostic)
+	response, err := stream.downloader.doMediaRequestWithClient(request, &client)
+	if err != nil {
+		stream.nativeLogError(info, "upstream_error", request.URL.String(), err, "")
+		return response, err
+	}
+	if response != nil {
+		address := request.URL.String()
+		if response.Request != nil && response.Request.URL != nil {
+			address = response.Request.URL.String()
+		}
+		if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+			stream.nativeLog(info, "upstream_status", address, "", response.StatusCode, response.Header.Get("Content-Type"))
+		}
+		response.Body = &nativeDiagnosticBody{ReadCloser: response.Body, stream: stream, info: info, address: address}
+	}
+	return response, nil
 }
 
 var nativePlaylistURI = regexp.MustCompile(`URI="([^"]+)"`)
@@ -355,7 +377,7 @@ func (stream *nativeStreamServer) nativeOpen(media providerMedia, refresher ...f
 	}
 	token := hex.EncodeToString(tokenBytes)
 	ctx, cancel := context.WithCancel(providerMediaContext(context.Background(), media.credentials))
-	session := &nativeStreamSession{assets: map[string]nativeStreamAsset{}, referer: media.Referer, key: media.HLSKey, ctx: ctx, cancel: cancel, lastUsed: time.Now(), credentials: media.credentials, caches: map[string]*nativeStreamCache{}}
+	session := &nativeStreamSession{assets: map[string]nativeStreamAsset{}, referer: media.Referer, key: media.HLSKey, cencKey: media.CENCKey, ctx: ctx, cancel: cancel, lastUsed: time.Now(), credentials: media.credentials, caches: map[string]*nativeStreamCache{}, diagnosticID: nativeStreamID(token)}
 	if len(refresher) > 0 {
 		session.refresher = refresher[0]
 	}
@@ -734,12 +756,15 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	session.mu.Lock()
 	asset, found := session.assets[parts[1]]
 	session.mu.Unlock()
+	info := nativeStreamDiagnostic{session: session.diagnosticID, asset: nativeStreamID(parts[1])}
 	if !found {
+		stream.nativeLog(info, "asset_missing", "", "", 0, "")
 		http.NotFound(writer, request)
 		return
 	}
 	ctx, cancel := context.WithCancel(providerMediaContext(request.Context(), session.credentials))
 	defer cancel()
+	ctx = context.WithValue(ctx, nativeStreamDiagnosticKey{}, info)
 	stop := context.AfterFunc(session.ctx, cancel)
 	defer stop()
 	writer.Header().Set("Cache-Control", "no-store")
@@ -753,6 +778,7 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		if strings.Contains(asset.contentType, "mpegurl") {
 			body, err := stream.nativeRewrite(parts[0], session, string(asset.data), asset.address)
 			if err != nil {
+				stream.nativeLog(info, "playlist_rewrite", asset.address, "kind="+nativePlaylistKind(string(asset.data))+" error="+nativeStreamError(err), 0, "")
 				http.Error(writer, err.Error(), http.StatusBadGateway)
 				return
 			}
@@ -770,6 +796,13 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		return
 	}
 	if len(asset.data) == 0 && !strings.Contains(asset.contentType, "mpegurl") {
+		// CENC 加密媒体：在流代理层边读边 AES-CTR 解密，输出明文 mp4。
+		// mpv/lavf 不解析 CENC，直接喂密文会花屏；本地预取缓存也只能存
+		// 密文，所以这条路径必须绕过预取/缓存，逐个 Range 现解密。
+		if len(session.cencKey) > 0 {
+			stream.nativeServeDecrypted(ctx, writer, request, session, parts[1], asset)
+			return
+		}
 		// 直链媒体：后台单连接把整集拉进本地缓存，播放器的请求改读本地文件。
 		// 源站响应头排队实测最长 27 秒，这一刻提前付掉，切集才是零等待；
 		// 缓存没就绪时再走回源路径（见 nativeForward）。
@@ -780,6 +813,7 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	}
 	response, upstream := stream.nativeForward(ctx, request, session, parts[1], asset)
 	if response == nil {
+		stream.nativeLog(info, "upstream_failed", asset.address, "all attempts failed", 0, "")
 		http.Error(writer, "读取媒体失败，请重试", http.StatusBadGateway)
 		return
 	}
@@ -787,6 +821,11 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 		err := stream.downloader.catalogResponseError(upstream, response, body)
+		address := asset.address
+		if upstream != nil && upstream.URL != nil {
+			address = upstream.URL.String()
+		}
+		stream.nativeLog(info, "upstream_status", address, "", response.StatusCode, response.Header.Get("Content-Type"))
 		http.Error(writer, err.Error(), response.StatusCode)
 		return
 	}
@@ -816,11 +855,13 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 	if playlist && request.Method == http.MethodGet {
 		body, err := io.ReadAll(io.LimitReader(response.Body, 4<<20+1))
 		if err != nil || len(body) > 4<<20 {
+			stream.nativeLogError(info, "playlist_read_failed", finalURL.String(), err, contentType)
 			http.Error(writer, "播放列表过大或读取失败", http.StatusBadGateway)
 			return
 		}
 		text := strings.TrimSpace(strings.TrimPrefix(string(body), "\ufeff"))
 		if !strings.HasPrefix(text, "#EXTM3U") {
+			stream.nativeLog(info, "playlist_invalid", finalURL.String(), "", 0, contentType)
 			http.Error(writer, "播放列表无效", http.StatusBadGateway)
 			return
 		}
@@ -835,6 +876,7 @@ func (stream *nativeStreamServer) nativeServe(writer http.ResponseWriter, reques
 		}
 		rewritten, err := stream.nativeRewrite(parts[0], session, text, manifestURL)
 		if err != nil {
+			stream.nativeLog(info, "playlist_rewrite", manifestURL, "kind="+nativePlaylistKind(text)+" error="+nativeStreamError(err), 0, contentType)
 			http.Error(writer, err.Error(), http.StatusBadGateway)
 			return
 		}

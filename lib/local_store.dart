@@ -65,6 +65,9 @@ class LocalStore extends ChangeNotifier {
   int _failures = 0;
   DateTime _retryAfter = DateTime(2000);
 
+  /// 站源使用次数：分组内按使用频率排序（用户 2026-11-18 定调，不再硬排）。
+  final Map<String, int> _sourceUsage = {};
+
   void _loadSourceSwitches() {
     try {
       final raw = _string('sourceSwitches');
@@ -77,12 +80,31 @@ class LocalStore extends ChangeNotifier {
     }
   }
 
+  void _loadSourceUsage() {
+    try {
+      final raw = _string('sourceUsage');
+      if (raw == null) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      _sourceUsage.clear();
+      for (final entry in decoded.entries) {
+        final value = entry.value;
+        if (value is int && value > 0) {
+          _sourceUsage[entry.key.toString()] = value;
+        }
+      }
+    } catch (_) {
+      _sourceUsage.clear();
+    }
+  }
+
   void _initialize() {
     try {
       _snapshot = LocalSnapshot(preferences, files: files);
       // 快照就位后再读站源开关；此前在快照赋值前调用，开关永远读空，
       // 重启后用户显式设置的开/关状态会全部回落到默认值。
       _loadSourceSwitches();
+      _loadSourceUsage();
       _loadLiveSources();
       _loadCustomSources();
       final raw = _snapshot!.getString('profiles');
@@ -168,14 +190,46 @@ class LocalStore extends ChangeNotifier {
       !locked && SourceSite.isAvailable(source) && profile.allows(source) && sourceEnabled(source);
   List<SourceSite> get sources =>
       SourceSite.values.where((site) => allowsSource(site.id)).toList();
+
+  /// 站源使用次数（分组排序依据；随切换站源累加，用户档级持久化）。
+  Map<String, int> get sourceUsage => Map.unmodifiable(_sourceUsage);
+
+  /// 记录一次站源使用。分组内按次数降序排列，次数相同保持原顺序。
+  Future<void> recordSourceUse(String sourceId) {
+    if (sourceId.isEmpty || !SourceSite.isAvailable(sourceId)) {
+      return Future.value();
+    }
+    final epoch = _epoch;
+    return _queue(() async {
+      if (locked || epoch != _epoch) return;
+      final next = {..._sourceUsage};
+      next[sourceId] = (next[sourceId] ?? 0) + 1;
+      await _commit({_key('sourceUsage'): jsonEncode(next)});
+      _sourceUsage
+        ..clear()
+        ..addAll(next);
+      _notify();
+    });
+  }
   List<SourceSite> get permittedSources => [
     for (final site in SourceSite.values)
       if (!locked && profile.allows(site.id)) site,
   ];
 
+  /// 默认只启用两个核心源：红果（短剧类主力）+ 真果·鉴（视频类主力）。
+  /// 其余站源默认关闭，用户在「站源管理」里按需开启——站源菜单保持精简，
+  /// 不再一次铺开二十多个源。受限源（黄果系/成人）仍需管理员密码开启。
+  static const _defaultEnabledSources = <String>{'hongguo', 'dongpiandi'};
+
+  /// 模块装卸后让界面重新读取站源列表：`SourceSite.values` 是全局静态表，
+  /// 模块注册/卸载后不会自动通知，需要显式触发一次重建。
+  void refreshSourceSites() => notifyListeners();
+
   bool sourceEnabled(String source) =>
       _sourceSwitches[source] ??
-      !(SourceSite.isRestricted(source) || SourceSite.isLoginRequired(source));
+      (_defaultEnabledSources.contains(source) &&
+          !SourceSite.isRestricted(source) &&
+          !SourceSite.isLoginRequired(source));
 
   Future<void> setSourceEnabled(String source, bool enabled) {
     if (!SourceSite.isAvailable(source)) {
@@ -542,32 +596,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setDongpiandiOfficialOnly(bool value) =>
       _setting('dongpiandiOfficialOnly', value);
 
-  /// 首页「模糊封面」按钮是否显示（移植自 Xanerix/guoapp 29e1afe）。
-  /// 设备级全局开关，默认关闭。
-  bool get blurCoversButton => _configurationError == null
-      ? _bool('blurCoversButton') ?? false
-      : false;
-  Future<void> setBlurCoversButton(bool value) =>
-      _setting('blurCoversButton', value);
-
-  /// 开屏时首页封面先模糊：依赖按钮开关，按钮关掉即视为关闭。
-  bool get blurCoversOnLaunch =>
-      blurCoversButton &&
-      (_configurationError == null ? _bool('blurCoversOnLaunch') ?? false : false);
-  Future<void> setBlurCoversOnLaunch(bool value) {
-    final epoch = _epoch;
-    return _queue(() async {
-      if (locked || epoch != _epoch) throw StateError('当前用户已变更，请重试');
-      // 改开屏设置 = 重置「每个源上次的样子」：用户在这里表达的正是下次
-      // 启动该不该糊，留着旧记忆会把它压过去。
-      await _commit({
-        'blurCoversOnLaunch': value,
-      }, remove: const ['blurCoversBySource']);
-      _notify();
-    });
-  }
-
-  /// 模糊封面按源记忆：源 id → 该源上次眼睛按钮留下的状态（设备级）。
+  /// 模糊封面按源记忆：源 id → 该源是否糊封面（设备级）。
   /// 不同源各记各的：在红果糊着，切到影视工厂不该跟着糊（用户要求）。
   Map<String, bool> get blurCoversBySource {
     if (_configurationError != null) return const {};
@@ -585,11 +614,9 @@ class LocalStore extends ChangeNotifier {
     }
   }
 
-  /// 某个源上次是否模糊封面：本源记忆优先，没记忆时回落到「开屏自动模糊」。
-  bool blurCoversFor(String source) {
-    if (!blurCoversButton) return false;
-    return blurCoversBySource[source] ?? blurCoversOnLaunch;
-  }
+  /// 某个源是否模糊封面。顶栏眼睛按钮与设置里的两个开关已移除，
+  /// 改由「已装模块」页按分组统一开关，这里只按源记忆（无记忆即不糊）。
+  bool blurCoversFor(String source) => blurCoversBySource[source] ?? false;
 
   Future<void> setBlurCoversFor(String source, bool value) {
     if (source.isEmpty) return Future.value();
@@ -783,12 +810,18 @@ class LocalStore extends ChangeNotifier {
       if (!allowsSource(source) || epoch != _epoch) {
         throw StateError('当前用户没有此站源权限');
       }
+      final usage = {..._sourceUsage};
+      usage[source] = (usage[source] ?? 0) + 1;
       await _commit({
         _key('source'): source,
         _key('catalogView'): jsonEncode(
           catalogView.copyWith(allSources: allSources).toJson(),
         ),
+        _key('sourceUsage'): jsonEncode(usage),
       });
+      _sourceUsage
+        ..clear()
+        ..addAll(usage);
       _notify();
     });
   }
@@ -878,7 +911,7 @@ class LocalStore extends ChangeNotifier {
   Future<void> setHideVip(bool value) => _setting(_key('hideVip'), value);
   Future<void> setSource(String value) {
     if (!allowsSource(value)) return Future.error(StateError('当前用户没有此站源权限'));
-    return _setting(_key('source'), value);
+    return _setting(_key('source'), value).then((_) => recordSourceUse(value));
   }
 
   Future<void> setDisplayMode(String value) =>

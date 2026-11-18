@@ -10,11 +10,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'core_bridge.dart';
+import 'js_module_screen.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
 import 'glass_preferences.dart';
 import 'motion_performance.dart';
+import 'pure_black_preferences.dart';
 import 'fog_tuning.dart';
 import 'soft_glass.dart';
 import 'home_screen.dart';
@@ -162,6 +164,9 @@ class _AppBootstrapState extends State<AppBootstrap>
       ]);
       final preferences = bootstrap.first as SharedPreferences;
       final libraryDirectory = bootstrap[3] as Directory;
+      // 加载运行时 JS 站源模块（<数据目录>/modules）。模块不随安装包分发，
+      // 改源只需换模块文件；失败静默，不影响启动。
+      await loadSourceModules(repository);
       // 四个偏好集合各自读不同 key，互不依赖，一并并行。
       await Future.wait<void>([
         GlassPreferences.load(preferences),
@@ -169,6 +174,8 @@ class _AppBootstrapState extends State<AppBootstrap>
         FogTuningStore.load(preferences),
         SoftGlassStore.load(preferences),
         LiveRouteMemory.load(preferences),
+        PureBlackPreferences.load(preferences),
+        RemoteConfigSourceStore.load(preferences),
       ]);
       // 顶栏渐变档与形态开关整档已删除（2026-10-29），清掉盘上遗留键，
       // 免得旧值留在 prefs 里没人知道它是干嘛的。

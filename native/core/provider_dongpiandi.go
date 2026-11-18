@@ -518,6 +518,7 @@ func dongpiandiDramaFromCard(card dongpiandiCatalogCard) Drama {
 		TotalEpisode: epCount,
 		ChannelName:  "真果·鉴",
 		Category:     dongpiandiKindLabel(card.ContentKind),
+		ContentKind:  dongpiandiContentKind(card.ContentKind),
 		// 目录卡片只有 remarks（「更新至74集」/「全20集」/「高清」），
 		// 没有 update_status，靠文案推导即可让剧卡直接带上连载状态。
 		ReleaseStatus: dongpiandiReleaseStatus("", false, card.Remark),
@@ -617,6 +618,21 @@ func dongpiandiKindLabel(kind string) string {
 		return "综艺"
 	default:
 		return "影视"
+	}
+}
+
+// dongpiandiContentKind 把站点 kind 归一为 Dart Drama.contentKind
+// （'short'/'long'，见 lib/catalog_browser.dart:dramaIsLongDrama）。空串=
+// 未定性，Dart 侧继续走 category/tags/站源信号链。站点值是 short_drama，
+// 直接透传 Dart 不认（只认 short），必须在这里映射。
+func dongpiandiContentKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "short_drama":
+		return "short"
+	case "series", "movie", "anime", "variety":
+		return "long"
+	default:
+		return ""
 	}
 }
 
@@ -951,6 +967,7 @@ func (d *Downloader) fetchDongpiandiDetail(ctx context.Context, sourceID string)
 		Actors:        detail.Actors,
 		ChannelName:   "真果·鉴",
 		Category:      dongpiandiKindLabel(detail.ContentKind),
+		ContentKind:   dongpiandiContentKind(detail.ContentKind),
 		EpisodeCount:  shown,
 		TotalEpisode:  shown,
 		ReleaseStatus: status,

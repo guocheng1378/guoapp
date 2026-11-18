@@ -34,6 +34,7 @@ class LocalSnapshot {
     'mediaHistory',
     'source',
     'groupSources',
+    'sourceUsage',
     'hideVip',
     'playback',
     'downloadPreferences',
@@ -110,7 +111,7 @@ class LocalSnapshot {
       globalKeys.contains(key) ||
       libraryKeys.contains(key) ||
       RegExp(
-        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|groupSources|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks|episodeProgress)$',
+        r'^profile\.[a-zA-Z0-9_-]{1,64}\.(history|favorites|followStates|followChecks|seriesCandidates|mediaHistory|source|groupSources|sourceUsage|hideVip|playback|downloadPreferences|catalogView|recentSearches|lanRecords|lanSettings|lanReceipts|skipMarks|episodeProgress)$',
       ).hasMatch(key);
 
   /// 是否为需要落文件的重键（默认档顶层键或 profile 档键）。

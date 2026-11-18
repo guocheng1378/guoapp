@@ -90,7 +90,7 @@ func TestContentCategoriesSplitShortDramaFromVideo(t *testing.T) {
 		SourceYaguo, SourceMaoguo, SourceFanguo, SourceHeguo, SourceXingguo,
 		SourceHuaguo, SourceWangguo, SourceFaguo, SourceWuguo}
 	video := []string{SourceCloudFront, SourceYingshigongchang, Source360ZY, SourceModu,
-		SourceDytt, SourceShandian, SourceHongniu, SourceNiuniuZY, SourceWsyzy, SourceSorani, SourceDongpiandi, SourceYunzhui}
+		SourceDytt, SourceShandian, SourceHongniu, SourceNiuniuZY, SourceWsyzy, SourceDongpiandi, SourceYunzhui}
 	for _, id := range shortDrama {
 		if spec, _ := SpecOf(id); spec.Category != CategoryShortDrama {
 			t.Fatalf("%s must be a short drama source, got %q", id, spec.Category)
@@ -104,7 +104,7 @@ func TestContentCategoriesSplitShortDramaFromVideo(t *testing.T) {
 }
 
 func TestFamiliesKeepDuanjuRegistrySeparate(t *testing.T) {
-	for _, id := range []string{SourceYaguo, SourceNiuniuZY, SourceSorani, SourceDongpiandi} {
+	for _, id := range []string{SourceYaguo, SourceNiuniuZY, SourceDongpiandi} {
 		if !DuanjuSource(id) {
 			t.Fatalf("%s must belong to the duanju family", id)
 		}
@@ -126,7 +126,7 @@ func TestAvailableFollowsBuildVariant(t *testing.T) {
 		t.Fatal("all-sources entries must stay hidden in the default build")
 	}
 	Configure(Config{AllSources: true})
-	if !Available(SourceHuangdou) || !Available(SourceWuguo) || !Available(SourceSorani) {
+	if !Available(SourceHuangdou) || !Available(SourceWuguo) {
 		t.Fatal("all-sources build must expose every entry")
 	}
 	if Available("unknown-source") {

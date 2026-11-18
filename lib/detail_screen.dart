@@ -32,13 +32,11 @@ class DetailScreen extends StatefulWidget {
     required this.drama,
     required this.repository,
     required this.store,
-    this.resumeOnOpen = false,
     this.downloadOnOpen = false,
   });
   final Drama drama;
   final AppRepository repository;
   final LocalStore store;
-  final bool resumeOnOpen;
   final bool downloadOnOpen;
   @override
   State<DetailScreen> createState() => _DetailScreenState();
@@ -133,17 +131,7 @@ class _DetailScreenState extends State<DetailScreen> {
           !_initialActionHandled &&
           detail.episodes.isNotEmpty) {
         _initialActionHandled = true;
-        if (widget.resumeOnOpen) {
-          unawaited(
-            _play(
-              resumeEpisodeIndex(
-                detail.episodes,
-                widget.store.watched(merged.id),
-              ),
-              resume: true,
-            ),
-          );
-        } else if (widget.downloadOnOpen && widget.store.canDownload) {
+        if (widget.downloadOnOpen && widget.store.canDownload) {
           unawaited(_download());
         }
       }

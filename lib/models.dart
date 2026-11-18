@@ -89,10 +89,16 @@ class SourceSite {
   };
 
   static const hongguo = SourceSite('hongguo', '红果', '短剧 · 漫剧 · AI 剧');
+  static const huangdou = SourceSite('huangdou', '黄豆', '精选短剧');
+  static const dongpiandi =
+      SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视');
+  /// 必须有 Go 内置实现、不依赖模块的核心源。其余站源一律由「已装模块」
+  /// 提供——在「站源模块」里卸载后，站源管理/菜单里就跟着消失。
+  static const _coreGoValues = [hongguo, huangdou, dongpiandi];
   static const duanjuValues = [
     // 真果·鉴（AI 聚合）固定列视频类首位：用户主用源，长按选「视频类」
     // 与点按站源岛的视频类菜单均落到它。
-    SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视'),
+    dongpiandi,
     SourceSite('yingshigongchang', '影视工厂', 'maccms · m3u8 · 可播放'),
     SourceSite('360zy', '360', 'maccms · m3u8 · 可播放'),
     SourceSite('modu', '魔都', 'maccms · m3u8 · 可播放'),
@@ -101,7 +107,6 @@ class SourceSite {
     SourceSite('hongniu', '红牛', 'maccms · m3u8 · 可播放'),
     SourceSite('niuniuzy', '牛牛', 'maccms · m3u8 · 可播放'),
     SourceSite('wsyzy', '无水印', 'maccms · m3u8 · 可播放'),
-    SourceSite('sorani', '青空', '番剧 · 剧场 · 特摄 · m3u8'),
   ];
   static const dsd = SourceSite('dsd', '帝果', '帝果合成短剧 · VIP 直免');
   // engineValues：Go 引擎已注册（specs.go 共 25 源）、体检全绿，但此前漏出
@@ -189,6 +194,7 @@ class SourceSite {
   static List<SourceSite> get allValues => [
     ..._officialAllValues,
     ..._customSites,
+    ..._moduleSites,
   ];
   static const _officialAllValues = [
     hongguo,
@@ -208,10 +214,18 @@ class SourceSite {
     ...engineValues,
     ...adultValues,
   ];
-  static List<SourceSite> get values => [
-    ...allSourcesEnabled ? knownValues : const [hongguo],
-    ..._customSites,
-  ];
+  /// 可用站源列表 = 核心 Go 源 + 已装模块 + 自定义源。
+  /// **不再取自硬编码的官方表**：没装模块的源在这里不出现，卸载模块后
+  /// 该源从站源管理与菜单一起消失（官方表 only 用于 byId 解析与分类口径）。
+  static List<SourceSite> get values {
+    final base = allSourcesEnabled ? _coreGoValues : const [hongguo];
+    final seen = <String>{};
+    final out = <SourceSite>[];
+    for (final site in [...base, ..._customSites, ..._moduleSites]) {
+      if (seen.add(site.id)) out.add(site);
+    }
+    return out;
+  }
 
   /// 本机注册的自定义站源（`custom-<hash>`），由 LocalStore 全量同步
   /// （启动加载 + 每次增删后）。并入 [values]/[allValues] 后，
@@ -223,6 +237,22 @@ class SourceSite {
     _customSites
       ..clear()
       ..addAll(sites);
+  }
+
+  /// 运行时装载的 JS 站源模块（`<数据目录>/modules/<id>/`）。与自定义源分开
+  /// 存放，避免模块同步覆盖用户自建的 custom 源；两者都并入 [values] /
+  /// [allValues]，所以 isAvailable/byId/站源菜单/管理页自动感知。
+  static final List<SourceSite> _moduleSites = <SourceSite>[];
+  static List<SourceSite> get moduleSites => List.unmodifiable(_moduleSites);
+  static void registerModuleSites(Iterable<SourceSite> sites) {
+    // 模块源现在直接进站源列表（[values] 不再铺官方表）。与官方表同 id 的，
+    // 名称/分类沿用官方口径（界面文案不变），官方表没有的才用模块自带的。
+    final official = <String, SourceSite>{
+      for (final site in _officialAllValues) site.id: site,
+    };
+    _moduleSites
+      ..clear()
+      ..addAll(sites.map((site) => official[site.id] ?? site));
   }
 
   static bool isAvailable(String id) => values.any((site) => site.id == id);
@@ -249,14 +279,18 @@ class SourceSite {
       adultCategoryIds.contains(id) ||
       _customSites.any(
         (site) => site.id == id && site.category == SourceCategory.adult,
+      ) ||
+      // 运行时安装的 JS 模块同理：成人模块默认关闭，需解锁后显示。
+      _moduleSites.any(
+        (site) => site.id == id && site.category == SourceCategory.adult,
       );
 
   /// 需登录站源：站点侧加了账号墙——登录 + 滑块验证码才能播放、无试看，
-  /// App 无账号体系，播放必然失败（2026-10-30 真网取证：青空 play 接口
-  /// 返回 canPlay:false「请先登录」，目录/详情接口仍正常）。默认关闭并在
-  /// 站源管理里标注原因；站点恢复匿名可播后用户可在站源管理自行开启。
-  /// 与 [isRestricted] 的区别：不涉及内容分级，开启不需要管理员密码。
-  static const loginRequiredIds = <String>{'sorani'};
+  /// App 无账号体系，播放必然失败。默认关闭并在站源管理里标注原因；站点
+  /// 恢复匿名可播后用户可在站源管理自行开启。与 [isRestricted] 的区别：
+  /// 不涉及内容分级，开启不需要管理员密码。
+  /// 2026-11-18 青空（sorani，原唯一成员）已按用户要求彻底移除，当前为空表。
+  static const loginRequiredIds = <String>{};
   static bool isLoginRequired(String id) => loginRequiredIds.contains(id);
   bool get loginRequired => SourceSite.isLoginRequired(id);
 
@@ -296,7 +330,6 @@ class SourceSite {
     'hongniu': SourceCategory.video,
     'niuniuzy': SourceCategory.video,
     'wsyzy': SourceCategory.video,
-    'sorani': SourceCategory.video,
     'dongpiandi': SourceCategory.video,
     'douban': SourceCategory.video,
     'zy155': SourceCategory.adult,
@@ -329,7 +362,6 @@ class SourceSite {
     'huangguoai': true,
     'huangguo-video': false,
     'cloudfront': false,
-    'sorani': false,
     'yingshigongchang': false,
     '360zy': false,
     'modu': false,
@@ -357,6 +389,25 @@ class SourceSite {
       list.insert(0, list.removeAt(index));
     }
     return list;
+  }
+
+  /// 按使用频率排序：次数高的在前；次数相同、或从未使用过的源保持原顺序。
+  ///
+  /// 用户定调（2026-11-18）：分组里的源不要硬排序，按使用频率排。
+  /// 排序必须稳定——并列时退回原始下标，否则每次 build 都会因 Dart 的
+  /// 不稳定 sort 让同频次源互相跳动。
+  static List<SourceSite> orderByUsage(
+    Iterable<SourceSite> items,
+    Map<String, int> usage,
+  ) {
+    final indexed = [for (final entry in items.indexed) entry];
+    indexed.sort((a, b) {
+      final left = usage[a.$2.id] ?? 0;
+      final right = usage[b.$2.id] ?? 0;
+      if (left != right) return right.compareTo(left);
+      return a.$1.compareTo(b.$1);
+    });
+    return [for (final entry in indexed) entry.$2];
   }
 }
 
@@ -490,7 +541,11 @@ class Drama {
     contentKind: json['contentKind'] as String?,
   );
   Map<String, dynamic> toJson() => {
-    'metadataSchema': 1,
+    // 与 Go nativeDramaMetadataSchema 对齐（2=真果·鉴集数已改取
+    // playback_groups）。此前写死 1 会让本端回传的剧集在 Go 侧被误判为
+    // 旧 schema，若将来迁移规则扩展会误清字段；当前 2 的两条迁移只对
+    // schema<2 生效，写 2 不会触发它们。
+    'metadataSchema': 2,
     'id': id,
     'source': source,
     'sourceId': sourceId,

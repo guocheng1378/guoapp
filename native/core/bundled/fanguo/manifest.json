@@ -1,0 +1,15 @@
+{
+  "id": "fanguo",
+  "name": "饭果",
+  "version": "1.0.1",
+  "category": "shortDrama",
+  "description": "短剧 · 分类搜索 · 直链分集",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["xifan-api-cn.youlishipin.com", "dj.youlishipin.com", "xifan.heytapimage.com"],
+  "capabilities": ["catalog", "detail", "search"],
+  "aliases": ["fanguo", "xifan", "西饭", "xifan-api-cn.youlishipin.com"],
+  "baseUrl": "https://xifan-api-cn.youlishipin.com",
+  "referer": "https://xifan-api-cn.youlishipin.com/",
+  "requiresAllSources": true
+}

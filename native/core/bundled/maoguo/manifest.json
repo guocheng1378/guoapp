@@ -1,0 +1,15 @@
+{
+  "id": "maoguo",
+  "name": "猫果",
+  "version": "1.0.1",
+  "category": "shortDrama",
+  "description": "短剧 · 分类搜索 · 直链分集",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["api-store.qmplaylet.com", "api-read.qmplaylet.com"],
+  "capabilities": ["catalog", "detail", "search"],
+  "aliases": ["maoguo", "qimao", "七猫", "api-store.qmplaylet.com"],
+  "baseUrl": "https://api-store.qmplaylet.com",
+  "referer": "https://api-store.qmplaylet.com/",
+  "requiresAllSources": true
+}

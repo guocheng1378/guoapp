@@ -81,17 +81,6 @@ func (bound *boundDuanjuSourceAdapter) Search(ctx context.Context, host provider
 func newDuanjuSourceAdapter(spec provider.Spec) *duanjuSourceAdapter {
 	adapter := &duanjuSourceAdapter{spec: spec}
 	switch spec.ID {
-	case sourceSorani:
-		adapter.catalogPage = func(d *Downloader, ctx context.Context, page int, category string) ([]Drama, bool, error) {
-			return d.fetchSoraniCatalogPage(ctx, page, category, "")
-		}
-		adapter.detail = func(d *Downloader, ctx context.Context, sourceID string) (Drama, []Chapter, error) {
-			return d.fetchSoraniDetail(ctx, sourceID)
-		}
-		adapter.search = func(d *Downloader, ctx context.Context, query string) ([]Drama, error) {
-			items, _, err := d.fetchSoraniCatalogPage(ctx, 1, "", query)
-			return items, err
-		}
 	case sourceDongpiandi:
 		adapter.categories = func(d *Downloader, ctx context.Context) ([]nativeCategory, error) {
 			return fetchDongpiandiCategories(), nil

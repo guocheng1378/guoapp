@@ -1,0 +1,15 @@
+{
+  "id": "heguo",
+  "name": "河果",
+  "version": "1.0.1",
+  "category": "shortDrama",
+  "description": "短剧 · Next.js 页面解析 · 分类搜索 · 分集取流",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["www.kuaikaw.cn", "kuaikaw.cn"],
+  "capabilities": ["catalog", "detail", "search", "media"],
+  "aliases": ["heguo", "hema", "河马", "www.kuaikaw.cn", "kuaikaw.cn"],
+  "baseUrl": "https://www.kuaikaw.cn",
+  "referer": "https://www.kuaikaw.cn/",
+  "requiresAllSources": true
+}

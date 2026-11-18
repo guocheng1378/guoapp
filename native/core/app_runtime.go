@@ -32,7 +32,6 @@ type Config struct {
 	HuangjuAPIURL   string
 	YeguoURL        string
 	YeguoAPIURL     string
-	SoraniAPIURL    string
 	HeitaoURL       string
 	JinguoDuanjuURL string
 	BeaboxURL       string
@@ -66,8 +65,6 @@ type Downloader struct {
 	huangju                *huangjuAPIClient
 	yeguoOnce              sync.Once
 	yeguo                  *yeguoAPIClient
-	soraniOnce             sync.Once
-	sorani                 *soraniAPIClient
 	diagnostics            *diagnosticLog
 	apiMu                  sync.Mutex
 	apiBase                string
@@ -105,6 +102,7 @@ type nativeDrama struct {
 	Tags           []string `json:"tags,omitempty"`
 	Actors         []string `json:"actors,omitempty"`
 	ReleaseStatus  string   `json:"releaseStatus,omitempty"`
+	ContentKind    string   `json:"contentKind,omitempty"`
 }
 
 type nativeInput struct {
@@ -148,6 +146,8 @@ type nativeInput struct {
 	Background bool            `json:"background"`
 	Since      string          `json:"since"`
 	WebDAV     json.RawMessage `json:"webdav"`
+	// Address：模块安装直链（prepareModule 用）。
+	Address string `json:"address,omitempty"`
 }
 
 type nativeCatalogResult struct {
@@ -420,7 +420,8 @@ func nativeNormalize(drama Drama) nativeDrama {
 		Heat: drama.Heat, Views: drama.Views, OnlineDate: providerReleaseDate(drama.OnlineDate),
 		Area: drama.Area, Year: drama.Year, Score: drama.Score,
 		Duration: flexDurationSeconds(drama.Duration),
-		Tags:     tags, Actors: actors, ReleaseStatus: provider.SanitizeText(drama.ReleaseStatus)}
+		Tags:     tags, Actors: actors, ReleaseStatus: provider.SanitizeText(drama.ReleaseStatus),
+		ContentKind: drama.ContentKind}
 }
 
 // flexDurationSeconds 把 provider 层的时长松散值统一为秒（单集时长）：
@@ -606,6 +607,15 @@ func newNativeEngine(directory string, cache ...string) (*nativeEngine, error) {
 	engine.covers = newNativeCoverCache(cacheDirectory, d)
 	engine.downloads = newNativeDownloads(engine)
 	registerNativeEngine(directory, engine)
+	// 加载运行时站源模块（<数据目录>/modules）。模块不在安装包里，改源只需换
+	// 模块文件，不必重新发版；加载失败不阻塞引擎（坏模块直接跳过）。
+	// 内置模块（bundled）随包发布：首次启动自动安装，版本更高时自动升级，
+	// 用户卸载过的内置模块不再自动装回。
+	moduleRoot := filepath.Join(directory, "modules")
+	if jsModuleBundledEnabled {
+		_, _ = installBundledJSModules(moduleRoot)
+	}
+	_, _ = RegisterJSModules(d, moduleRoot)
 	return engine, nil
 }
 
@@ -709,6 +719,40 @@ func nativeDispatch(input nativeInput) (any, error) {
 		ctx = work
 	}
 	switch input.Action {
+	case "modules":
+		// 包一层 items：Dart 侧的 _call 只接受对象载荷。
+		return map[string]any{"items": engine.nativeJSModuleList()}, nil
+	case "moduleInfos":
+		// 已装模块详情（含加载失败原因、是否内置、已装版本）。
+		items, err := engine.nativeJSModuleInfos()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"items": items}, nil
+	case "moduleStore":
+		// 在线模块商店：内置项 + 联网索引。联网失败时仍返回内置项。
+		return engine.jsModuleStore(ctx)
+	case "prepareModule":
+		// 安装前预检：返回域名/功能/限制级/是否覆盖，并暂存安装包。
+		return engine.nativeJSModulePrepare(ctx, input.Command, input.Address, input.Source)
+	case "installModule":
+		return engine.nativeJSModuleInstallToken(ctx, input.Command)
+	case "installModuleOnline":
+		// 在线安装：预检（含索引校验）→ 直接安装，商店里已展示过信息。
+		info, err := engine.nativeJSModulePrepare(ctx, "", "", input.Command)
+		if err != nil {
+			return nil, err
+		}
+		return engine.nativeJSModuleInstallToken(ctx, info.Token)
+	case "installModuleAddress":
+		// 从地址安装（第三方模块直链），与在线索引、本地 zip 并列。
+		info, err := engine.nativeJSModulePrepare(ctx, "", input.Address, "")
+		if err != nil {
+			return nil, err
+		}
+		return engine.nativeJSModuleInstallToken(ctx, info.Token)
+	case "uninstallModule":
+		return engine.nativeJSModuleUninstall(input.Command)
 	case "lan":
 		return engine.nativeLAN(ctx, input.Command, input.LAN)
 	case "webdav":
@@ -751,7 +795,7 @@ func nativeDispatch(input nativeInput) (any, error) {
 	case "recommendations":
 		return engine.nativeRecommendations(ctx, input)
 	case "cachedRecommendations":
-		return engine.cachedRecommendations(input.Category)
+		return engine.cachedRecommendations(firstNonEmpty(input.Source, sourceHongguo), input.Category)
 	case "hongguoDevices":
 		return engine.hongguoDevices(ctx, input.Command == "register")
 	case "rankingBoards":
@@ -769,10 +813,20 @@ func nativeDispatch(input nativeInput) (any, error) {
 	case "live.epg":
 		return engine.nativeLiveEpg(ctx, input)
 	case "suggestions":
-		items, err := engine.suggestions(ctx, input.Query)
+		items, err := engine.suggestions(ctx, input.Source, input.Query)
 		return map[string]any{"items": items}, err
 	case "suggest":
-		// 真果·鉴站内搜索建议（带直达播放目标）
+		// 带直达播放目标的搜索建议：模块提供则优先走模块，失败回落 Go。
+		if suggester, ok := moduleCapabilityProvider(canonicalProviderSource(input.Source)).(moduleDirectSuggester); ok {
+			items, err := suggester.ModuleDirectSuggestions(ctx, engine.downloader.host(), input.Query)
+			if !errors.Is(err, errModuleCapabilityUnsupported) {
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"items": items}, nil
+			}
+		}
+		// 内置真果·鉴直连兜底（模块未接管时保持原状）。
 		if input.Source != sourceDongpiandi {
 			return nil, fmt.Errorf("当前站源不支持搜索建议")
 		}
@@ -881,7 +935,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 // 由 Dart 侧拉取远程公告配置后经 config.source 转发）。校验规则：scheme 仅
 // http/https、镜像去重后 1-8 个、dongpiandi 根地址为合法根、providerHosts 键
 // 必须是核心已知的规范站源（拒收黄果剧/野果与未注册 provider 的榜单专用源）、
-// 值为合法根地址；任一字段非法则整段丢弃，保留当前生效值（未热更过即内置兜底）。
+// 值为合法根地址；moduleIndexUrl/appConfigUrl 为远程配置源自建地址（置顶拉取链）；
+// 任一字段非法则整段丢弃，保留当前生效值（未热更过即内置兜底）。
 // 签名密钥不经此通道下发。
 func applySourceConfig(config map[string]any) (any, error) {
 	if len(config) == 0 {
@@ -928,6 +983,27 @@ func applySourceConfig(config map[string]any) (any, error) {
 			return map[string]any{"applied": false, "reason": "providerHosts 含非法条目"}, nil
 		}
 		setProviderHosts(hosts)
+		applied++
+	}
+	// 远程配置源自建地址（换源不发版）：moduleIndexUrl 置顶在线模块索引与
+	// 模块文件基址，appConfigUrl 置顶弹窗/更新配置的拉取链（Dart 侧消费）。
+	// 与既有字段同规则：scheme 仅 http/https、非法整段丢弃。
+	if raw, ok := config["moduleIndexUrl"]; ok {
+		text, ok := raw.(string)
+		if !ok || !validSourceBaseURL(text) {
+			return map[string]any{"applied": false, "reason": "moduleIndexUrl 非法"}, nil
+		}
+		setJSModuleSourceURL(text)
+		applied++
+	}
+	if raw, ok := config["appConfigUrl"]; ok {
+		text, ok := raw.(string)
+		if !ok || !validSourceBaseURL(text) {
+			return map[string]any{"applied": false, "reason": "appConfigUrl 非法"}, nil
+		}
+		if !setAppConfigSourceURL(text) {
+			return map[string]any{"applied": false, "reason": "appConfigUrl 非法"}, nil
+		}
 		applied++
 	}
 	// 自定义 maccms 点播源：用户本机添加，Dart 持久化并每次全量重发；
@@ -1046,6 +1122,16 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	d := engine.downloader
 	result := nativeCatalogResult{Items: []nativeDrama{}, Page: page}
 	if query != "" && source == sourceHongguo {
+		// 红果内嵌 JS 模块优先（合并短剧+听书搜索）；失败回落 Go 直连。
+		if module, jsErr := d.hongguoJS(); jsErr == nil {
+			if pageData, jsErr := module.search(query, page); jsErr == nil && len(pageData.Items) > 0 {
+				for _, drama := range pageData.Items {
+					result.Items = append(result.Items, nativeNormalize(drama))
+				}
+				result.Warning, result.HasMore = pageData.Warning, pageData.HasMore
+				return result, nil
+			}
+		}
 		var entry hongguoSearchEntry
 		var err error
 		if page == 1 {
@@ -1085,6 +1171,21 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		}
 		result.HasMore = more
 		return result, nil
+	}
+	// 在线模块优先：manifest 显式声明 search 的模块用它自己的 search 导出接管在线搜索，
+	// 失败回落内置 Go 直连。这样以后改站点只需更新在线模块，不用发版。
+	// 只认显式声明，避免上游抄来但未验证的模块误伤既有搜索。
+	if query != "" && moduleDeclaresCapability(source, "search") && isDuanjuProviderSource(source) {
+		items, more, warning, searchErr := d.searchDuanjuPage(ctx, source, query, page)
+		if searchErr == nil {
+			for _, drama := range items {
+				result.Items = append(result.Items, nativeNormalize(drama))
+			}
+			result.HasMore = more
+			result.Warning = warning
+			return result, nil
+		}
+		// 模块搜索失败 → 落到下面的内置 Go 直连兜底。
 	}
 	// 在线搜索与目录共用同一套 page/hasMore：实现 PagedSearcher 的视频源
 	// 按页拉 wd 结果，未实现分页的源保持单页。不支持在线搜索的源落到下方
@@ -1150,7 +1251,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		return result, nil
 	}
 	if query != "" && isDuanjuProviderSource(source) && duanjuSupportsSearch(source) {
-		items, more, err := d.searchDuanjuPage(ctx, source, query, page)
+		items, more, warning, err := d.searchDuanjuPage(ctx, source, query, page)
 		if err != nil {
 			return result, err
 		}
@@ -1158,6 +1259,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			result.Items = append(result.Items, nativeNormalize(drama))
 		}
 		result.HasMore = more
+		result.Warning = warning
 		return result, nil
 	}
 	if query != "" {
@@ -1187,73 +1289,88 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	}
 	var items []Drama
 	var err error
-	switch source {
-	case sourceHongguo:
-		if strings.HasPrefix(category, hongguoTagPrefix) {
-			items, result.HasMore, err = d.fetchHongguoTagPage(ctx, category, page)
-			break
+	// 在线模块优先：manifest 显式声明 catalog 的模块用它的 catalogPage 接管目录，
+	// 失败（空列表或报错）回落下面的内置 Go 直连。只认显式声明防止误伤未验证模块。
+	moduleCatalogHandled := false
+	if moduleDeclaresCapability(source, "catalog") && isDuanjuProviderSource(source) {
+		moduleItems, moduleMore, moduleErr := d.fetchDuanjuCatalogPage(ctx, source, page, category, sort)
+		if moduleErr == nil && len(moduleItems) > 0 {
+			items, result.HasMore, moduleCatalogHandled = moduleItems, moduleMore, true
 		}
-		engine.mu.Lock()
-		known := make(map[string]bool, len(engine.catalogs[cacheKey]))
-		for _, drama := range engine.catalogs[cacheKey] {
-			known[drama.ID] = true
-		}
-		engine.mu.Unlock()
-		ctx = context.WithValue(ctx, libraryKnownKey{}, known)
-		if page > 1 {
-			ctx = context.WithValue(ctx, libraryMoreKey{}, true)
-		}
-		items, err = d.fetchHongguoAppCatalogCategory(ctx, category)
-		state := d.hongguoCatalogSnapshot()
-		result.hongguo = state
-		result.HasMore = hongguoCatalogHasMore(state)
-		if category != "" && state != nil {
-			result.HasMore = !state.Feeds["category:"+category].Exhausted
-		}
-		if len(items) == 0 && err != nil && ctx.Err() == nil && (category == "" || category == "short_play") {
-			var totalPages int
-			items, totalPages, err = d.fetchHongguoCategoryPage(ctx, "real-drama?page="+strconv.Itoa(page), "真人剧")
-			result.HasMore = page < totalPages
-		}
-	case sourceHuangdou:
-		client := newHuangdouAPIClient(d)
-		var decoded any
-		err = client.call(ctx, "/drama/list", map[string]any{"page": strconv.Itoa(page), "page_size": "30"}, &decoded)
-		if err == nil {
-			rows := huangdouList(decoded)
-			for _, row := range rows {
-				if drama := huangdouDramaFromMap(row); drama.ID != "" {
-					items = append(items, drama)
-				}
+	}
+	if !moduleCatalogHandled {
+		switch source {
+		case sourceHongguo:
+			// 目录保留 Go 直连：Go 侧有红果游标持久化/会话恢复/网页兜底（见
+			// app_catalog_persistence_test），JS catalogPage 虽也能取数，但它
+			// 的游标存在 JS caches 里、不写 result.hongguo，会破坏翻页进度。
+			// 其余环节（搜索/详情/榜单/建议/分类/取流/弹幕）才由 JS 接管。
+			if strings.HasPrefix(category, hongguoTagPrefix) {
+				items, result.HasMore, err = d.fetchHongguoTagPage(ctx, category, page)
+				break
 			}
-			result.HasMore = len(rows) >= 30
-		}
-	case sourceHuangguoAI:
-		items, result.HasMore, err = d.fetchHuangguoAICatalogPage(ctx, page, category)
-	case sourceHeitao:
-		items, result.HasMore, err = d.fetchHeitaoCatalogPage(ctx, page, category, "")
-	case sourceHanxiaoquan:
-		items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, query)
-	case sourceJinguoduanju:
-		items, result.HasMore, err = d.fetchJinguoDuanjuCatalogPage(ctx, page, category, query)
-	case sourceBeabox:
-		items, result.HasMore, err = d.fetchBeaboxCatalogPage(ctx, page, category, query)
-	case sourceHuangju:
-		// 服务端排序：剧果「全部」页默认 sort=hot（热度），上线日期映射到「最新」
-		// 通道 sort=new；views/name/season 留客户端排序。sort 与分类互斥，
-		// 分类非空时保持分类语义交给客户端排序。
-		huangjuCategory := category
-		if category == "" && sort == "date" {
-			huangjuCategory = huangjuNewestCategory
-		}
-		items, result.HasMore, err = d.fetchHuangjuCatalogPage(ctx, page, huangjuCategory, "")
-	case sourceYeguo:
-		items, result.HasMore, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
-	case sourceCloudFront:
-		items, result.HasMore, err = d.fetchLegacyCatalogCategoryPage(ctx, page, category)
-	default:
-		if isDuanjuProviderSource(source) {
-			items, result.HasMore, err = d.fetchDuanjuCatalogPage(ctx, source, page, category, sort)
+			engine.mu.Lock()
+			known := make(map[string]bool, len(engine.catalogs[cacheKey]))
+			for _, drama := range engine.catalogs[cacheKey] {
+				known[drama.ID] = true
+			}
+			engine.mu.Unlock()
+			ctx = context.WithValue(ctx, libraryKnownKey{}, known)
+			if page > 1 {
+				ctx = context.WithValue(ctx, libraryMoreKey{}, true)
+			}
+			items, err = d.fetchHongguoAppCatalogCategory(ctx, category)
+			state := d.hongguoCatalogSnapshot()
+			result.hongguo = state
+			result.HasMore = hongguoCatalogHasMore(state)
+			if category != "" && state != nil {
+				result.HasMore = !state.Feeds["category:"+category].Exhausted
+			}
+			if len(items) == 0 && err != nil && ctx.Err() == nil && (category == "" || category == "short_play") {
+				var totalPages int
+				items, totalPages, err = d.fetchHongguoCategoryPage(ctx, "real-drama?page="+strconv.Itoa(page), "真人剧")
+				result.HasMore = page < totalPages
+			}
+		case sourceHuangdou:
+			client := newHuangdouAPIClient(d)
+			var decoded any
+			err = client.call(ctx, "/drama/list", map[string]any{"page": strconv.Itoa(page), "page_size": "30"}, &decoded)
+			if err == nil {
+				rows := huangdouList(decoded)
+				for _, row := range rows {
+					if drama := huangdouDramaFromMap(row); drama.ID != "" {
+						items = append(items, drama)
+					}
+				}
+				result.HasMore = len(rows) >= 30
+			}
+		case sourceHuangguoAI:
+			items, result.HasMore, err = d.fetchHuangguoAICatalogPage(ctx, page, category)
+		case sourceHeitao:
+			items, result.HasMore, err = d.fetchHeitaoCatalogPage(ctx, page, category, "")
+		case sourceHanxiaoquan:
+			items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, query)
+		case sourceJinguoduanju:
+			items, result.HasMore, err = d.fetchJinguoDuanjuCatalogPage(ctx, page, category, query)
+		case sourceBeabox:
+			items, result.HasMore, err = d.fetchBeaboxCatalogPage(ctx, page, category, query)
+		case sourceHuangju:
+			// 服务端排序：剧果「全部」页默认 sort=hot（热度），上线日期映射到「最新」
+			// 通道 sort=new；views/name/season 留客户端排序。sort 与分类互斥，
+			// 分类非空时保持分类语义交给客户端排序。
+			huangjuCategory := category
+			if category == "" && sort == "date" {
+				huangjuCategory = huangjuNewestCategory
+			}
+			items, result.HasMore, err = d.fetchHuangjuCatalogPage(ctx, page, huangjuCategory, "")
+		case sourceYeguo:
+			items, result.HasMore, err = d.fetchYeguoCatalogPage(ctx, page, category, "")
+		case sourceCloudFront:
+			items, result.HasMore, err = d.fetchLegacyCatalogCategoryPage(ctx, page, category)
+		default:
+			if isDuanjuProviderSource(source) {
+				items, result.HasMore, err = d.fetchDuanjuCatalogPage(ctx, source, page, category, sort)
+			}
 		}
 	}
 	if err != nil && len(items) == 0 {
@@ -1286,29 +1403,48 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 	var raw Drama
 	var chapters []Chapter
 	var err error
-	switch source {
-	case sourceHuangguoAI:
-		raw, chapters, err = engine.downloader.fetchHuangguoAIDetail(ctx, sourceID)
-	case sourceCloudFront:
-		raw, chapters, err = engine.downloader.fetchLegacyDetail(ctx, sourceID)
-	case sourceHuangju:
-		raw, chapters, err = engine.downloader.fetchHuangjuDetail(ctx, sourceID)
-	case sourceYeguo:
-		raw, chapters, err = engine.downloader.fetchYeguoDetail(ctx, sourceID)
-	case sourceHeitao:
-		raw, chapters, err = engine.downloader.fetchHeitaoDetail(ctx, sourceID)
-	case sourceHanxiaoquan:
-		raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
-	case sourceJinguoduanju:
-		raw, chapters, err = engine.downloader.fetchJinguoDuanjuDetail(ctx, sourceID)
-	case sourceBeabox:
-		raw, chapters, err = engine.downloader.fetchBeaboxDetail(ctx, sourceID)
-	default:
-		if isDuanjuProviderSource(source) {
-			raw, chapters, err = engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)
-			break
+	// 在线模块优先：manifest 显式声明 detail 的模块用它的 detail 导出接管详情，
+	// 失败（报错或无分集）回落下面的内置 Go 直连。与 catalog 门控同口径。
+	moduleDetailHandled := false
+	if moduleDeclaresCapability(source, "detail") && isDuanjuProviderSource(source) {
+		moduleDrama, moduleChapters, moduleErr := engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)
+		if moduleErr == nil && len(moduleChapters) > 0 {
+			raw, chapters, moduleDetailHandled = moduleDrama, moduleChapters, true
 		}
-		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
+	}
+	if !moduleDetailHandled && source == sourceHongguo {
+		// 红果内嵌 JS 模块优先（含听书详情）；失败回落下面完整 Go 直连。
+		if module, jsErr := engine.downloader.hongguoJS(); jsErr == nil {
+			if pageData, jsErr := module.detail(sourceID); jsErr == nil {
+				raw, chapters, moduleDetailHandled = pageData.Drama, pageData.Chapters, true
+			}
+		}
+	}
+	if !moduleDetailHandled {
+		switch source {
+		case sourceHuangguoAI:
+			raw, chapters, err = engine.downloader.fetchHuangguoAIDetail(ctx, sourceID)
+		case sourceCloudFront:
+			raw, chapters, err = engine.downloader.fetchLegacyDetail(ctx, sourceID)
+		case sourceHuangju:
+			raw, chapters, err = engine.downloader.fetchHuangjuDetail(ctx, sourceID)
+		case sourceYeguo:
+			raw, chapters, err = engine.downloader.fetchYeguoDetail(ctx, sourceID)
+		case sourceHeitao:
+			raw, chapters, err = engine.downloader.fetchHeitaoDetail(ctx, sourceID)
+		case sourceHanxiaoquan:
+			raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
+		case sourceJinguoduanju:
+			raw, chapters, err = engine.downloader.fetchJinguoDuanjuDetail(ctx, sourceID)
+		case sourceBeabox:
+			raw, chapters, err = engine.downloader.fetchBeaboxDetail(ctx, sourceID)
+		default:
+			if isDuanjuProviderSource(source) {
+				raw, chapters, err = engine.downloader.fetchDuanjuDetail(ctx, source, sourceID)
+				break
+			}
+			title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -1376,14 +1512,31 @@ func (engine *nativeEngine) nativeResolve(ctx context.Context, input nativeInput
 		}
 		return engine.downloader.resolveProviderMedia(ctx, renewTask)
 	}
-	if danmakuSource, series, video, valid := danmakuPlaybackIDs(task); valid {
+	// 弹幕标识：模块站源优先由模块给出（模块没提供则用内置推导）。
+	danmakuSource, series, video, valid := danmakuPlaybackIDs(task)
+	if danmaku, ok := moduleCapabilityProvider(canonicalProviderSource(task.Chapter.Source)).(moduleDanmakuProvider); ok {
+		if moduleSeries, moduleVideo, moduleOK := danmaku.ModuleDanmakuIDs(ctx, engine.downloader.host(), task); moduleOK {
+			danmakuSource, series, video, valid = canonicalProviderSource(task.Chapter.Source), moduleSeries, moduleVideo, true
+		}
+	}
+	if valid {
 		choice.danmakuSource, choice.danmakuSeries, choice.danmakuVideo = danmakuSource, series, video
 		// 真果·鉴的剧集维度弹幕 ID 恰好也是详情 ID，顺手查社区跳过预设
-		//（详情/线路刷新拉取时已写入缓存，这里只读不打网络）。
+		//（详情/线路刷新拉取时已写入缓存，这里只读不打网络）。模块接管时
+		// 优先由模块给出预设，失败回落 Go 缓存。
 		if danmakuSource == sourceDongpiandi {
-			if preset, ok := dongpiandiCachedSkipPreset(series); ok {
-				choice.skipIntro = int(preset.IntroEndSeconds + 0.5)
-				choice.skipOutroFromEnd = int(preset.OutroFromEndSeconds + 0.5)
+			fromModule := false
+			if preset, ok := moduleCapabilityProvider(canonicalProviderSource(task.Chapter.Source)).(moduleSkipPresetProvider); ok {
+				if introSec, outroSec, presetOK := preset.ModuleSkipPreset(ctx, engine.downloader.host(), task); presetOK {
+					choice.skipIntro, choice.skipOutroFromEnd = introSec, outroSec
+					fromModule = true
+				}
+			}
+			if !fromModule {
+				if preset, ok := dongpiandiCachedSkipPreset(series); ok {
+					choice.skipIntro = int(preset.IntroEndSeconds + 0.5)
+					choice.skipOutroFromEnd = int(preset.OutroFromEndSeconds + 0.5)
+				}
 			}
 		}
 	}

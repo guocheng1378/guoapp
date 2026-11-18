@@ -87,7 +87,14 @@ type requestLimiter struct {
 	gates              map[string]*requestGate
 	backoffs           map[string]*requestBackoff
 	backgroundBackoffs map[string]*requestBackoff
+	blocks             map[string]*requestBlock
 	changed            chan struct{}
+}
+
+// requestBlock 记录某域名的连续失败计数（达到阈值才触发 host 级暂停）。
+type requestBlock struct {
+	count int
+	at    time.Time
 }
 
 type backgroundCatalogKey struct{}
@@ -235,6 +242,25 @@ func (limiter *requestLimiter) observe(request *http.Request, response *http.Res
 	limiter.observeBlock(request, response)
 }
 
+// observeMedia 用于媒体分片请求。媒体 CDN 偶发 403 是常态（热点防盗链、
+// 瞬时限流），应由播放器的换址/重试处理；若像目录请求那样记成 host 级
+// 1 分钟退避，会把同一个 CDN 上的后续分片全部冻住，表现为播放中途断链、
+// 恢复始终失败。与上游一致：媒体 403（非 Cloudflare 挑战）不记退避。
+func (limiter *requestLimiter) observeMedia(request *http.Request, response *http.Response) {
+	if response.StatusCode == http.StatusForbidden && !strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge") {
+		return
+	}
+	limiter.observe(request, response)
+}
+
+// catalogBlockThreshold 是同一域名触发 host 级暂停前需要的连续失败次数。
+// 上游同款：站点偶发一次 403/429 只是瞬时风控或单条链接失效，不该把该
+// 域名后续全部请求冻结一分钟；连续多次才暂停。
+const catalogBlockThreshold = 3
+
+// catalogBlockWindow 是连续失败的计数窗口，超过则重新计数。
+const catalogBlockWindow = 2 * time.Minute
+
 func (limiter *requestLimiter) observeBlock(request *http.Request, response *http.Response) {
 	delay := time.Minute
 	if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && seconds > 0 {
@@ -251,6 +277,30 @@ func (limiter *requestLimiter) observeBlock(request *http.Request, response *htt
 	if isolatedBackoff(request.Context()) &&
 		!(response.StatusCode == http.StatusTooManyRequests && rateLimitBackoffShared(request.Context())) {
 		backoffs = limiter.backgroundBackoffs
+	}
+	// 立即冻结的两种情况：429（站点明确限流，通常带 Retry-After）与
+	// Cloudflare 挑战（明确的"你是机器人"信号）。普通 403 才需要连续失败——
+	// 站点偶发一次 403 只是瞬时风控或单条链接失效，不该把该域名后续全部
+	// 请求冻结一分钟。
+	challenge := strings.EqualFold(response.Header.Get("Cf-Mitigated"), "challenge")
+	if response.StatusCode != http.StatusTooManyRequests && !challenge {
+		now := time.Now()
+		if limiter.blocks == nil {
+			limiter.blocks = map[string]*requestBlock{}
+		}
+		block := limiter.blocks[host]
+		if block == nil || now.Sub(block.at) > catalogBlockWindow {
+			block = &requestBlock{}
+			limiter.blocks[host] = block
+		}
+		block.at = now
+		block.count++
+		if block.count < catalogBlockThreshold {
+			limiter.notifyLocked()
+			limiter.mu.Unlock()
+			return
+		}
+		delete(limiter.blocks, host)
 	}
 	backoffs[host] = &requestBackoff{host: host, until: time.Now().Add(delay), status: response.StatusCode}
 	limiter.notifyLocked()
@@ -276,9 +326,14 @@ func (d *Downloader) doPreparedCatalogRequest(request *http.Request, timeout tim
 	if background, _ := request.Context().Value(backgroundCatalogKey{}).(bool); background && (timeout <= 0 || timeout > 8*time.Second) {
 		timeout = 8 * time.Second
 	}
-	release, err := d.limiter.acquire(request.Context(), request)
-	if err != nil {
-		return nil, err
+	// 限流器缺失（测试里手工构造的 Downloader）时跳过限流，不至于空指针。
+	release := func() {}
+	if d.limiter != nil {
+		acquired, err := d.limiter.acquire(request.Context(), request)
+		if err != nil {
+			return nil, err
+		}
+		release = acquired
 	}
 	cancel := func() {}
 	if timeout > 0 {
@@ -295,7 +350,9 @@ func (d *Downloader) doPreparedCatalogRequest(request *http.Request, timeout tim
 		release()
 		return nil, err
 	}
-	d.limiter.observe(request, response)
+	if d.limiter != nil {
+		d.limiter.observe(request, response)
+	}
 	observeSourceResponse(request.Context(), response)
 	response.Body = &limitedResponseBody{ReadCloser: response.Body, release: func() { cancel(); release() }}
 	return response, nil

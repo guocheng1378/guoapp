@@ -1,0 +1,16 @@
+{
+  "id": "cloudfront",
+  "name": "黄果旧版",
+  "version": "1.0.1",
+  "description": "短剧 · 黄果旧版 API · AES 加密参数 · 访客会话 · 动态域名探活",
+  "runtime": "js",
+  "api": 1,
+  "category": "video",
+  "adult": true,
+  "hosts": ["d2pypzndaqisk.cloudfront.net", "dr6skssi3nxbk.cloudfront.net", "d18ka9rqpfd3lo.cloudfront.net", "d37n0wjehmw08f.cloudfront.net"],
+  "capabilities": ["catalog", "detail", "search", "media"],
+  "aliases": ["cloudfront", "huangguo-old", "黄果旧版", "d2pypzndaqisk.cloudfront.net"],
+  "baseUrl": "https://d2pypzndaqisk.cloudfront.net",
+  "referer": "https://d2pypzndaqisk.cloudfront.net/",
+  "requiresAllSources": true
+}

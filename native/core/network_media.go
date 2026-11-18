@@ -1,13 +1,17 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"duanjuapp/native/provider"
 )
 
 func mediaRequestHeaders(request *http.Request, referer string) {
@@ -28,21 +32,66 @@ func (d *Downloader) doMediaRequest(request *http.Request) (*http.Response, erro
 
 func (d *Downloader) doMediaRequestWithClient(request *http.Request, client *http.Client) (*http.Response, error) {
 	mediaRequestHeaders(request, request.Header.Get("Referer"))
-	if credentials, _ := request.Context().Value(providerMediaCredentialsKey{}).(*providerMediaCredentials); credentials != nil {
+	credentials, _ := request.Context().Value(providerMediaCredentialsKey{}).(*providerMediaCredentials)
+	if credentials != nil {
 		if err := credentials.apply(request); err != nil {
 			return nil, err
 		}
 		client = credentials.client(client)
 	}
+	// 模块 mediaAuth 双轨：能签发这个媒体地址的模块先加一次头；401/403 且
+	// 不是风控页时作废旧凭证重签一次（对齐上游 mediaAuthorization 流程）。
+	authorizer := d.mediaAuthorizer(request.URL)
+	authorization := ""
+	if authorizer != nil {
+		header, value, err := authorizer.ModuleMediaAuthorization(request.Context(), d.host(), request.URL.String(), request.Header.Get("Referer"))
+		if err != nil {
+			return nil, fmt.Errorf("获取播放凭证失败: %w", err)
+		}
+		request.Header.Set(header, value)
+		authorization = header
+	}
 	response, err := d.mediaRequestRefererless(client, request)
+	if err == nil && authorizer != nil && authorization != "" && response.StatusCode == http.StatusUnauthorized {
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		response.Body.Close()
+		if readErr == nil && catalogResponseBlockReason(response, body) == "" {
+			authorizer.RejectMediaAuthorization(request.URL, request.Header.Get(authorization))
+			reHeader, reValue, authErr := authorizer.ModuleMediaAuthorization(request.Context(), d.host(), request.URL.String(), request.Header.Get("Referer"))
+			if authErr == nil {
+				request.Header.Set(reHeader, reValue)
+				response, err = d.mediaRequestRefererless(client, request)
+			} else {
+				err = authErr
+			}
+		} else {
+			response.Body = io.NopCloser(bytes.NewReader(body))
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	if d.limiter != nil {
-		d.limiter.observe(request, response)
+		d.limiter.observeMedia(request, response)
 	}
 	observeSourceResponse(request.Context(), response)
 	return response, nil
+}
+
+// mediaAuthorizer 找到愿意为这个媒体地址签发凭证的模块站源；没有则返回 nil。
+func (d *Downloader) mediaAuthorizer(address *url.URL) moduleMediaAuthorizer {
+	if address == nil {
+		return nil
+	}
+	for _, entry := range provider.All() {
+		if !provider.AllSourcesEnabled() && entry.Spec().RequiresAllSources {
+			continue
+		}
+		if authorizer, ok := moduleCapabilityProvider(entry.Spec().ID).(moduleMediaAuthorizer); ok && authorizer.AuthorizesMedia(address) {
+			return authorizer
+		}
+	}
+	return nil
 }
 
 // mediaRequestRefererless retries once without the Referer header when the

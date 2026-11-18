@@ -21,10 +21,9 @@ void main() {
     SharedPreferences.setMockInitialValues({'source': 'huangdou'});
     final store = LocalStore(await SharedPreferences.getInstance());
     expect(appSlug, allSourcesEnabled ? 'zhenguojian' : 'hongguojian');
-    // 青空源需登录默认关闭（2026-10-30），全源默认可见数减一。
-    // 默认可见增量：韩小圈（视频类，上游移植）与云追 yunzhui（2026-11-15 新增）
-    // 都不属受限名单；黑桃/禁果短剧/笔盒归受限（黄果类/成人类），默认关闭。
-    expect(store.sources.length, allSourcesEnabled ? 21 : 1);
+    // 默认只启用红果 + 真果·鉴两个核心源（其余按需在站源管理开启），
+    // 全源变体下默认可见数为 2；单源变体只有红果 1 个。
+    expect(store.sources.length, allSourcesEnabled ? 2 : 1);
     expect(
       SourceSite.values.any((source) => source.id == 'dsd'),
       isFalse,

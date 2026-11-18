@@ -115,6 +115,34 @@ func migrateNativeDrama(drama nativeDrama) nativeDrama {
 	return drama
 }
 
+// invalidateSourceCatalog 清掉某站源的全部目录缓存（基础键 + 分类/排序派生键）、
+// 游标状态与分类选项，并交给合并窗落盘。清掉 catalogs 条目后 nativeCached 的
+// Fresh 判定因 len(items)==0 变 false，首页/目录页下次读取会触发重新联网。
+//
+// 站源模块升级后 provider 换成新实现（换域/换解析），但剧库里还是旧模块时代
+// 的数据；不清缓存的话首页会一直命中 fresh 快照，表现为「更新完不刷新」。
+func (engine *nativeEngine) invalidateSourceCatalog(source string) {
+	source = canonicalProviderSource(source)
+	if source == "" {
+		return
+	}
+	engine.ensureLoaded()
+	engine.mu.Lock()
+	prefix := source + "|"
+	for key := range engine.catalogs {
+		if key == source || strings.HasPrefix(key, prefix) {
+			delete(engine.catalogs, key)
+			delete(engine.catalogStates, key)
+		}
+	}
+	delete(engine.catalogStates, source)
+	if engine.categoryOptions != nil {
+		delete(engine.categoryOptions, source)
+	}
+	_ = engine.deferCatalogDiskWriteLocked(source)
+	engine.mu.Unlock()
+}
+
 func (engine *nativeEngine) nativeCached(source string) nativeCatalogResult {
 	source = canonicalProviderSource(source)
 	engine.ensureLoaded()
@@ -194,6 +222,21 @@ func mergeNativeDrama(previous, fresh nativeDrama) nativeDrama {
 	if fresh.OnlineDate == "" {
 		fresh.OnlineDate = previous.OnlineDate
 	}
+	// 目录页已带、详情源未必回吐的筛选/排序字段必须回填：否则详情合并
+	// 会把 Area/Year/Score/Duration 覆盖成空，地区年份筛选与时长排序失效。
+	// Dart 侧 Drama.merge 同样保留这四个字段，两端口径一致。
+	if fresh.Area == "" {
+		fresh.Area = previous.Area
+	}
+	if fresh.Year == "" {
+		fresh.Year = previous.Year
+	}
+	if fresh.Score == "" {
+		fresh.Score = previous.Score
+	}
+	if fresh.Duration == 0 {
+		fresh.Duration = previous.Duration
+	}
 	if len(fresh.Tags) == 0 {
 		fresh.Tags = previous.Tags
 	}
@@ -202,6 +245,9 @@ func mergeNativeDrama(previous, fresh nativeDrama) nativeDrama {
 	}
 	if fresh.ReleaseStatus == "" || fresh.ReleaseStatus == "unknown" {
 		fresh.ReleaseStatus = previous.ReleaseStatus
+	}
+	if fresh.ContentKind == "" {
+		fresh.ContentKind = previous.ContentKind
 	}
 	return fresh
 }

@@ -158,6 +158,11 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 	client.mu.Lock()
 	base := client.baseURL
 	client.mu.Unlock()
+	// 取流走独立的播放域名与 V5 签名（与目录/详情接口是两套体系）。
+	playback := path == hongguoPlaybackPath
+	if playback {
+		base = hongguoPlaybackBaseURL
+	}
 	deviceID, installID, _ := client.device(helper)
 	query := hongguoAppQuery(deviceID, installID)
 	for key, values := range extra {
@@ -216,14 +221,35 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 				return nil, ctx.Err()
 			}
 		}
-		request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+path, bytes.NewReader(body))
+		requestURL := strings.TrimRight(base, "/") + path
+		var playbackHeaders map[string]string
+		if playback {
+			// 取流走 V5 签名（X-Khronos/X-Helios/X-Medusa）：需先挑一个让 IV
+			// 低 4 位为 12 的 _rticket，签名会连同 query 一起重写。
+			signedURL, headers, signErr := signHongguoPlaybackV5(requestURL, hongguoPlaybackV5Query(deviceID, installID), body, time.Now().UnixMilli())
+			if signErr != nil {
+				lastErr = signErr
+				continue
+			}
+			requestURL = signedURL
+			playbackHeaders = headers
+		}
+		request, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
-		request.Header.Set("User-Agent", hongguoAppUserAgent)
-		request.Header.Set("Accept", "application/json")
-		request.Header.Set("X-XS-From-Web", "0")
-		request.Header.Set("Sdk-Version", "2")
+		if playback {
+			for key, value := range playbackHeaders {
+				request.Header.Set(key, value)
+			}
+			request.Header.Set("User-Agent", hongguoPlaybackUserAgent)
+			request.Header.Set("Accept", "application/json")
+		} else {
+			request.Header.Set("User-Agent", hongguoAppUserAgent)
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set("X-XS-From-Web", "0")
+			request.Header.Set("Sdk-Version", "2")
+		}
 		var commentNonce hongguoCommentNonce
 		if comment {
 			commentNonce, err = newHongguoCommentNonce()
@@ -237,6 +263,10 @@ func (downloader *Downloader) hongguoAppRequest(ctx context.Context, method, pat
 			request.Header.Set("Content-Type", "application/json; charset=utf-8")
 		}
 		response, err := downloader.doPreparedCatalogRequest(request, 20*time.Second, func(prepared *http.Request) {
+			if playback {
+				// V5 签名已在建请求时完成（query 与全部签名头都就位）。
+				return
+			}
 			now := time.Now()
 			query.Set("_rticket", strconv.FormatInt(now.UnixMilli(), 10))
 			prepared.URL.RawQuery = query.Encode()

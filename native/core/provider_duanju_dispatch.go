@@ -32,7 +32,13 @@ func (d *Downloader) fetchDuanjuCatalogPage(ctx context.Context, source string, 
 	case "", "source":
 	default:
 		if sorted, sorted_ok := cataloguer.(provider.CatalogSorter); sorted_ok {
-			return sorted.CatalogPageSorted(ctx, d.host(), page, category, sort)
+			items, more, err := sorted.CatalogPageSorted(ctx, d.host(), page, category, sort)
+			if err == nil {
+				return items, more, nil
+			}
+			// 模块没覆盖该排序/该分类时回落源站顺序，而不是把错误抛给上层：
+			// nativeCatalog 重试同一函数只会再失败一次，整页变成空白+报错。
+			// 客户端 sortCatalog 仍会兜底排序。
 		}
 	}
 	return cataloguer.CatalogPage(ctx, d.host(), page, category, "")
@@ -48,25 +54,37 @@ func (d *Downloader) fetchDuanjuDetail(ctx context.Context, source, sourceID str
 }
 
 func (d *Downloader) searchDuanju(ctx context.Context, source, query string) ([]Drama, error) {
-	items, _, err := d.searchDuanjuPage(ctx, source, query, 1)
+	items, _, _, err := d.searchDuanjuPage(ctx, source, query, 1)
 	return items, err
 }
 
 // searchDuanjuPage 让在线搜索与目录共用 page/hasMore 语义。实现
 // PagedSearcher 的源（maccms 视频源）按页拉取；只实现 Searcher 的源
 // 仍是单页结果，hasMore=false，不会每次上拉都重复第一页。
-func (d *Downloader) searchDuanjuPage(ctx context.Context, source, query string, page int) ([]Drama, bool, error) {
+// warning 是源站部分失败时的说明（实现 WarningSearcher 的源才会给）。
+func (d *Downloader) searchDuanjuPage(ctx context.Context, source, query string, page int) ([]Drama, bool, string, error) {
 	source = canonicalProviderSource(source)
 	entry := duanjuSourceFor(d, source)
+	if warn, ok := entry.(provider.WarningSearcher); ok {
+		items, more, warning, err := warn.SearchPageWithWarning(ctx, d.host(), query, page)
+		// 模块只导出 search、没导出 searchWithWarning 时，这一层会回
+		// errModuleCapabilityUnsupported。必须继续往下回落普通分页搜索，
+		// 否则 maccms 系模块（影视工厂/360/魔都/电影天堂…）的搜索会被
+		// 静默判死——表现就是「搜索只剩真果·鉴」。
+		if !errors.Is(err, errModuleCapabilityUnsupported) {
+			return items, more, warning, err
+		}
+	}
 	if paged, ok := entry.(provider.PagedSearcher); ok {
-		return paged.SearchPage(ctx, d.host(), query, page)
+		items, more, err := paged.SearchPage(ctx, d.host(), query, page)
+		return items, more, "", err
 	}
 	searcher, ok := entry.(provider.Searcher)
 	if !ok {
-		return nil, false, errors.New("该站源不支持在线搜索")
+		return nil, false, "", errors.New("该站源不支持在线搜索")
 	}
 	items, err := searcher.Search(ctx, d.host(), query)
-	return items, false, err
+	return items, false, "", err
 }
 
 func duanjuSupportsSearch(source string) bool {
@@ -101,10 +119,11 @@ func (d *Downloader) resolveDuanjuMedia(ctx context.Context, task Task) (provide
 	// 独立包站源自带播放解析（provider.MediaResolver），优先走注册表。
 	if resolver, ok := duanjuSourceFor(d, source).(provider.MediaResolver); ok {
 		media, err := resolver.ResolveMedia(ctx, d.host(), task)
-		if err != nil {
-			return providerMedia{}, err
+		if err == nil {
+			return providerMediaFromResolved(media), nil
 		}
-		return providerMediaFromResolved(media), nil
+		// 模块取流失败（只覆盖部分线路 / 站点改版）时继续走下面的内置
+		// 「详情刷新 + 播放页解析」兜底，不要直接判死整条播放。
 	}
 	name := duanjuSourceName(source)
 	base := d.duanjuBaseURL(source)

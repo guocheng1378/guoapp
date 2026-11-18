@@ -38,6 +38,7 @@ class AppIcons {
   static const String search = 'search';
   static const String searchOff = 'search-off';
   static const String explore = 'explore';
+  static const String leaderboard = 'leaderboard';
   static const String fiberNew = 'new-badge';
   static const String autoAwesome = 'auto-awesome';
 

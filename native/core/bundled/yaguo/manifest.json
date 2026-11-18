@@ -1,0 +1,15 @@
+{
+  "id": "yaguo",
+  "name": "芽果",
+  "version": "1.0.1",
+  "category": "shortDrama",
+  "description": "短剧 · 分类搜索 · 直链分集",
+  "runtime": "js",
+  "api": 1,
+  "hosts": ["app.whjzjx.cn", "u.shytkjgs.com"],
+  "capabilities": ["catalog", "detail", "search"],
+  "aliases": ["yaguo", "xingya", "星芽", "app.whjzjx.cn"],
+  "baseUrl": "https://app.whjzjx.cn",
+  "referer": "https://app.whjzjx.cn/",
+  "requiresAllSources": true
+}

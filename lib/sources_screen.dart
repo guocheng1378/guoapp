@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'core_bridge.dart';
 import 'custom_sources.dart';
 import 'error_text.dart';
+import 'live_sources_pane.dart';
 import 'floating_card.dart';
 import 'folme.dart';
 import 'glass.dart';
@@ -23,17 +24,25 @@ String sourceTimestamp(DateTime? value) {
   return '${local.month}/${local.day} ${two(local.hour)}:${two(local.minute)}';
 }
 
+/// 站源页的视图：
+/// - [all]：站源管理——模块源与自定义源合并一页，加源/导入/开关/检测都在这里；
+/// - [custom]：只看用户自建源（兼容旧入口）；
+/// - [builtin]：只管直播源与 TVBox 导入（站源列表已移到 [all]）。
+enum SourcesScreenMode { builtin, custom, all }
+
 class SourcesScreen extends StatefulWidget {
   const SourcesScreen({
     super.key,
     required this.repository,
     required this.store,
+    this.mode = SourcesScreenMode.builtin,
     this.initialSource,
     this.drama,
   });
 
   final AppRepository repository;
   final LocalStore store;
+  final SourcesScreenMode mode;
   final String? initialSource;
   final Drama? drama;
 
@@ -48,6 +57,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
   final _revisions = <String, int>{};
   final _expandedHealth = <String>{};
   final _expandedCategories = <String>{};
+  // 自定义直播源分区默认展开（与站源分类的默认收起不同，便于一眼看到）。
+  bool _liveExpanded = true;
   Timer? _timer;
   bool _polling = false;
   bool _bulk = false;
@@ -84,17 +95,30 @@ class _SourcesScreenState extends State<SourcesScreen> {
     super.dispose();
   }
 
+  bool get _customMode => widget.mode == SourcesScreenMode.custom;
+  bool get _allMode => widget.mode == SourcesScreenMode.all;
+  // builtin 现在只承载直播 + TVBox，不再列站源。
+  bool get _liveOnly => widget.mode == SourcesScreenMode.builtin;
+
+  /// 当前视图可见的站源：[all] 显示模块源 + 自定义源；[custom] 只看自建源；
+  /// [builtin] 不列站源（只直播/TVBox）。都延续「未解锁隐藏黄果类/成人类」。
+  List<SourceSite> visibleSources() {
+    if (_liveOnly) return const [];
+    return widget.store.permittedSources.where((source) {
+      final isCustom = source.id.startsWith('custom-');
+      if (_customMode && !isCustom) return false;
+      return widget.store.restrictedUnlocked ||
+          !(source.inHuangguoCategory || source.isAdultSource);
+    }).toList();
+  }
+
   Future<void> _refresh() async {
     if (_polling) return;
     _polling = true;
     final epoch = widget.store.profileEpoch;
     try {
       await Future.wait([
-        for (final source in widget.store.permittedSources.where(
-          (source) =>
-              widget.store.restrictedUnlocked ||
-              !(source.inHuangguoCategory || source.isAdultSource),
-        ))
+        for (final source in visibleSources())
           (() async {
             final revision = _revisions[source.id] ?? 0;
             try {
@@ -216,13 +240,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
   /// 一键开启/关闭当前用户可见的全部站源：一次验证密码、一次提交。
   Future<void> _setAll(bool enabled) async {
     if (_bulk) return;
-    final sources = widget.store.permittedSources
-        .where(
-          (source) =>
-              widget.store.restrictedUnlocked ||
-              !(source.inHuangguoCategory || source.isAdultSource),
-        )
-        .toList();
+    final sources = visibleSources();
     if (sources.isEmpty) return;
     setState(() {
       _bulk = true;
@@ -435,14 +453,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.store,
     builder: (context, _) {
-      final unlocked = widget.store.restrictedUnlocked;
-      final sources = widget.store.permittedSources
-        .where(
-          (source) =>
-              unlocked ||
-              !(source.inHuangguoCategory || source.isAdultSource),
-        )
-        .toList()
+      final sources = visibleSources()
         ..sort((a, b) {
           final aFirst = a.id == widget.initialSource ? 0 : 1;
           final bFirst = b.id == widget.initialSource ? 0 : 1;
@@ -456,23 +467,30 @@ class _SourcesScreenState extends State<SourcesScreen> {
       return Scaffold(
         appBar: AppBar(
           flexibleSpace: const TopFog(),
-          title: const Text('站源管理'),
+          title: Text(switch (widget.mode) {
+            SourcesScreenMode.custom => '自定义站源',
+            SourcesScreenMode.all => '站源管理',
+            SourcesScreenMode.builtin => '直播与 TVBox',
+          }),
           actions: [
-            if (widget.store.profile.admin) ...[
+            if ((_customMode || _allMode) && widget.store.profile.admin)
               IconButton(
                 key: const ValueKey('sources-add-custom'),
                 tooltip: '添加自定义站源',
                 onPressed: _showAddCustomDialog,
                 icon: AppIcon(AppIcons.add),
               ),
+            // TVBox 导入在所有模式下都保留（含「直播与 TVBox」页）。
+            if (widget.store.profile.admin)
               IconButton(
                 key: const ValueKey('sources-import-tvbox'),
                 tooltip: '导入 TVBox 配置（站源 + 直播源）',
                 onPressed: _importTvbox,
                 icon: AppIcon(AppIcons.cloudDownload),
               ),
-            ],
-            if (widget.store.profile.admin && sources.isNotEmpty) ...[
+            if ((_allMode || _customMode) &&
+                widget.store.profile.admin &&
+                sources.isNotEmpty) ...[
               IconButton(
                 key: const ValueKey('sources-enable-all'),
                 tooltip: '一键开启全部（受限站源需要管理员密码）',
@@ -499,18 +517,30 @@ class _SourcesScreenState extends State<SourcesScreen> {
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 16),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
                     child: Text(
-                      '各站源可分别更新和检测。更新会查找新剧、继续加载一页历史内容，并分批补齐资料；离开此页后任务继续。',
+                      _liveOnly
+                          ? '这里管理自填直播源与 TVBox 导入；内置直播频道在首页「电视直播」查看。'
+                          : '模块源与自定义站源的开关、更新、检测，以及直播订阅与 TVBox 导入都在这里。',
                     ),
                   ),
-                  if (sources.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('当前用户没有可用站源'),
+                  if (_liveOnly && widget.store.profile.admin)
+                    ListTile(
+                      key: const ValueKey('sources-import-tvbox-tile'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.cloud_download_outlined),
+                      title: const Text('导入 TVBox 配置'),
+                      subtitle: const Text('从 TVBox 配置地址或本地文件导入站源与直播订阅'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: _importTvbox,
                     ),
-                  ..._categorizedSources(sources),
+                  if (!_liveOnly) ...[
+                    if (sources.isEmpty) _emptyState(_customMode),
+                    ..._categorizedSources(sources),
+                    const Divider(height: 24),
+                  ],
+                  _liveSourcesSection(theme: Theme.of(context)),
                 ],
               ),
             ),
@@ -520,6 +550,56 @@ class _SourcesScreenState extends State<SourcesScreen> {
     },
   );
 
+  /// 空态：自定义站源页给图标 + 引导按钮（原来只有孤零零一行文字）。
+  Widget _emptyState(bool customMode) {
+    final theme = Theme.of(context);
+    final canAdd = customMode && widget.store.profile.admin;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+      child: Column(
+        children: [
+          Icon(
+            customMode ? Icons.playlist_add : Icons.dns_outlined,
+            size: 48,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            customMode ? '还没有添加自定义站源' : '当前用户没有可用内置源',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            customMode
+                ? '填 maccms 站点根地址即可添加；也支持直接导入 TVBox 配置。'
+                : '请联系管理员为当前用户开放内置站源。',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (canAdd) ...[
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              key: const ValueKey('custom-source-empty-add'),
+              onPressed: _showAddCustomDialog,
+              icon: const Icon(Icons.add),
+              label: const Text('添加站源'),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              key: const ValueKey('custom-source-empty-import'),
+              onPressed: _importTvbox,
+              icon: const Icon(Icons.cloud_download_outlined),
+              label: const Text('导入 TVBox 配置'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// 站源归属的分类 id（与 _categorizedSources 的分区一致）。
   String _categoryIdOf(SourceSite site) {
     if (site.inHuangguoCategory) return 'huangguo';
@@ -527,6 +607,37 @@ class _SourcesScreenState extends State<SourcesScreen> {
     if (site.isLocalSource) return 'local';
     if (site.isShortDrama) return 'short';
     return 'video';
+  }
+
+  /// 自定义直播源分区：与独立「直播源管理」页共用同一份面板逻辑，
+  /// 让「内置站源」页一处管全（TVBox 站源 + 自填直播源）。
+  Widget _liveSourcesSection({required ThemeData theme}) {
+    const sectionId = 'live-sources';
+    final expanded = _liveExpanded;
+    final count = widget.store.liveSourceEntries.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          key: const ValueKey('category-toggle-$sectionId'),
+          onTap: () => setState(() => _liveExpanded = !_liveExpanded),
+          borderRadius: BorderRadius.circular(8),
+          child: _categoryHeader(
+            '自定义直播源',
+            count,
+            const Icon(Icons.live_tv, size: 20),
+            '自填 m3u/txt 订阅 · 与内置直播合并',
+            expanded: expanded,
+          ),
+        ),
+        if (expanded)
+          LiveSourcesPane(
+            store: widget.store,
+            repository: widget.repository,
+            compact: true,
+          ),
+      ],
+    );
   }
 
   List<Widget> _categorizedSources(List<SourceSite> sources) {
@@ -716,6 +827,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
       return Card(
         key: ValueKey('source-${source.id}'),
         margin: const EdgeInsets.only(bottom: 16),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: colors.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -746,6 +864,13 @@ class _SourcesScreenState extends State<SourcesScreen> {
     return Card(
       key: ValueKey('source-${source.id}'),
       margin: const EdgeInsets.only(bottom: 16),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: colors.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -988,6 +1113,9 @@ class SourceDiagnosticsButton extends StatelessWidget {
         builder: (_) => SourcesScreen(
           repository: repository,
           store: store,
+          // 播放失败后的「站源诊断」要看的是站点卡片与检测按钮；SourcesScreen
+          // 默认 builtin 只管直播/TVBox、不列站源，漏传 mode 会点开空白页。
+          mode: SourcesScreenMode.all,
           initialSource: drama.source,
           drama: drama,
         ),

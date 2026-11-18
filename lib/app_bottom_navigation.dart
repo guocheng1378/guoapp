@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'glass.dart';
 import 'soft_glass.dart';
+import 'ui_scale.dart';
 
 /// 悬浮玻璃胶囊底栏：整条是未选态白玻璃胶囊（分类条 pill 材质），
 /// 内部每枚导航项等宽分布，选中态以选中态深/白玻璃小胶囊高亮
@@ -82,6 +83,9 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 按钮尺寸跟随界面缩放（clamp 0.9~1.1）：只缩文字会让底栏图标/内边距
+    // 显得突兀，整条缩一点观感才统一。
+    final factor = UiScale.buttonFactor(context);
     return Material(
       type: MaterialType.transparency,
       child: InkWell(
@@ -104,15 +108,15 @@ class _Pill extends StatelessWidget {
                 : Colors.transparent,
             decorative: selected,
             padding: EdgeInsets.symmetric(
-              horizontal: 10,
-              vertical: compact ? 7 : 14,
+              horizontal: 10 * factor,
+              vertical: (compact ? 7 : 14) * factor,
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconTheme(
                   data: IconThemeData(
-                    size: compact ? 18 : 21,
+                    size: (compact ? 18 : 21) * factor,
                     color: selected
                         ? GlassChipTokens.onSelected(dark)
                         : colors.onSurfaceVariant,
@@ -121,7 +125,7 @@ class _Pill extends StatelessWidget {
                       ? (destination.selectedIcon ?? destination.icon)
                       : destination.icon,
                 ),
-                SizedBox(width: compact ? 4 : 6),
+                SizedBox(width: (compact ? 4 : 6) * factor),
                 Flexible(
                   child: Text(
                     destination.label,

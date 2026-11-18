@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_build.dart';
+import '../bug_report.dart' show kFeedbackSiteUrl;
 import '../glass.dart';
+import '../remote_notice.dart' show openRemoteNoticeLink;
 import 'license.dart';
 import 'license_codec.dart';
 import 'qq_launch.dart';
@@ -181,9 +183,39 @@ class _ActivationScreenState extends State<ActivationScreen> {
     );
   }
 
-  /// 卖家联系方式卡片（[kSellerContact] 为空时不占位）。
+  /// 打开网页反馈区；无浏览器时降级为复制链接。
+  Future<void> _openFeedbackSite() async {
+    if (await openRemoteNoticeLink(kFeedbackSiteUrl)) return;
+    await Clipboard.setData(const ClipboardData(text: kFeedbackSiteUrl));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已复制反馈区链接，可粘贴到浏览器打开')),
+    );
+  }
+
+  /// 卖家联系方式 / 网页反馈区卡片。
+  /// 联系方式为空时仍显示反馈网页入口：购码、续费、换机都在那里办。
   Widget _buildContactCard(ThemeData theme) {
-    if (widget.sellerContact.isEmpty) return const SizedBox.shrink();
+    if (widget.sellerContact.isEmpty) {
+      return Card(
+        child: ListTile(
+          key: const ValueKey('activation-feedback-site'),
+          onTap: _openFeedbackSite,
+          leading: Icon(
+            Icons.forum_outlined,
+            color: theme.colorScheme.primary,
+          ),
+          title: const Text('网页反馈区'),
+          subtitle: Text(
+            kSellerContactHint,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          trailing: const Icon(Icons.open_in_new, size: 18),
+        ),
+      );
+    }
     return Card(
       child: ListTile(
         onTap: _openOrCopyContact,

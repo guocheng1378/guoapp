@@ -18,6 +18,26 @@ func (engine *nativeEngine) nativeExtraMetadata(ctx context.Context, drama nativ
 	if !valid {
 		return drama, errors.New("剧集信息无效")
 	}
+	// 模块站源：由模块补充元数据（模块没提供则回退内置实现）。
+	if metadata, ok := moduleCapabilityProvider(source).(moduleMetadataProvider); ok {
+		needed, neededErr := metadata.ModuleNeedsExtraMetadata(ctx, engine.downloader.host(), providerDramaFromNative(drama))
+		if errors.Is(neededErr, errModuleCapabilityUnsupported) {
+			// 模块只导出 extraMetadata、没导出 needsExtraMetadata：直接尝试
+			// 补充，否则这条链路永远走不到 extraMetadata（上线日期/评分丢失）。
+			needed = true
+		} else if neededErr != nil {
+			return drama, neededErr
+		}
+		if needed {
+			patch, patchErr := metadata.ModuleExtraMetadata(ctx, engine.downloader.host(), providerDramaFromNative(drama), id)
+			if !errors.Is(patchErr, errModuleCapabilityUnsupported) {
+				if patchErr != nil {
+					return drama, patchErr
+				}
+				return mergeNativeDrama(drama, nativeNormalize(patch)), nil
+			}
+		}
+	}
 	if !nativeNeedsExtraMetadata(drama) {
 		return drama, nil
 	}

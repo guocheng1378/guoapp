@@ -12,19 +12,57 @@ import (
 	"time"
 )
 
+// resolveHongguoAppMedia 取流。主设备失败后换辅助设备再试一次——与上游
+// appMedia 的 [false, true] 轮换一致：红果网关按 device_id 分桶，主设备
+// 落进坏桶时表现为连续空包，换独立设备号往往能立刻取到流。
 func (downloader *Downloader) resolveHongguoAppMedia(ctx context.Context, videoID string) (providerMedia, error) {
+	media, err := downloader.resolveHongguoAppMediaDevice(ctx, videoID, false)
+	if err == nil || !hongguoNumericID.MatchString(videoID) {
+		return media, err
+	}
+	if helperMedia, helperErr := downloader.resolveHongguoAppMediaDevice(ctx, videoID, true); helperErr == nil {
+		return helperMedia, nil
+	}
+	return media, err
+}
+
+func (downloader *Downloader) resolveHongguoAppMediaDevice(ctx context.Context, videoID string, helper bool) (providerMedia, error) {
 	if !hongguoNumericID.MatchString(videoID) {
 		return providerMedia{}, errors.New("红果视频 ID 无效")
 	}
-	payload := map[string]any{
-		"video_id": videoID, "content_type": 1,
-		"biz_param": map[string]any{"need_all_video_definition": true, "video_platform": 3},
+	if helper {
+		ctx = context.WithValue(ctx, hongguoHelperDeviceKey{}, true)
 	}
-	result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/novel/player/video_model/v1/", nil, payload)
+	// 上游 2.0.1 起取流接口换成 multi_video_model，请求体也从
+	// video_id/content_type 改成 mixed_video_id_map + dr_scene；
+	// 旧的 video_model/v1/ 只会返回 HTTP 200 空包。
+	payload := map[string]any{
+		"biz_param": map[string]any{
+			"detail_page_version": 0, "device_level": 3,
+			"disable_digg_stat": false, "disable_video_relate_book": false,
+			"need_all_video_definition": true, "need_mp4_align": false,
+			"use_os_player": false, "use_server_dns": false, "video_platform": 1024,
+		},
+		"mixed_video_id_map": map[string]any{"1004": []any{videoID}},
+		"dr_scene":           "player",
+	}
+	result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, hongguoPlaybackPath, nil, payload)
 	if err != nil {
 		return providerMedia{}, err
 	}
-	model, err := hongguoVideoModel(nestedMap(result, "data"))
+	// 响应形态：data["1004"][videoId]（多视频映射），或 data[videoId]。
+	entries := nestedMap(result, "data")
+	data := entries
+	if bucket, ok := entries["1004"].(map[string]any); ok {
+		data = bucket
+	}
+	if row, ok := data[videoID].(map[string]any); ok {
+		data = row
+	}
+	if len(data) == 0 {
+		return providerMedia{}, errors.New("红果 App 未返回所请求的分集播放信息")
+	}
+	model, err := hongguoVideoModel(data)
 	if err != nil {
 		return providerMedia{}, err
 	}

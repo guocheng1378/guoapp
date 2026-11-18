@@ -3,9 +3,7 @@ package core
 import (
 	"context"
 	"duanjuapp/native/provider"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,8 +39,9 @@ func TestDuanjuRegistryKeepsDistinctIdentitiesFromExistingSources(t *testing.T) 
 			real = append(real, spec)
 		}
 	}
-	if len(real) != 36 {
-		t.Fatalf("duanju catalog should register 36 sources, got %d", len(real))
+	// 2026-11-18 移除青空（sorani）后由 36 减为 35。
+	if len(real) != 35 {
+		t.Fatalf("duanju catalog should register 35 sources, got %d", len(real))
 	}
 	for _, spec := range real {
 		if seen[spec.ID] {
@@ -134,9 +133,12 @@ func TestDuanjuSearchPagePassesPageToMaccmsAPI(t *testing.T) {
 	})
 	d.providerHosts[sourceYingshigongchang] = server.URL
 
-	items, more, err := d.searchDuanjuPage(context.Background(), sourceYingshigongchang, "样本", 2)
+	items, more, warning, err := d.searchDuanjuPage(context.Background(), sourceYingshigongchang, "样本", 2)
 	if err != nil {
 		t.Fatalf("分页搜索失败: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("普通分页搜索不应带警告：%q", warning)
 	}
 	if got.Get("wd") != "样本" || got.Get("pg") != "2" {
 		t.Fatalf("搜索参数应携带 wd 与 pg=2: %v", got)
@@ -242,56 +244,8 @@ func TestDuanjuMaccmsAPIFallsBackToPageLinesWhenNoDirectMedia(t *testing.T) {
 	}
 }
 
-func TestDuanjuSoraniParsesCatalogDetailAndSearch(t *testing.T) {
-	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(request.URL.Path, "/video/search"):
-			if request.URL.Query().Get("keyword") != "都市" {
-				t.Errorf("sorani search lost its keyword: %s", request.URL.RawQuery)
-			}
-			_, _ = writer.Write([]byte(`{"code":200,"data":{"records":[{"id":"777","title":"搜索样本","cover":"https://pic.example.cn/b.jpg","episodeCount":9,"categoryName":"番剧"}]}}`))
-		case strings.Contains(request.URL.Path, "/video/"):
-			_, _ = writer.Write([]byte(`{"code":200,"data":{"id":"9001","title":"青空样本","summary":"简介内容","cover":"https://pic.example.cn/a.jpg","episodeCount":2,"categoryName":"番剧","episodes":[{"episodeId":"11","episodeOrder":1},{"episodeId":"12","episodeOrder":2}]}}`))
-		default:
-			_, _ = writer.Write([]byte(`{"code":200,"data":{"total":30,"records":[{"id":"9001","title":"青空样本","summary":"简介内容","cover":"https://pic.example.cn/a.jpg","episodeCount":2,"categoryName":"番剧","tags":["剧情"]}]}}`))
-		}
-	})
-	d.cfg.SoraniAPIURL = server.URL
-
-	items, more, err := d.fetchDuanjuCatalogPage(context.Background(), sourceSorani, 1, "", "")
-	if err != nil || len(items) != 1 || !more {
-		t.Fatalf("sorani catalog failed: %+v %v", items, err)
-	}
-	if items[0].ID != "sorani:9001" || items[0].Source != sourceSorani || items[0].ChannelName != "青空" {
-		t.Fatalf("sorani catalog identity is wrong: %+v", items[0])
-	}
-	if items[0].DisplayTitle() != "青空样本" || items[0].Intro != "简介内容" || items[0].EpisodeCount != json.Number("2") {
-		t.Fatalf("sorani catalog metadata is wrong: %+v", items[0])
-	}
-
-	drama, chapters, err := d.fetchDuanjuDetail(context.Background(), sourceSorani, "9001")
-	if err != nil || len(chapters) != 2 {
-		t.Fatalf("sorani detail failed: %+v %v", chapters, err)
-	}
-	if drama.ID != "sorani:9001" {
-		t.Fatalf("sorani detail identity is wrong: %+v", drama)
-	}
-	if chapters[0].ID != "sorani:9001:11" || chapters[0].VideoURL != "sorani-play://11" || chapters[1].VideoURL != "sorani-play://12" {
-		t.Fatalf("sorani chapters must defer media resolution: %+v", chapters[0])
-	}
-	if got := chapters[0].EpisodeString(1); got != "1" {
-		t.Fatalf("sorani episode number is wrong: %q", got)
-	}
-
-	found, err := d.searchDuanju(context.Background(), sourceSorani, "都市")
-	if err != nil || len(found) != 1 || found[0].ID != "sorani:777" {
-		t.Fatalf("sorani search failed: %+v %v", found, err)
-	}
-}
-
 func TestDuanjuSearchSupportMatchesReferenceScripts(t *testing.T) {
-	supported := []string{sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceHongniu, sourceSorani, sourceDongpiandi}
+	supported := []string{sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceHongniu, sourceDongpiandi}
 	for _, source := range supported {
 		if !duanjuSupportsSearch(source) {
 			t.Fatalf("%s should support online search", source)
@@ -309,7 +263,7 @@ func TestDuanjuSearchSupportMatchesReferenceScripts(t *testing.T) {
 		t.Fatal("duanju search support leaked onto an existing source")
 	}
 	for _, source := range []string{sourceYaguo, sourceHuaguo, sourceWangguo, sourceFaguo, sourceWuguo,
-		sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceShandian, sourceHongniu, sourceNiuniu, sourceWsyzy, sourceSorani, sourceDongpiandi} {
+		sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceShandian, sourceHongniu, sourceNiuniu, sourceWsyzy, sourceDongpiandi} {
 		if !duanjuSupportsPaging(source) {
 			t.Fatalf("%s should support paging", source)
 		}
@@ -359,7 +313,7 @@ func TestDuanjuSourceAvailabilityFollowsBuildVariant(t *testing.T) {
 		t.Fatal("hongguo-only build must not expose duanju sources")
 	}
 	buildAllSources = "true"
-	if !nativeSourceAvailable(sourceYingshigongchang) || !nativeSourceAvailable(sourceSorani) {
+	if !nativeSourceAvailable(sourceYingshigongchang) {
 		t.Fatal("all-sources build must expose duanju sources")
 	}
 	buildAllSources = previous
@@ -383,7 +337,7 @@ func TestDuanjuMaccmsAPIEmptyDetailIsReportedAsUpstream(t *testing.T) {
 func TestDuanjuSearchCoverageMatchesImplementedSources(t *testing.T) {
 	for _, source := range []string{sourceYaguo, sourceMaoguo, sourceFanguo, sourceHeguo, sourceXingguo,
 		sourceHuaguo, sourceWangguo, sourceFaguo, sourceWuguo,
-		sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceHongniu, sourceSorani, sourceDongpiandi} {
+		sourceYingshigongchang, source360zy, sourceModu, sourceDytt, sourceHongniu, sourceDongpiandi} {
 		if !duanjuSupportsSearch(source) {
 			t.Fatalf("%s should report search support", source)
 		}
@@ -398,65 +352,6 @@ func TestDuanjuSearchCoverageMatchesImplementedSources(t *testing.T) {
 	}
 }
 
-func TestDuanjuHeguoSearchBuildsDocumentedRequest(t *testing.T) {
-	var gotPath, gotMethod, gotPName, gotBody string
-	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
-		gotPath, gotMethod, gotPName = request.URL.Path, request.Method, request.Header.Get("pname")
-		payload, _ := io.ReadAll(request.Body)
-		gotBody = string(payload)
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"retCode":0,"data":{"isMore":1,"totalSize":1,"bookList":[{"bookId":"41000131810","bookName":"雪夜逃婚","coverWap":"https://seoali.zqkanshu.com/a.jpg","totalChapterNum":"28","statusDesc":"完本"}]}}`))
-	})
-	d.providerHosts[sourceHeguo] = server.URL
-
-	items, err := d.searchDuanju(context.Background(), sourceHeguo, "都市")
-	if err != nil || len(items) != 1 {
-		t.Fatalf("heguo search failed: %+v %v", items, err)
-	}
-	if gotPath != "/seo/video/6007" || gotMethod != http.MethodPost || gotPName != "www.kuaikaw.cn" {
-		t.Fatalf("heguo search request is wrong: %s %s pname=%s", gotMethod, gotPath, gotPName)
-	}
-	var sent map[string]any
-	if json.Unmarshal([]byte(gotBody), &sent) != nil {
-		t.Fatalf("heguo search body is not json: %q", gotBody)
-	}
-	if sent["keyword"] != "都市" {
-		t.Fatalf("heguo search keyword is wrong: %v", sent)
-	}
-	if index, _ := sent["index"].(float64); int(index) != 1 {
-		t.Fatalf("heguo search index is wrong: %v", sent["index"])
-	}
-	if sourceType, _ := sent["sourceType"].(float64); int(sourceType) != 1 {
-		t.Fatalf("heguo search sourceType is wrong: %v", sent["sourceType"])
-	}
-	if items[0].Title != "雪夜逃婚" || items[0].SourceID != "41000131810" {
-		t.Fatalf("heguo search item is wrong: %+v", items[0])
-	}
-}
-
-func TestDuanjuXingguoSearchUsesKeyParameter(t *testing.T) {
-	var gotQuery url.Values
-	d, server := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {
-		gotQuery = request.URL.Query()
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"code":"0","data":{"page":1,"datalist":[{"id":"461565999316993","name":"都市联盟","icon":"http://img.novel.wsljf.xyz/a.jpg","chapterCount":38,"introduction":"简介"}]}}`))
-	})
-	d.providerHosts[sourceXingguo] = server.URL
-
-	items, err := d.searchDuanju(context.Background(), sourceXingguo, "都市")
-	if err != nil || len(items) != 1 {
-		t.Fatalf("xingguo search failed: %+v %v", items, err)
-	}
-	if gotQuery.Get("key") != "都市" {
-		t.Fatalf("xingguo search must use the key parameter, got %q", gotQuery.Encode())
-	}
-	if gotQuery.Get("token") != "202509271001001446030204698626" || gotQuery.Get("pageSize") == "" {
-		t.Fatalf("xingguo search dropped required parameters: %q", gotQuery.Encode())
-	}
-	if items[0].Title != "都市联盟" || !strings.HasPrefix(items[0].SourceID, "461565999316993") {
-		t.Fatalf("xingguo search item is wrong: %+v", items[0])
-	}
-}
 
 func TestDuanjuSearchRejectsBlankKeyword(t *testing.T) {
 	d, _ := duanjuFixtureDownloader(t, func(writer http.ResponseWriter, request *http.Request) {})

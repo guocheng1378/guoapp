@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'glass.dart';
 import 'glass_preferences.dart';
 import 'motion.dart';
+import 'pure_black_preferences.dart';
 import 'soft_glass.dart';
 
 abstract final class AppTheme {
@@ -14,6 +15,7 @@ abstract final class AppTheme {
   static ThemeData? _darkCache;
   static SoftGlassSpec? _cacheSpec;
   static bool? _cacheGlass;
+  static bool? _cachePureBlack;
 
   static ThemeData get light => _themes(Brightness.light);
   static ThemeData get dark => _themes(Brightness.dark);
@@ -21,9 +23,13 @@ abstract final class AppTheme {
   static ThemeData _themes(Brightness brightness) {
     final spec = SoftGlassStore.state.value;
     final glass = GlassPreferences.enabled.value;
-    if (_cacheSpec != spec || _cacheGlass != glass) {
+    final pureBlack = PureBlackPreferences.enabled.value;
+    if (_cacheSpec != spec ||
+        _cacheGlass != glass ||
+        _cachePureBlack != pureBlack) {
       _cacheSpec = spec;
       _cacheGlass = glass;
+      _cachePureBlack = pureBlack;
       _lightCache = _theme(Brightness.light);
       _darkCache = _theme(Brightness.dark);
     }
@@ -60,7 +66,11 @@ abstract final class AppTheme {
 
   static ThemeData _theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
-    final background = dark ? const Color(0xFF101114) : const Color(0xFFFAF8F6);
+    // 纯黑深色模式（OLED）：底色压到纯黑，容器层只保留极深灰维持层次。
+    final pure = dark && PureBlackPreferences.enabled.value;
+    final background = pure
+        ? const Color(0xFF000000)
+        : (dark ? const Color(0xFF101114) : const Color(0xFFFAF8F6));
     final scheme = ColorScheme.fromSeed(
       seedColor: const Color(0xFFFF664F),
       brightness: brightness,
@@ -73,26 +83,32 @@ abstract final class AppTheme {
           ? const Color(0xFFFFE0D8)
           : const Color(0xFF4B160D),
       tertiary: dark ? const Color(0xFFF6C86B) : const Color(0xFF805500),
-      surface: dark ? const Color(0xFF16171B) : Colors.white,
+      surface: pure
+          ? const Color(0xFF000000)
+          : (dark ? const Color(0xFF16171B) : Colors.white),
       onSurface: dark ? const Color(0xFFF2F0F4) : const Color(0xFF252328),
-      onSurfaceVariant: dark
-          ? const Color(0xFFB9B6C2)
-          : const Color(0xFF68636C),
+      onSurfaceVariant: pure
+          ? const Color(0xFFC9C6D2)
+          : (dark ? const Color(0xFFB9B6C2) : const Color(0xFF68636C)),
       outline: dark ? const Color(0xFF85818B) : const Color(0xFF7C757D),
-      outlineVariant: dark ? const Color(0xFF34343D) : const Color(0xFFE3DFDC),
-      surfaceContainerLowest: dark ? const Color(0xFF0D0E11) : Colors.white,
-      surfaceContainerLow: dark
-          ? const Color(0xFF191A20)
-          : const Color(0xFFF7F3F0),
-      surfaceContainer: dark
-          ? const Color(0xFF1E2026)
-          : const Color(0xFFF2EEEB),
-      surfaceContainerHigh: dark
-          ? const Color(0xFF25262D)
-          : const Color(0xFFEDE8E5),
-      surfaceContainerHighest: dark
-          ? const Color(0xFF30313A)
-          : const Color(0xFFE6E0DC),
+      outlineVariant: pure
+          ? const Color(0xFF2A2A32)
+          : (dark ? const Color(0xFF34343D) : const Color(0xFFE3DFDC)),
+      surfaceContainerLowest: pure
+          ? const Color(0xFF000000)
+          : (dark ? const Color(0xFF0D0E11) : Colors.white),
+      surfaceContainerLow: pure
+          ? const Color(0xFF0A0A0C)
+          : (dark ? const Color(0xFF191A20) : const Color(0xFFF7F3F0)),
+      surfaceContainer: pure
+          ? const Color(0xFF101013)
+          : (dark ? const Color(0xFF1E2026) : const Color(0xFFF2EEEB)),
+      surfaceContainerHigh: pure
+          ? const Color(0xFF16161A)
+          : (dark ? const Color(0xFF25262D) : const Color(0xFFEDE8E5)),
+      surfaceContainerHighest: pure
+          ? const Color(0xFF1C1C21)
+          : (dark ? const Color(0xFF30313A) : const Color(0xFFE6E0DC)),
       surfaceTint: Colors.transparent,
     );
     // 柔光玻璃材质：主题层挂不了 BackdropFilter，只能用「同配方底色 +
