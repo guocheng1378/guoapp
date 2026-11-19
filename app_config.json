@@ -10,10 +10,10 @@
     },
     "update": {
         "enabled": true,
-        "build": 2305,
-        "version": "0.2.96-2305",
-        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2305-arm64-v8a.apk",
-        "notes": "Fix only-1-episode bug in huangguoai / huangguo-video and other online modules (chapter id generation ignored episode key, dedup collapsed all episodes into 1)."
+        "build": 2314,
+        "version": "v0.2.96-2314",
+        "url": "https://gh-proxy.com/https://github.com/guocheng1378/guoapp/releases/download/v0.2.96-2314/zhenguojian-0.2.96+2314-arm64-v8a.apk",
+        "notes": "修复首页下拉刷新真机失效（busy 静默早退、只跑后台库更新不重拉列表）：下拉现在先强制重拉分类/站点板块/可见列表，再触发后台库更新。站源模块页两页接入下拉刷新、统一入口一起刷；修复索引失败原因被吞。"
     },
     "sourceConfig": {
         "huangguoAIMirrors": [
