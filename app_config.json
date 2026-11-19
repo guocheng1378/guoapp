@@ -12,7 +12,7 @@
         "enabled": true,
         "build": 2315,
         "version": "0.2.96-2315",
-        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2315-arm64-v8a.apk",
+        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2315-arm64-v8a.apk",
         "notes": "红果在线模块修复版\n\n- 模块覆盖核心源后 family 改写绕过 CENC 取流：保留 Huangguo\n- 卸载/更新失败删掉内置红果导致无法播放：自动恢复内置源\n- 模块弹幕报错整段失效：回退内置实现\n- 红果脚本支持在线模块热更新\n- 竖屏弹幕移到画面上下不遮挡正片"
     },
     "sourceConfig": {
