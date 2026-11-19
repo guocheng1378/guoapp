@@ -12,7 +12,7 @@
         "enabled": true,
         "build": 2314,
         "version": "0.2.96-2314",
-        "url": "https://8899-agqxwmnnzcndiz2wynoexrkqjm.instabox.tech/zhenguojian-0.2.96+2314-arm64-v8a.apk",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2314-arm64-v8a.apk",
         "notes": "修复首页下拉刷新真机失效：旧实现在任一源 busy 时静默早退、且只丢后台库更新任务不重拉可见列表，环转一圈列表纹丝不动。现在下拉先 force 重拉分类/站点板块/可见列表，再触发后台库更新，不再因 busy 早退。\r\n\r\n站源模块页：已装模块与在线仓库两页接入下拉刷新并统一刷新入口（一次同时刷已装列表与在线索引）；修复在线索引拉取失败且条目为空时失败原因被吞、只显示空列表的问题，并加刷新时间反馈。保持索引版本变化不自动重装模块。"
     },
     "sourceConfig": {
