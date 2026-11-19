@@ -24,6 +24,7 @@ import 'rankings_screen.dart';
 import 'js_module_screen.dart';
 import 'route_transition.dart';
 import 'detail_screen.dart';
+import 'featured_catalog.dart';
 import 'playback_launch_screen.dart';
 import 'downloads_screen.dart';
 import 'download_summary.dart';
@@ -155,6 +156,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   final ValueNotifier<bool> _fabShown = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _fabLit = ValueNotifier<bool>(false);
   Timer? _fabHideTimer;
+
+  /// 底部悬浮导航栏显隐：滚出第一屏（一个视口高）后隐藏，置顶按钮下移
+  /// 填补；滚回第一屏恢复。只由首屏滚动驱动，与搜索/换源无关。
+  /// ValueNotifier 避免整页 setState（同 _fabShown 的理由）。
+  final ValueNotifier<bool> _navHidden = ValueNotifier<bool>(false);
 
   /// 接近度信号（demo 真值）：滚动距离/50 clamp 0..1，驱动顶栏雾玻璃
   /// 岛与分类胶囊白描边亮起；滚回顶部（px=0）熄灭。同值不通知。
@@ -968,6 +974,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     super.initState();
     _scroll.addListener(_onCatalogScroll);
     _scroll.addListener(_onFabScroll);
+    _scroll.addListener(_onNavScroll);
     _source = SourceSite.byId(widget.store.source) ?? SourceSite.hongguo;
     // 开屏模糊：按「当前源」恢复上次眼睛按钮留下的状态（每个源各记各的），
     // 这个源没有记忆才回落到「开屏自动模糊」设置。
@@ -1096,11 +1103,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _search.dispose();
     _scroll.removeListener(_onCatalogScroll);
     _scroll.removeListener(_onFabScroll);
+    _scroll.removeListener(_onNavScroll);
     _fabHideTimer?.cancel();
     _scroll.dispose();
     _prox.dispose();
     _fabShown.dispose();
     _fabLit.dispose();
+    _navHidden.dispose();
     FogTuningStore.state.removeListener(_onFogTuning);
     SourceSearchBus.pending.removeListener(_onSourceSearchRequest);
     DownloadSummary.instance.removeListener(_onSummaryChanged);
@@ -1215,6 +1224,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (shown == _fabShown.value && lit == _fabLit.value) return;
     _fabShown.value = shown;
     _fabLit.value = lit;
+  }
+
+  /// 底部导航栏：滚过第一屏（一整屏视口高）才隐藏，上滚回到 85% 即恢复。
+  /// 用 85% 迟滞避免在第一屏边界来回抖动时反复显隐。
+  /// 独立 listener 而非塞进 _onFabScroll：那里有 early-return（shown/lit
+  /// 不变时直接返回），会把底栏状态更新一起跳过。
+  void _onNavScroll() {
+    if (!_scroll.hasClients) return;
+    final pixels = _scroll.position.pixels;
+    final viewport = _scroll.position.viewportDimension;
+    if (viewport <= 0) return;
+    // 隐藏阈值 = 一屏；恢复阈值 = 85% 屏。
+    final threshold = _navHidden.value ? viewport * 0.85 : viewport;
+    final hidden = pixels >= threshold;
+    if (hidden != _navHidden.value) _navHidden.value = hidden;
   }
 
   /// 接近度信号更新（demo 真值）：滚动距离/50 clamp 0..1。50px 内
@@ -1624,10 +1648,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// 轮播卡点击：豆瓣条目无播放链路，同名搜索进详情；其余照常直进播放。
   void _openCarouselDrama(Drama drama) {
     if (drama.source == SourceSite.douban.id) {
-      // 豆瓣条目无播放链路（用户定调 2026-11-18）：走搜索，而不是自动跨源
-      // 搜完直跳命中源——冷门片常只有真果·鉴（AI 聚合）命中，表现为
-      // 「点豆瓣卡只跳转真果鉴」。首页本就是搜索宿主，直接复用。
-      searchAllSources(drama.title);
+      // 豆瓣条目无播放链路：走跨源快速聚合，命中多个弹选源面板由用户挑。
+      openDoubanReferral(
+        context,
+        repository: widget.repository,
+        store: widget.store,
+        drama: drama,
+      );
       return;
     }
     _openDrama(drama);
@@ -1639,6 +1666,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _selectedDramas.clear();
     // 新 tab 尚无滚动帧，残留的旧 tab 接近度会让描边虚亮——复位。
     _prox.value = 0;
+    // 离开首页发现页时底栏必须回来：隐藏状态是首页列表专属，
+    // 其它 tab 没有对应滚动位置，否则会停在隐藏态且无从恢复。
+    if (tab != 0) _navHidden.value = false;
     // 筛选请求是一次性的：离开追剧页即消费掉，下次切回来是「全部」。
     if (tab != 1) _libraryFilter.value = '';
   });
@@ -1671,8 +1701,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }).firstOrNull;
   }
 
-  /// 追剧/最近卡片菜单「换个源找」：回发现页用剧名触发本分组搜索。
-  void _findSourceFor(String title) => searchAllSources(title);
+  /// 追剧/最近卡片菜单「换个源找」：走跨源快速聚合，弹选源面板。
+  void _findSourceFor(String title) {
+    final query = title.trim();
+    if (query.isEmpty) return;
+    openTitleReferral(
+      context,
+      repository: widget.repository,
+      store: widget.store,
+      title: query,
+    );
+  }
 
   /// 按剧名换源：在当前源所在分组内搜一遍（播放失败/追剧换源兜底）。
   /// 与用户手动搜索走的是同一套分组、同一套结果页，只是由外部页面
@@ -1699,18 +1738,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _onSourceSearchRequest() {
     final request = SourceSearchBus.take();
     if (request == null || !mounted) return;
+    void run() {
+      if (!mounted) return;
+      // 换源走跨源快速聚合（8 源并发 + 单源 6 秒超时 + 失败跳过），
+      // 比普通分组搜索快——一个慢源不会拖住整批结果。
+      openTitleReferral(
+        context,
+        repository: widget.repository,
+        store: widget.store,
+        title: request.query,
+      );
+    }
+
     final phase = SchedulerBinding.instance.schedulerPhase;
     final inFrame = phase == SchedulerPhase.persistentCallbacks ||
         phase == SchedulerPhase.midFrameMicrotasks ||
         phase == SchedulerPhase.transientCallbacks;
     if (!inFrame) {
-      searchAllSources(request.query);
+      run();
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      searchAllSources(request.query);
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => run());
   }
 
   /// 继续观看条自动收起时长：出现后无操作 8 秒即收，不常驻占版面。
@@ -2504,32 +2552,43 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ? null
               : _selectionMode
               ? _selectionBar()
-              : AppBottomNavigation(
-                  selectedIndex: _tab,
-                  onDestinationSelected: _changeTab,
-                  compact: compactLandscape,
-                  destinations: [
-                    NavigationDestination(
-                      icon: AppIcon(AppIcons.explore),
-                      selectedIcon: AppIcon(AppIcons.explore),
-                      label: '发现',
+              : ListenableBuilder(
+                  listenable: _navHidden,
+                  builder: (context, _) => AnimatedSlide(
+                    key: const ValueKey('home-bottom-nav-slide'),
+                    // 滚出首屏向下平移出视口；用 AnimatedSlide 只改绘制位置、
+                    // 不改占位——body 本就 extendBody 透到栏后，隐藏时布局不跳。
+                    offset: _navHidden.value ? const Offset(0, 1) : Offset.zero,
+                    duration: MotionDurations.base,
+                    curve: MotionCurves.standard,
+                    child: AppBottomNavigation(
+                      selectedIndex: _tab,
+                      onDestinationSelected: _changeTab,
+                      compact: compactLandscape,
+                      destinations: [
+                        NavigationDestination(
+                          icon: AppIcon(AppIcons.explore),
+                          selectedIcon: AppIcon(AppIcons.explore),
+                          label: '发现',
+                        ),
+                        NavigationDestination(
+                          icon: AppIcon(AppIcons.bookmark),
+                          selectedIcon: AppIcon(AppIcons.bookmark, filled: true),
+                          label: '追剧',
+                        ),
+                        NavigationDestination(
+                          icon: AppIcon(AppIcons.history),
+                          label: '最近观看',
+                        ),
+                        if (widget.store.canDownload)
+                          NavigationDestination(
+                            icon: _downloadIcon(),
+                            selectedIcon: _downloadIcon(),
+                            label: '下载',
+                          ),
+                      ],
                     ),
-                    NavigationDestination(
-                      icon: AppIcon(AppIcons.bookmark),
-                      selectedIcon: AppIcon(AppIcons.bookmark, filled: true),
-                      label: '追剧',
-                    ),
-                    NavigationDestination(
-                      icon: AppIcon(AppIcons.history),
-                      label: '最近观看',
-                    ),
-                    if (widget.store.canDownload)
-                      NavigationDestination(
-                        icon: _downloadIcon(),
-                        selectedIcon: _downloadIcon(),
-                        label: '下载',
-                      ),
-                  ],
+                  ),
                 ),
         );
         // 横屏沉浸：窗口已延伸进挖孔区（MainActivity SHORT_EDGES），
@@ -3153,12 +3212,17 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               // 回顶雾面钮：滚出首屏浮现，内容上行点亮（Folme 弹簧三参数联动）。
               // 只重建这颗按钮（ListenableBuilder），不惊动整页网格。
               if (!_selectionMode)
-                Positioned(
-                  right: 18,
-                  bottom: 24 + _floatingNavInset,
-                  child: ListenableBuilder(
-                    listenable: Listenable.merge([_fabShown, _fabLit]),
-                    builder: (context, _) => AnimatedScale(
+                ListenableBuilder(
+                  listenable: Listenable.merge([_navHidden, _fabShown, _fabLit]),
+                  builder: (context, _) => AnimatedPositioned(
+                    key: const ValueKey('home-fab-position'),
+                    // 底栏隐藏时下移到底栏原位（bottom 从 24+inset → 24），
+                    // 与底栏 AnimatedSlide 同时长同曲线，视觉上无缝填补。
+                    right: 18,
+                    bottom: _navHidden.value ? 24 : 24 + _floatingNavInset,
+                    duration: MotionDurations.base,
+                    curve: MotionCurves.standard,
+                    child: AnimatedScale(
                       scale: _fabShown.value ? 1 : 0.4,
                       duration: MotionDurations.micro,
                       curve: MotionCurves.press,

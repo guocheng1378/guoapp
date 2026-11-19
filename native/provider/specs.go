@@ -74,11 +74,6 @@ var sourceEntries = []sourceEntry{
 		hosts:   []string{"hongguoduanju.com", "www.hongguoduanju.com"},
 	},
 	{
-		spec:    Spec{ID: SourceHuangdou, Name: "黄豆", Base: "https://seiopcc.icu", Kind: "api", Category: CategoryShortDrama, Family: FamilyHuangguo, RequiresAllSources: true},
-		aliases: []string{"huangdou", "tideember.cc", "xqjurgek.top"},
-		hosts:   []string{"tideember.cc", "xqjurgek.top"},
-	},
-	{
 		spec:    Spec{ID: SourceHuangju, Name: "剧果", Base: "https://huangju.net", Kind: "api", Category: CategoryShortDrama, Family: FamilyHuangguo, Searcher: true, Paged: true, RequiresAllSources: true},
 		aliases: []string{"huangju", "huangju.net", "api.huangju.net"},
 		hosts:   []string{"huangju.net", "www.huangju.net", "api.huangju.net"},
@@ -216,11 +211,6 @@ var sourceEntries = []sourceEntry{
 		spec:    Spec{ID: SourceWsyzy, Name: "无水印", Base: "https://api.wsyzy.net", Kind: "maccms_api", Category: CategoryVideo, Family: FamilyDuanju, Paged: true, RequiresAllSources: true},
 		aliases: []string{"wsyzy", "无水印", "wsyzy.net", "api.wsyzy.net"},
 		hosts:   []string{"api.wsyzy.net", "wsyzy.net"},
-	},
-	{
-		spec:    Spec{ID: SourceDongpiandi, Name: "真果·鉴", Base: "https://dongpiandi.ai", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},
-		aliases: []string{"dongpiandi", "真果·鉴", "dongpiandi.ai"},
-		hosts:   []string{"dongpiandi.ai", "www.dongpiandi.ai"},
 	},
 	{
 		spec:    Spec{ID: SourceYunzhui, Name: "云追", Base: "https://u.gslock.com/", Kind: "api", Category: CategoryVideo, Family: FamilyDuanju, Searcher: true, Paged: true, RequiresAllSources: true},

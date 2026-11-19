@@ -409,22 +409,25 @@ Future<Drama?> _pickReferralMatch(
   );
 }
 
-/// 豆瓣条目无播放链路：用标题在所有已启用站源中并发搜同名内容，
-/// 命中多条弹「选择播放来源」面板由用户挑源进详情；只命中一条直进，
-/// 全部落空则提示手动搜索。
-Future<void> openDoubanReferral(
+/// 按标题在所有已启用站源中并发搜同名内容（8 源并发 + 单源 6 秒超时 +
+/// 失败静默跳过）。命中多条弹「选择播放来源」面板由用户挑源进详情；
+/// 只命中一条直进，全部落空则提示手动搜索。
+///
+/// 这是豆瓣榜条目点击与「换个源找」共用的快速聚合入口——比普通分组搜索
+/// 快，因为它不等待慢源（6 秒截断）且跨全部大类找源。
+Future<void> openTitleReferral(
   BuildContext context, {
   required AppRepository repository,
   required LocalStore store,
-  required Drama drama,
+  required String title,
 }) async {
   if (_doubanReferralBusy) return;
   _doubanReferralBusy = true;
   final messenger = ScaffoldMessenger.of(context);
   try {
-    final title = drama.title.trim();
     final sources = doubanReferralSources(store);
-    if (title.isEmpty || sources.isEmpty) {
+    final query = title.trim();
+    if (query.isEmpty || sources.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(content: Text('当前没有可用于查找的站源')),
       );
@@ -432,21 +435,21 @@ Future<void> openDoubanReferral(
     }
     messenger.showSnackBar(
       SnackBar(
-        content: Text('正在查找「$title」的可播放来源…'),
+        content: Text('正在查找「$query」的可播放来源…'),
         duration: const Duration(seconds: 2),
       ),
     );
-    final matches = await _collectReferralMatches(repository, sources, title);
+    final matches = await _collectReferralMatches(repository, sources, query);
     if (!context.mounted) return;
     if (matches.isEmpty) {
       messenger.showSnackBar(
-        SnackBar(content: Text('未在站源中找到「$title」，可到搜索页手动查找')),
+        SnackBar(content: Text('未在站源中找到「$query」，可到搜索页手动查找')),
       );
       return;
     }
     Drama? target = matches.first.drama;
     if (matches.length > 1) {
-      target = await _pickReferralMatch(context, title, matches);
+      target = await _pickReferralMatch(context, query, matches);
     }
     if (target == null || !context.mounted) return;
     // 闭包捕获的可空局部变量不会被流分析收窄，落成非空局部常量再用。
@@ -471,3 +474,16 @@ Future<void> openDoubanReferral(
     _doubanReferralBusy = false;
   }
 }
+
+/// 豆瓣榜条目入口：保留旧签名兼容测试与既有调用，内部走通用标题聚合。
+Future<void> openDoubanReferral(
+  BuildContext context, {
+  required AppRepository repository,
+  required LocalStore store,
+  required Drama drama,
+}) => openTitleReferral(
+  context,
+  repository: repository,
+  store: store,
+  title: drama.title,
+);

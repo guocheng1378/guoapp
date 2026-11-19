@@ -22,6 +22,13 @@ var hongguoAppGenres = []struct {
 	{key: "ai_series", scene: "ai_series", name: "AI剧"},
 }
 
+// hongguoAudioCategories 是红果的听书/小说分类 id。该链路播放不可用，
+// 从分类栏与入口校验中剔除，避免用户点进去无法播放。
+var hongguoAudioCategories = map[string]bool{
+	"listen": true, // 听书
+	"novel":  true, // 小说
+}
+
 type libraryMoreKey struct{}
 
 type libraryUpdateKey struct{}

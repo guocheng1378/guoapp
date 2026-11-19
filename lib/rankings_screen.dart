@@ -4,6 +4,7 @@ import 'catalog_filters.dart';
 import 'haptics.dart';
 import 'core_bridge.dart';
 import 'detail_screen.dart';
+import 'featured_catalog.dart';
 import 'fog_tuning.dart';
 import 'folme.dart';
 import 'glass.dart';
@@ -11,7 +12,6 @@ import 'local_store.dart';
 import 'models.dart';
 import 'ranking_models.dart';
 import 'remote_widgets.dart';
-import 'source_search.dart';
 import 'widgets.dart';
 import 'app_icons.dart';
 
@@ -758,13 +758,14 @@ class _RankingsScreenState extends State<RankingsScreen> {
     final following = _isFollowing(item.drama);
     void open() {
       if (item.drama.source == SourceSite.douban.id) {
-        // 豆瓣条目无播放链路。用户定调（2026-11-18）：点击应该走「搜索」，
-        // 而不是自动跨源搜完直接跳某个源——冷门片常只有真果·鉴（AI 聚合）
-        // 命中，表现为「点豆瓣榜单只跳转真果鉴」。先收回首页再写搜索请求：
-        // 反序会在榜单页仍是当前路由时通知首页 setState → build 期间改状态
-        // 抛错（与 GroupSearchButton 同一处理）。
-        Navigator.of(context).popUntil((route) => route.isFirst);
-        SourceSearchBus.request(item.drama.title);
+        // 豆瓣条目无播放链路：走跨源快速聚合（8 源并发 + 单源 6 秒超时），
+        // 命中多个弹选源面板由用户挑——以前点豆瓣榜出来几个源就是这套逻辑。
+        openDoubanReferral(
+          context,
+          repository: widget.repository,
+          store: widget.store,
+          drama: item.drama,
+        );
         return;
       }
       Navigator.push<void>(

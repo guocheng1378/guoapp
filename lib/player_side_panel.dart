@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 
 import 'app_icons.dart';
 
-/// 右侧面板底色：近不透明深色（不跟主题走，画面优先的影院 HUD 语言）。
-const Color sidePanelBackground = Color(0xF20E0F12);
+/// 右侧面板底色：跟随当前主题 surface，保证浅色/深色主题下都不出现
+/// 与 App 割裂的近黑面板（旧值 Color(0xF20E0F12) 写死深色已废弃）。
 
 /// 右侧滑出面板的市场宽度：横屏最多 420 / 38%，竖屏最多 320 / 78%。
 double sidePanelWidth(Size size) {
@@ -41,7 +41,7 @@ Future<T?> showPlayerSidePanel<T>({
         alignment: Alignment.centerRight,
         child: Material(
           key: const ValueKey('player-side-panel'),
-          color: sidePanelBackground,
+          color: Theme.of(dialogContext).colorScheme.surface,
           child: SizedBox(
             width: panelWidth,
             height: media.size.height,
@@ -84,12 +84,15 @@ class _SidePanelHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
     return Container(
       height: 52,
       padding: const EdgeInsets.only(left: 18, right: 4),
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: .08)),
+          bottom: BorderSide(
+            color: colors.outlineVariant.withValues(alpha: .5),
+          ),
         ),
       ),
       child: Row(
@@ -99,10 +102,10 @@ class _SidePanelHeader extends StatelessWidget {
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: Colors.white,
+                color: colors.onSurface,
               ),
             ),
           ),
@@ -116,7 +119,7 @@ class _SidePanelHeader extends StatelessWidget {
             icon: AppIcon(
               AppIcons.close,
               size: 20,
-              color: Colors.white.withValues(alpha: .8),
+              color: colors.onSurfaceVariant,
             ),
           ),
         ],
@@ -175,8 +178,8 @@ class SideChoiceGrid extends StatelessWidget {
                 child: Container(
                   decoration: BoxDecoration(
                     color: choice.key == selected
-                        ? Colors.white
-                        : Colors.white.withValues(alpha: .1),
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   alignment: Alignment.center,
@@ -187,7 +190,9 @@ class SideChoiceGrid extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: choice.key == selected ? Colors.black : Colors.white,
+                      color: choice.key == selected
+                          ? Theme.of(context).colorScheme.onPrimary
+                          : Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                 ),
@@ -201,7 +206,6 @@ class SideChoiceGrid extends StatelessWidget {
 
 /// 单列列表：播放源、清晰度这类需要完整文案的用它（行高 52，选中带勾）。
 class SideChoiceList extends StatelessWidget {
-
   const SideChoiceList({
     super.key,
     required this.choices,
@@ -221,7 +225,8 @@ class SideChoiceList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
+    final colors = Theme.of(context).colorScheme;
+    final primary = colors.primary;
     return ListView.builder(
       shrinkWrap: shrinkWrap,
       physics: physics,
@@ -251,9 +256,7 @@ class SideChoiceList extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: active ? FontWeight.w600 : null,
-                            color: active
-                                ? primary
-                                : Colors.white.withValues(alpha: .8),
+                            color: active ? primary : colors.onSurface,
                           ),
                         ),
                         if (choice.note.isNotEmpty)
@@ -263,14 +266,13 @@ class SideChoiceList extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 11,
-                              color: Colors.white.withValues(alpha: .45),
+                              color: colors.onSurfaceVariant,
                             ),
                           ),
                       ],
                     ),
                   ),
-                  if (active)
-                    AppIcon(AppIcons.check, size: 18, color: primary),
+                  if (active) AppIcon(AppIcons.check, size: 18, color: primary),
                 ],
               ),
             ),
@@ -308,13 +310,13 @@ class SideSliderRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        AppIcon(icon, size: 20, color: Colors.white.withValues(alpha: .8)),
+        AppIcon(icon, size: 20, color: Theme.of(context).colorScheme.onSurface),
         Expanded(
           child: SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 3,
               activeTrackColor: Theme.of(context).colorScheme.primary,
-              inactiveTrackColor: Colors.white.withValues(alpha: .24),
+              inactiveTrackColor: Theme.of(context).colorScheme.outlineVariant,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
             ),
@@ -335,7 +337,7 @@ class SideSliderRow extends StatelessWidget {
             textAlign: TextAlign.end,
             style: TextStyle(
               fontSize: 12,
-              color: Colors.white.withValues(alpha: .7),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
@@ -409,14 +411,16 @@ class _SideRouteListState extends State<SideRouteList> {
                         '第三方源 · ${widget.thirdParty.length} 条',
                         style: TextStyle(
                           fontSize: 14,
-                          color: Colors.white.withValues(alpha: .8),
+                          color: Theme.of(context).colorScheme.onSurface,
                         ),
                       ),
                     ),
                     AppIcon(
-                      _thirdPartyOpen ? AppIcons.expandLess : AppIcons.expandMore,
+                      _thirdPartyOpen
+                          ? AppIcons.expandLess
+                          : AppIcons.expandMore,
                       size: 18,
-                      color: Colors.white.withValues(alpha: .6),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ],
                 ),
@@ -450,7 +454,7 @@ class _SideRouteListState extends State<SideRouteList> {
       style: TextStyle(
         fontSize: 12,
         fontWeight: FontWeight.w600,
-        color: Colors.white.withValues(alpha: .5),
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     ),
   );
@@ -475,7 +479,9 @@ class _SideRouteListState extends State<SideRouteList> {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: active ? FontWeight.w600 : null,
-                    color: active ? primary : Colors.white.withValues(alpha: .8),
+                    color: active
+                        ? primary
+                        : Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
               ),

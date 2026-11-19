@@ -216,11 +216,22 @@ Set<CatalogSort> catalogSortSupport(Iterable<Drama> items) {
 /// 归一化名去重，保留传入顺序（远端主页优先）。板块标题截短后与源站
 /// 分类同名时，旧实现会并排显示两个 chip 且 id 不同、内容还不一样。
 List<CatalogCategory> dedupeCategories(Iterable<CatalogCategory> ordered) {
-  final seen = <String>{};
-  return [
-    for (final category in ordered)
-      if (seen.add(normalizedSearchText(category.name))) category,
-  ];
+  final seenNames = <String>{};
+  final seenIds = <String>{};
+  final result = <CatalogCategory>[];
+  for (final category in ordered) {
+    final nameKey = normalizedSearchText(category.name);
+    final idKey = category.id.trim();
+    // 板块截短后与源站分类同名 -> 按名去重；远端板块与源站菜单 id 撞车
+    // （或同名分类被多来源重复注入）-> 按 id 再去重一层。
+    if (!seenNames.add(nameKey)) continue;
+    if (idKey.isNotEmpty && !seenIds.add(idKey)) {
+      // id 已出现过但名字不同：仍跳过，避免同入口两个 chip。
+      continue;
+    }
+    result.add(category);
+  }
+  return result;
 }
 
 /// 当前池上真正生效的筛选视图：切源/切档/恢复备份后，持久化的

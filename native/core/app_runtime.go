@@ -1309,6 +1309,11 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 				items, result.HasMore, err = d.fetchHongguoTagPage(ctx, category, page)
 				break
 			}
+			// 听书/小说播放链路不可用，分类入口已剔除；这里兜底拒绝。
+			if hongguoAudioCategories[category] {
+				err = errors.New("真果短剧听书/小说分类暂不可用")
+				break
+			}
 			engine.mu.Lock()
 			known := make(map[string]bool, len(engine.catalogs[cacheKey]))
 			for _, drama := range engine.catalogs[cacheKey] {

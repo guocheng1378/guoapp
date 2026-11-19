@@ -37,15 +37,13 @@ class RecommendationsScreen extends StatefulWidget {
 
 class _RecommendationsScreenState extends State<RecommendationsScreen> {
   static const _genres = [
-    // 信息流推荐（红果 bookmall 首页/发现页），与题材分类共用同一通道。
+    // 只保留推荐页独有的两档信息流。题材分类（真人剧/漫剧/AI剧）由首页
+    // 分类栏提供，这里再列一遍会与上方分类栏重复。
     CatalogCategory('home_feed', '为你推荐'),
     CatalogCategory('find_drama', '发现'),
-    CatalogCategory('short_play', '真人剧'),
-    CatalogCategory('comic_series', '漫剧'),
-    CatalogCategory('ai_series', 'AI 剧'),
   ];
   final _scroll = ScrollController();
-  String _genre = 'short_play';
+  String _genre = 'home_feed';
   List<Drama> _items = [];
   bool _loading = false;
   bool _more = false;

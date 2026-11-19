@@ -92,9 +92,9 @@ class SourceSite {
   static const huangdou = SourceSite('huangdou', '黄豆', '精选短剧');
   static const dongpiandi =
       SourceSite('dongpiandi', '真果·鉴', 'AI 聚合 · 多线路 m3u8 · 短剧/影视');
-  /// 必须有 Go 内置实现、不依赖模块的核心源。其余站源一律由「已装模块」
-  /// 提供——在「站源模块」里卸载后，站源管理/菜单里就跟着消失。
-  static const _coreGoValues = [hongguo, huangdou, dongpiandi];
+  /// 内置核心源只有红果。黄豆/真果鉴已移除内置，必须由已装模块提供——
+  /// 在「站源模块」里安装后才出现，卸载后从站源管理/菜单消失。
+  static const _coreGoValues = [hongguo];
   static const duanjuValues = [
     // 真果·鉴（AI 聚合）固定列视频类首位：用户主用源，长按选「视频类」
     // 与点按站源岛的视频类菜单均落到它。

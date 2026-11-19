@@ -40,7 +40,8 @@ class RemoteTextInput extends StatelessWidget {
 
   KeyEventResult _key(FocusNode node, KeyEvent event) {
     final focus = FocusManager.instance.primaryFocus;
-    final editable = focus?.context?.findAncestorStateOfType<EditableTextState>();
+    final editable = focus?.context
+        ?.findAncestorStateOfType<EditableTextState>();
     if (editable == null ||
         (event is! KeyDownEvent && event is! KeyRepeatEvent)) {
       return KeyEventResult.ignored;
@@ -598,9 +599,7 @@ class RemoteRowState extends State<RemoteRow> {
           for (var index = 0; index < widget.itemKeys.length; index++)
             Padding(
               padding: EdgeInsets.only(
-                right: index == widget.itemKeys.length - 1
-                    ? 0
-                    : widget.spacing,
+                right: index == widget.itemKeys.length - 1 ? 0 : widget.spacing,
               ),
               child: widget.itemBuilder(
                 context,
@@ -924,10 +923,12 @@ class RemoteEpisodeButton extends StatelessWidget {
   final bool vip;
   final bool current;
   final bool compact;
+
   /// 站点下发的分集标题（Episode.remoteLabel，紧凑写法）：非空时替代
   /// 数字显示。真果·鉴的分集常是批次打包（一个按钮 = 1-20 集合集），
   /// 只画序号会跟实际内容对不上，有文字就优先画文字。
   final String? label;
+
   /// 读屏用的完整标题（站点原文，如「第1-20集」）：格子放不下全称时
   /// 显示走 [label] 的紧凑写法，播报仍要念完整语义。缺省与 [label] 相同。
   final String? semanticsLabel;
@@ -940,6 +941,12 @@ class RemoteEpisodeButton extends StatelessWidget {
     final caption = label?.trim() ?? '';
     final titled = caption.isNotEmpty;
     final spoken = semanticsLabel?.trim() ?? '';
+    // 集数文字显式取色，不依赖继承的 DefaultTextStyle：播放器里同一套
+    // 网格会被套进 light/dark 不同主题（选集白卡 / 全屏暗色菜单），
+    // 继承色曾导致白底白字看不清。选中态用 onPrimaryContainer 配
+    // RemoteTarget 的 primaryContainer 底色，普通态用 onSurface。
+    final colors = Theme.of(context).colorScheme;
+    final textColor = current ? colors.onPrimaryContainer : colors.onSurface;
     return RemoteTarget(
       focusNode: focusNode,
       onFocus: onFocus,
@@ -953,7 +960,8 @@ class RemoteEpisodeButton extends StatelessWidget {
       borderWidth: compact ? 1.2 : 2,
       outlined: true,
       onPressed: onPressed,
-      label: '${titled && spoken.isNotEmpty ? spoken : (titled ? caption : '第 $number 集')}'
+      label:
+          '${titled && spoken.isNotEmpty ? spoken : (titled ? caption : '第 $number 集')}'
           '${vip ? '，VIP 试看' : ''}',
       child: Center(
         child: Row(
@@ -970,6 +978,7 @@ class RemoteEpisodeButton extends StatelessWidget {
                         maxLines: 1,
                         softWrap: false,
                         style: TextStyle(
+                          color: textColor,
                           fontSize: compact ? 11 : 13,
                           fontWeight: current
                               ? FontWeight.w700
@@ -982,16 +991,19 @@ class RemoteEpisodeButton extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
+                        color: textColor,
                         fontSize: compact ? 14 : 20,
-                        fontWeight: current
-                            ? FontWeight.w700
-                            : FontWeight.w500,
+                        fontWeight: current ? FontWeight.w700 : FontWeight.w500,
                       ),
                     ),
             ),
             if (vip) ...[
               SizedBox(width: compact ? 2 : 4),
-              AppIcon(AppIcons.premium, size: compact ? 15 : 18, color: Theme.of(context).colorScheme.tertiary),
+              AppIcon(
+                AppIcons.premium,
+                size: compact ? 15 : 18,
+                color: Theme.of(context).colorScheme.tertiary,
+              ),
             ],
           ],
         ),
@@ -1014,51 +1026,54 @@ class TelevisionActionDialog extends StatelessWidget {
   Widget build(BuildContext context) => GlassDialogShell(
     constraints: const BoxConstraints(maxWidth: 580),
     child: AlertDialog(
-    title: Text(title),
-    content: SizedBox(
-      width: 520,
-      child: ConstrainedBox(
-        // 限高同时考虑屏高与绝对上限：电视横屏（屏高 ~1200px）下
-        // 0.6 屏高（720）+ 标题边距会顶破屏幕底缘，最后一项被切到
-        // 只剩一条缝（曾导致「手机/电脑」点不中、切不回手机模式）。
-        // 取 min(屏高*0.55, 520)：横屏 520、竖屏同样 520，整窗在屏内，
-        // 超长列表由内部滚动兜底。
-        constraints: BoxConstraints(
-          maxHeight: math.min(MediaQuery.sizeOf(context).height * .55, 520),
-        ),
-        child: RemoteList(
-          itemKeys: [for (var index = 0; index <= options.length; index++) '$index'],
-          itemExtent: RemoteListTile.extent,
-          padding: EdgeInsets.zero,
-          autofocus: true,
-          itemBuilder: (_, index, node, onFocus) {
-            if (index == options.length) {
+      title: Text(title),
+      content: SizedBox(
+        width: 520,
+        child: ConstrainedBox(
+          // 限高同时考虑屏高与绝对上限：电视横屏（屏高 ~1200px）下
+          // 0.6 屏高（720）+ 标题边距会顶破屏幕底缘，最后一项被切到
+          // 只剩一条缝（曾导致「手机/电脑」点不中、切不回手机模式）。
+          // 取 min(屏高*0.55, 520)：横屏 520、竖屏同样 520，整窗在屏内，
+          // 超长列表由内部滚动兜底。
+          constraints: BoxConstraints(
+            maxHeight: math.min(MediaQuery.sizeOf(context).height * .55, 520),
+          ),
+          child: RemoteList(
+            itemKeys: [
+              for (var index = 0; index <= options.length; index++) '$index',
+            ],
+            itemExtent: RemoteListTile.extent,
+            padding: EdgeInsets.zero,
+            autofocus: true,
+            itemBuilder: (_, index, node, onFocus) {
+              if (index == options.length) {
+                return RemoteListTile(
+                  title: '返回',
+                  leading: AppIcon(AppIcons.arrowBack, size: 26),
+                  focusNode: node,
+                  onFocus: onFocus,
+                  onPressed: () => Navigator.pop(context),
+                );
+              }
+              final option = options[index];
               return RemoteListTile(
-                title: '返回',
-                leading: AppIcon(AppIcons.arrowBack, size: 26),
+                title: option.label,
+                subtitle: option.description,
+                leading:
+                    option.icon ?? AppIcon(AppIcons.chevronRight, size: 26),
+                trailing: option.checked
+                    ? AppIcon(AppIcons.check, size: 26)
+                    : null,
                 focusNode: node,
                 onFocus: onFocus,
-                onPressed: () => Navigator.pop(context),
+                onPressed: option.enabled
+                    ? () => Navigator.pop(context, option.value)
+                    : null,
               );
-            }
-            final option = options[index];
-            return RemoteListTile(
-              title: option.label,
-              subtitle: option.description,
-              leading: option.icon ?? AppIcon(AppIcons.chevronRight, size: 26),
-              trailing: option.checked
-                  ? AppIcon(AppIcons.check, size: 26)
-                  : null,
-              focusNode: node,
-              onFocus: onFocus,
-              onPressed: option.enabled
-                  ? () => Navigator.pop(context, option.value)
-                  : null,
-            );
-          },
+            },
+          ),
         ),
       ),
-    ),
     ),
   );
 }
@@ -1124,53 +1139,53 @@ class _TelevisionSearchDialogState extends State<TelevisionSearchDialog> {
   Widget build(BuildContext context) => GlassDialogShell(
     constraints: const BoxConstraints(maxWidth: 520),
     child: AlertDialog(
-    title: Text(widget.title),
-    content: SizedBox(
-      width: 460,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * .6,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SearchInput(
-                autofocus: true,
-                controller: _controller,
-                hint: '输入剧名',
-                suggestions: widget.suggestions,
-                onCancel: widget.onCancel,
-                onSearch: (value) => _pop(value),
-              ),
-              if (widget.recentSearches.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final query in widget.recentSearches)
-                      ActionChip(
-                        label: Text(query),
-                        avatar: AppIcon(AppIcons.history, size: 16),
-                        onPressed: () => _pop(query),
-                      ),
-                  ],
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 460,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .6,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SearchInput(
+                  autofocus: true,
+                  controller: _controller,
+                  hint: '输入剧名',
+                  suggestions: widget.suggestions,
+                  onCancel: widget.onCancel,
+                  onSearch: (value) => _pop(value),
                 ),
+                if (widget.recentSearches.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final query in widget.recentSearches)
+                        ActionChip(
+                          label: Text(query),
+                          avatar: AppIcon(AppIcons.history, size: 16),
+                          onPressed: () => _pop(query),
+                        ),
+                    ],
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-    ),
-    actions: [
-      TextButton(onPressed: () => _pop(), child: const Text('取消')),
-      TextButton(onPressed: () => _pop(''), child: const Text('清空')),
-      FilledButton(
-        onPressed: () => _pop(_controller.text.trim()),
-        child: const Text('搜索'),
-      ),
-    ],
+      actions: [
+        TextButton(onPressed: () => _pop(), child: const Text('取消')),
+        TextButton(onPressed: () => _pop(''), child: const Text('清空')),
+        FilledButton(
+          onPressed: () => _pop(_controller.text.trim()),
+          child: const Text('搜索'),
+        ),
+      ],
     ),
   );
 }

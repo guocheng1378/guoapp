@@ -72,6 +72,10 @@ func validNativeCategory(source, category string) bool {
 		if hongguoTagPattern.MatchString(category) {
 			return true
 		}
+		// 听书/小说播放链路不可用，校验直接拒绝（入口也已从分类栏剔除）。
+		if hongguoAudioCategories[category] {
+			return false
+		}
 		for _, genre := range hongguoAppGenres {
 			if category == genre.key {
 				return true
@@ -92,7 +96,9 @@ func validNativeCategory(source, category string) bool {
 	case sourceHeitao:
 		return validHeitaoCategory(category)
 	case sourceHanxiaoquan:
-		return category == "" || category == "all"
+		// 分类栏给出数字 id（1=最新韩剧/2=韩国电影/3=韩国综艺/4=韩国动漫），
+		// 必须与 fetchHanxiaoquanCategories 的返回值一致。
+		return category == "all" || validHeitaoCategory(category)
 	case sourceJinguoduanju:
 		return validJinguoDuanjuCategory(category)
 	case sourceBeabox:
@@ -110,21 +116,41 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 	all := []nativeCategory{{Name: "全部"}}
 	switch source {
 	case sourceHongguo:
-		// 红果内嵌 JS 模块优先提供分类（含上游新增的听书分类）；失败回落
-		// 静态 hongguoAppGenres，保证模块异常时分类栏不空。
+		// 先看缓存：红果分类要初始化 JS 运行时，重复取会明显变慢。
+		engine.mu.Lock()
+		cachedHongguo := append([]nativeCategory{}, engine.categoryOptions[source]...)
+		engine.mu.Unlock()
+		if len(cachedHongguo) > 1 && !force {
+			return cachedHongguo, nil
+		}
+		// 红果内嵌 JS 模块优先提供分类；失败回落静态 hongguoAppGenres。
+		// 听书/小说（listen/novel）播放链路不可用，从分类栏剔除。
+		var hongguoCats []nativeCategory
 		if module, jsErr := engine.downloader.hongguoJS(); jsErr == nil {
 			if cats, jsErr := module.categories(); jsErr == nil && len(cats) > 0 {
-				result := []nativeCategory{{Name: "全部"}}
+				hongguoCats = []nativeCategory{{Name: "全部"}}
 				for _, cat := range cats {
-					result = append(result, nativeCategory{ID: cat.ID, Name: cat.Name})
+					if hongguoAudioCategories[cat.ID] {
+						continue
+					}
+					hongguoCats = append(hongguoCats, nativeCategory{ID: cat.ID, Name: cat.Name})
 				}
-				return result, nil
 			}
 		}
-		for _, genre := range hongguoAppGenres {
-			all = append(all, nativeCategory{ID: genre.key, Name: genre.name})
+		if len(hongguoCats) == 0 {
+			for _, genre := range hongguoAppGenres {
+				hongguoCats = append(hongguoCats, nativeCategory{ID: genre.key, Name: genre.name})
+			}
+			hongguoCats = engine.hongguoCategories(ctx, append([]nativeCategory{{Name: "全部"}}, hongguoCats...), force)
 		}
-		return engine.hongguoCategories(ctx, all, force), nil
+		engine.mu.Lock()
+		if engine.categoryOptions == nil {
+			engine.categoryOptions = map[string][]nativeCategory{}
+		}
+		engine.categoryOptions[source] = hongguoCats
+		engine.writeCatalogDiskLocked()
+		engine.mu.Unlock()
+		return hongguoCats, nil
 	case sourceHuangguoAI:
 		return append(all, nativeAICategories...), nil
 	case sourceHuangdou:

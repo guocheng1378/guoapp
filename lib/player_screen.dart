@@ -11,6 +11,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app_layout.dart';
 import 'app_orientation.dart';
 import 'app_theme.dart';
+import 'motion.dart';
 import 'battery_level.dart';
 import 'catalog_browser.dart' show dramaIsLongDrama;
 import 'core_bridge.dart';
@@ -121,6 +122,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final PlaybackPreloader _preloader;
   bool _preloadEnabled = true;
   late final DanmakuController _danmaku;
+
   /// 解码方式偏好（auto/hw/sw），电视端「有声无画」排查用
   String _decodeMode = playbackDecodeAuto;
   int _seekSequence = 0;
@@ -130,10 +132,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   double _savedBrightness = 1;
   double _savedVolume = 100;
   Timer? _mediaMemoryTimer;
+
   /// 播完一集到自动接下一集的等待秒数；0 = 播完立即连播，不显示倒计时。
   static const advanceCountdownSeconds = 0;
   int _advanceSeconds = 0;
   Timer? _advanceTimer;
+
   /// 最后一集播完的终点态：给「全剧已看完」卡片，提供重播/返回出口。
   bool _finishedAll = false;
   final _playerFocus = FocusNode(debugLabel: 'player-surface');
@@ -227,8 +231,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   String get _skipMarksId => widget.mediaId ?? widget.detail.drama.id;
 
   bool _rotating = false;
+
   /// 横屏锁屏：锁定期间把屏幕朝向钉在当前方向（旋转设备画面不跟随）。
   bool _screenLocked = false;
+
   /// 竖屏全屏的选集面板是否已展开（底部滑入、推挤视频那种）。
   bool _episodeSheetOpen = false;
   bool _television = false;
@@ -266,6 +272,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       SourceSite.byId(widget.detail.drama.source),
     );
   }
+
   VideoEnhancementController? get _enhancementForUi =>
       _enhancement.supported ? _enhancement : null;
   PlaybackPreferences get _preferences => PlaybackPreferences(
@@ -279,6 +286,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     volume: _interactions.volume,
     enhancement: _enhancement.preferences,
   );
+
   /// 工具行清晰度标签：显示「本集实际播放」的档位（用户定调：界面不再出现
   /// 「自动」这个选项）。站点根本没有画质档位（qualities 全空）时返回空串，
   /// 工具行就不渲染这颗按钮——否则挂个「高清」纯属误导。
@@ -295,6 +303,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (selectable.isEmpty) return '';
     return '${selectable.reduce((a, b) => a > b ? a : b)}P';
   }
+
   String get _session => _plan?.session ?? '';
   double get _currentPosition =>
       _openedIndex == _index && _player.state.position.inMilliseconds > 0
@@ -689,7 +698,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!visible) _interactions.cancel();
     // 只有真正进后台才暂停：下拉通知栏、来电横幅只是 inactive（短暂），
     // 那会儿暂停会让用户看到"下拉一下视频就停了"而且收回来也不会续播。
-    final backgrounded = _lifecycleState == AppLifecycleState.paused ||
+    final backgrounded =
+        _lifecycleState == AppLifecycleState.paused ||
         _lifecycleState == AppLifecycleState.hidden;
     if (pauseWhenHidden && !visible && _mobile && backgrounded) {
       if (_player.state.playing) {
@@ -698,7 +708,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         unawaited(_player.pause());
         unawaited(_saveProgress(flush: true));
       }
-    } else if (visible && _resumeAfterBackground && _error == null && !_loading) {
+    } else if (visible &&
+        _resumeAfterBackground &&
+        _error == null &&
+        !_loading) {
       // 回到前台：把被后台打断的播放接着放回去
       _resumeAfterBackground = false;
       _playIntent = true;
@@ -1256,7 +1269,9 @@ class _PlayerScreenState extends State<PlayerScreen>
         '${widget.mediaId ?? widget.detail.drama.id}:$_openedIndex:$position:$duration';
     // flush 时必须至少通知一次（周期保存是静默的），哪怕进度键没变。
     final needsNotify = flush && !_watchNotified && widget.mediaId == null;
-    if (_savedProgressKey == progressKey && _saveWarning == null && !needsNotify) {
+    if (_savedProgressKey == progressKey &&
+        _saveWarning == null &&
+        !needsNotify) {
       if (flush && widget.mediaId == null) LanController.current?.flush();
       return;
     }
@@ -1358,7 +1373,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 竖屏沉浸靠上下滑切集：切完一集再把控制栏点亮 2.5s，会让用户
     // 每切一集都重新等一轮。手动换集不再复活 HUD，单击仍可随时唤出。
     final switching = index != _index;
-    _showControlsOnPlaybackReady = showControlsOnReady &&
+    _showControlsOnPlaybackReady =
+        showControlsOnReady &&
         !(switching && _viewMode == PlaybackViewMode.portraitFullscreen);
     setState(() {
       _index = index;
@@ -1484,9 +1500,12 @@ class _PlayerScreenState extends State<PlayerScreen>
           await platform.setProperty('network-timeout', '30');
         }
         _plan = plan;
-        _skipIntroSeconds = plan.skipIntroSeconds > 0 ? plan.skipIntroSeconds : 0;
-        _skipOutroFromEnd =
-            plan.skipOutroFromEndSeconds > 0 ? plan.skipOutroFromEndSeconds : 0;
+        _skipIntroSeconds = plan.skipIntroSeconds > 0
+            ? plan.skipIntroSeconds
+            : 0;
+        _skipOutroFromEnd = plan.skipOutroFromEndSeconds > 0
+            ? plan.skipOutroFromEndSeconds
+            : 0;
         installed = true;
         _acceptErrors = true;
         await _player.open(
@@ -1576,8 +1595,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 起播零等待后首帧可能只有 1 条线路；打开/切换线路时按需向核心拉
   /// 全表（官方线补兑也在这里发生），缓存命中时零网络。
   Future<PlaybackPlan> _refreshRoutes(PlaybackPlan plan) async {
-    if (plan.routeCount >= 2 ||
-        widget.detail.drama.source != 'dongpiandi') {
+    if (plan.routeCount >= 2 || widget.detail.drama.source != 'dongpiandi') {
       return plan;
     }
     try {
@@ -1638,6 +1656,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           : '';
       return label.isNotEmpty ? label : '线路 ${index + 1}';
     }
+
     final official = plan.officialRoutes;
     final thirdParty = plan.thirdPartyRoutes;
     final picked = await showPlayerSidePanel<int>(
@@ -1646,7 +1665,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           ? '播放源 · ${plan.routeCount} 条'
           : '播放源 · ${official.length} 条官方',
       builder: (panelContext) => SideRouteList(
-        labels: [for (var index = 0; index < plan.routeCount; index++) labelOf(index)],
+        labels: [
+          for (var index = 0; index < plan.routeCount; index++) labelOf(index),
+        ],
         current: plan.routeIndex,
         official: official,
         thirdParty: thirdParty,
@@ -1795,67 +1816,66 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// 选集面板内容：标题栏（可收起）+ 选集格子。
   Widget _episodeSheetPanel(BuildContext context) {
-    // 选集一律浅色白卡（与详情页、右侧滑出面板一致）：暗底暗边的格子在
-    // 深色面板上几乎看不清，浅底深字最省眼。
-    final onSurface = AppTheme.light.colorScheme.onSurface;
-    return Theme(
-      data: AppTheme.light,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: AppTheme.light.scaffoldBackgroundColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: .28),
-              blurRadius: 18,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '选集',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: onSurface,
-                        ),
+    // 选集卡片严格跟随当前 App 主题（旧实现强制 AppTheme.light 白卡，
+    // 深色主题下割裂；且格子文字曾因此变白底白字看不清）。集数文字已在
+    // RemoteEpisodeButton 里显式取 onSurface/onPrimaryContainer，任意主题可读。
+    final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        boxShadow: [
+          BoxShadow(
+            color: theme.shadowColor.withValues(alpha: .28),
+            blurRadius: 18,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '选集',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: onSurface,
                       ),
                     ),
-                    IconButton(
-                      key: const ValueKey('player-episode-sheet-close'),
-                      tooltip: '收起选集',
-                      onPressed: _closeEpisodeSheet,
-                      icon: AppIcon(AppIcons.expandLess, color: onSurface),
-                    ),
-                  ],
-                ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('player-episode-sheet-close'),
+                    tooltip: '收起选集',
+                    onPressed: _closeEpisodeSheet,
+                    icon: AppIcon(AppIcons.expandLess, color: onSurface),
+                  ),
+                ],
               ),
-              Expanded(
-                child: PlayerEpisodeGrid(
-                  episodes: widget.detail.episodes,
-                  currentIndex: _index,
-                  keyPrefix: 'sheet-episode',
-                  dense: true,
-                  // 标题交给上面的标题栏，避免面板里出现两个「选集」。
-                  title: '',
-                  onSelected: (index) {
-                    _closeEpisodeSheet();
-                    if (index != _index) unawaited(_play(index));
-                  },
-                ),
+            ),
+            Expanded(
+              child: PlayerEpisodeGrid(
+                episodes: widget.detail.episodes,
+                currentIndex: _index,
+                keyPrefix: 'sheet-episode',
+                dense: true,
+                // 标题交给上面的标题栏，避免面板里出现两个「选集」。
+                title: '',
+                onSelected: (index) {
+                  _closeEpisodeSheet();
+                  if (index != _index) unawaited(_play(index));
+                },
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1886,10 +1906,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             DeviceOrientation.landscapeLeft,
             DeviceOrientation.landscapeRight,
           ]
-        : const [
-            DeviceOrientation.portraitUp,
-            DeviceOrientation.portraitDown,
-          ];
+        : const [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown];
   }
 
   Future<void> _rotate() async {
@@ -2211,7 +2228,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// 电视端与宽屏兜底：保留原来的居中弹窗（遥控焦点导航在这个版式上可靠）。
   Future<void> _openWidePanel(PlayerMenuSection section) async {
-    final menuTheme = _showFullscreen ? AppTheme.dark : Theme.of(context);
+    // 菜单严格跟随当前 App 主题：旧实现在全屏时强制 AppTheme.dark，
+    // 浅色主题下弹出深色菜单（或反之），出现未套主题的割裂组件。
+    final menuTheme = Theme.of(context);
     final index = await showDialog<int>(
       context: context,
       builder: (menuContext) => AnimatedBuilder(
@@ -2569,7 +2588,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   );
 
   Widget _buildPlayer(BuildContext context) {
-    final theme = Theme.of(context);
     final title = widget.detail.drama.title;
     final fullscreen = _showFullscreen;
     final pictureInPicture = _pictureInPictureVisible;
@@ -2607,9 +2625,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           canRequestFocus: !_television,
           skipTraversal: _television,
           child: Scaffold(
-            backgroundColor: fullscreen || pictureInPicture
-                ? Colors.black
-                : theme.scaffoldBackgroundColor,
+            // 视频页底色统一深色：旧实现在全屏黑/非全屏主题色之间硬切，
+            // 视频 surface 未覆盖的间隙会透出浅色主题底（0xFFFAF8F6），
+            // 表现为「先黑后白」闪烁。画面区域本就是影院黑，UI 控件另走主题。
+            backgroundColor: Colors.black,
             appBar: pictureInPicture || fullscreen || _mobile
                 ? null
                 : AppBar(
@@ -2633,10 +2652,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                     // 全屏走 immersiveSticky（系统栏已隐藏），横屏则要求画面
                     // 铺到屏幕边缘——两种情况再留状态栏高度都会让画面整体
                     // 下移、上下不对称，看起来像没居中。
-                    top: !_television &&
+                    top:
+                        !_television &&
                         !fullscreen &&
                         _mobile &&
-                        MediaQuery.orientationOf(context) == Orientation.portrait,
+                        MediaQuery.orientationOf(context) ==
+                            Orientation.portrait,
                     bottom: !fullscreen,
                     // 手机横屏时挖孔会转到左侧（本机 1200×2608 竖屏、横屏后
                     // 左边缘 144px 是 displayCutout），SafeArea 默认会为它让位，
@@ -2648,7 +2669,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                       builder: (context, constraints) {
                         // 宽屏判定含高度门槛（同 detail_screen/home_screen）：
                         // 手机横屏逻辑高度 <600，仍走手机播放布局。
-                        final desktop = constraints.maxWidth >= 840 &&
+                        final desktop =
+                            constraints.maxWidth >= 840 &&
                             constraints.maxHeight >= 600;
                         if (fullscreen) {
                           // 竖屏全屏的选集走「底部滑入、推挤视频」布局，
@@ -2726,7 +2748,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     } else {
       final ep = episodes[next];
       final extra = ep.remoteLabel;
-      label = '${forward ? '下一集' : '上一集'} · 第 ${ep.number} 集'
+      label =
+          '${forward ? '下一集' : '上一集'} · 第 ${ep.number} 集'
           '${extra == null || extra.isEmpty ? '' : ' · $extra'}';
     }
     return IgnorePointer(
@@ -2987,7 +3010,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: selected ? FontWeight.w600 : null,
-                  color: selected ? primary : Colors.white.withValues(alpha: .8),
+                  color: selected
+                      ? primary
+                      : Colors.white.withValues(alpha: .8),
                 ),
               ),
             ),
@@ -3187,49 +3212,71 @@ class _PlayerScreenState extends State<PlayerScreen>
                     );
                   },
                 ),
-              if (_loading && !hideOverlayForPictureInPicture)
-                IgnorePointer(
-                  // 遮罩压在控制层之上：不忽略指针会吃掉整屏命中，切集解析
-                  // 期间连返回/选集/再滑一次都点不到，看起来就是「卡住等」。
-                  child: ColoredBox(
-                    // 解析新地址阶段（_swapping=false）画面还停在旧集最后一帧，
-                    // 只垫一层浅遮罩让用户看得到画面；真正换源出首帧前才压黑。
-                    color: Colors.black.withValues(alpha: _swapping ? .78 : .32),
-                    child: Align(
-                      // 进度反馈放画面中下部小胶囊：正中央留给旧集定格画面，
-                      // 别让转圈+文案压住内容
-                      alignment: const Alignment(0, 0.72),
-                      child: Container(
-                        margin: const EdgeInsets.all(16),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: .55),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+              // 切集加载遮罩：AnimatedSwitcher 淡入淡出，避免条件插入时
+              // 瞬间出现/消失的硬切；遮罩深度用 AnimatedContainer 从浅
+              // (.32，旧集定格可见) 平滑压到深 (.78，换源首帧前)，消除
+              // 「先浅黑再全黑」的生硬停顿。
+              if (!hideOverlayForPictureInPicture)
+                AnimatedSwitcher(
+                  duration: MotionDurations.base,
+                  switchInCurve: MotionCurves.standard,
+                  switchOutCurve: MotionCurves.standard,
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(opacity: animation, child: child),
+                  child: _loading
+                      ? IgnorePointer(
+                          key: const ValueKey('player-loading-overlay'),
+                          // 遮罩压在控制层之上：不忽略指针会吃掉整屏命中，
+                          // 切集解析期间连返回/选集/再滑一次都点不到。
+                          child: AnimatedContainer(
+                            duration: MotionDurations.base,
+                            curve: MotionCurves.standard,
+                            // 解析新地址阶段（_swapping=false）画面还停在旧集
+                            // 最后一帧，只垫浅遮罩；真正换源出首帧前才压黑。
+                            color: Colors.black.withValues(
+                              alpha: _swapping ? .78 : .32,
                             ),
-                            const SizedBox(width: 10),
-                            Text(
-                              _loadingMessage,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
+                            child: Align(
+                              // 进度反馈放画面中下部小胶囊：正中央留给旧集
+                              // 定格画面，别让转圈+文案压住内容。
+                              alignment: const Alignment(0, 0.72),
+                              child: Container(
+                                margin: const EdgeInsets.all(16),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: .55),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      _loadingMessage,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ],
+                          ),
+                        )
+                      : const SizedBox.shrink(
+                          key: ValueKey('player-loading-none'),
                         ),
-                      ),
-                    ),
-                  ),
                 ),
               if (_error != null && !hideOverlayForPictureInPicture)
                 ColoredBox(
@@ -3569,10 +3616,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     child: SizedBox(
       height: 42,
       child: Row(
-        children: [
-          _mobileTabButton(0, '简介'),
-          _mobileTabButton(1, '下载'),
-        ],
+        children: [_mobileTabButton(0, '简介'), _mobileTabButton(1, '下载')],
       ),
     ),
   );
@@ -3741,119 +3785,116 @@ class _PlayerScreenState extends State<PlayerScreen>
     final colors = Theme.of(context).colorScheme;
     final sourceName = SourceSite.byId(drama.source)?.name ?? '未知源';
     final metaStyle = TextStyle(color: colors.onSurfaceVariant);
-    final body = drama.description.trim().isEmpty
-        ? '暂无简介'
-        : drama.description;
+    final body = drama.description.trim().isEmpty ? '暂无简介' : drama.description;
     return [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 82,
-                height: 123,
-                child: DramaCover(drama: drama, repository: widget.repository),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 82,
+            height: 123,
+            child: DramaCover(drama: drama, repository: widget.repository),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  drama.title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                // 站源名与分类可点：跳该站源相关结果页（同详情页简介区）。
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text(
-                      drama.title,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+                    MetaLink(
+                      label: sourceName,
+                      tooltip: '查看$sourceName的全部作品',
+                      onTap: () => openSourceCatalog(
+                        context,
+                        repository: widget.repository,
+                        store: widget.store,
+                        drama: drama,
+                        sourceName: sourceName,
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    // 站源名与分类可点：跳该站源相关结果页（同详情页简介区）。
-                    Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        MetaLink(
-                          label: sourceName,
-                          tooltip: '查看$sourceName的全部作品',
-                          onTap: () => openSourceCatalog(
-                            context,
-                            repository: widget.repository,
-                            store: widget.store,
-                            drama: drama,
-                            sourceName: sourceName,
-                          ),
-                        ),
-                        if (drama.episodes > 0) ...[
-                          Text(' · ', style: metaStyle),
-                          MetaLink(
-                            label: drama.episodeLabel,
-                            tooltip: '打开选集',
-                            onTap: _showEpisodePickerDialog,
-                          ),
-                        ],
-                        if (drama.releaseStatus.isNotEmpty &&
-                            drama.releaseStatus != 'unknown') ...[
-                          Text(' · ', style: metaStyle),
-                          Text(drama.releaseLabel, style: metaStyle),
-                        ],
-                        if (drama.category.isNotEmpty) ...[
-                          Text(' · ', style: metaStyle),
-                          MetaLink(
-                            label: drama.category,
-                            tooltip: '查看同类${drama.category}',
-                            onTap: () => _openRelated(drama.category),
-                          ),
-                        ],
-                      ],
-                    ),
-                    if (drama.onlineDate.isNotEmpty ||
-                        drama.heat.isNotEmpty ||
-                        drama.views.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        [
-                          if (drama.onlineDate.isNotEmpty)
-                            '${drama.onlineDate} 上线',
-                          if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
-                          if (drama.views.isNotEmpty) '播放 ${drama.views}',
-                        ].join(' · '),
-                        style: TextStyle(color: colors.onSurfaceVariant),
+                    if (drama.episodes > 0) ...[
+                      Text(' · ', style: metaStyle),
+                      MetaLink(
+                        label: drama.episodeLabel,
+                        tooltip: '打开选集',
+                        onTap: _showEpisodePickerDialog,
+                      ),
+                    ],
+                    if (drama.releaseStatus.isNotEmpty &&
+                        drama.releaseStatus != 'unknown') ...[
+                      Text(' · ', style: metaStyle),
+                      Text(drama.releaseLabel, style: metaStyle),
+                    ],
+                    if (drama.category.isNotEmpty) ...[
+                      Text(' · ', style: metaStyle),
+                      MetaLink(
+                        label: drama.category,
+                        tooltip: '查看同类${drama.category}',
+                        onTap: () => _openRelated(drama.category),
                       ),
                     ],
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _mobileFollowControl(drama),
-          if (drama.tags.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                // Chip 本体不可点（构造没有 onPressed），可点的这一档用
-                // ActionChip：同样是紧凑胶囊，自带 Material 水波纹与 tooltip。
-                for (final tag in drama.tags.take(12))
-                  ActionChip(
-                    label: Text(tag),
-                    visualDensity: VisualDensity.compact,
-                    tooltip: '查看「$tag」相关内容',
-                    onPressed: () => _openRelated(tag),
+                if (drama.onlineDate.isNotEmpty ||
+                    drama.heat.isNotEmpty ||
+                    drama.views.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    [
+                      if (drama.onlineDate.isNotEmpty) '${drama.onlineDate} 上线',
+                      if (drama.heat.isNotEmpty) '热度 ${drama.heat}',
+                      if (drama.views.isNotEmpty) '播放 ${drama.views}',
+                    ].join(' · '),
+                    style: TextStyle(color: colors.onSurfaceVariant),
                   ),
+                ],
               ],
             ),
-          ],
-          const SizedBox(height: 12),
-          Text(body, style: const TextStyle(height: 1.55)),
-          if (widget.detail.warning.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(widget.detail.warning, style: TextStyle(color: colors.error)),
-          ],
-          RelatedDramaRail(
-            repository: widget.repository,
-            store: widget.store,
-            drama: drama,
-            onOpen: _openRelatedDrama,
           ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      _mobileFollowControl(drama),
+      if (drama.tags.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            // Chip 本体不可点（构造没有 onPressed），可点的这一档用
+            // ActionChip：同样是紧凑胶囊，自带 Material 水波纹与 tooltip。
+            for (final tag in drama.tags.take(12))
+              ActionChip(
+                label: Text(tag),
+                visualDensity: VisualDensity.compact,
+                tooltip: '查看「$tag」相关内容',
+                onPressed: () => _openRelated(tag),
+              ),
+          ],
+        ),
+      ],
+      const SizedBox(height: 12),
+      Text(body, style: const TextStyle(height: 1.55)),
+      if (widget.detail.warning.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Text(widget.detail.warning, style: TextStyle(color: colors.error)),
+      ],
+      RelatedDramaRail(
+        repository: widget.repository,
+        store: widget.store,
+        drama: drama,
+        onOpen: _openRelatedDrama,
+      ),
     ];
   }
 
