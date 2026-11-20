@@ -10,10 +10,10 @@
     },
     "update": {
         "enabled": true,
-        "build": 2316,
-        "version": "0.2.96-2316",
-        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2316-arm64-v8a.apk",
-        "notes": "Version 0.2.96 (2316)\r\n\r\n反馈区四项修复 + 冷启动提速：\r\n1. 自动连播/自动跳片尾切集不再震动，手动切集保留\r\n2. 竖屏弹幕排进画面上下黑边，不再压住正片\r\n3. 红果诊断区分「健康检查」与「最近一次取流失败」，不再自相矛盾\r\n4. 剧库移到数据目录长久保存，清缓存不再丢几百部剧\r\n5. 详情分集落盘：冷启动点追剧/历史秒进，不再等网络\r\n6. 扩大贵源预取，冷启动自动预热内存缓存"
+        "build": 2331,
+        "version": "0.2.96-2331",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2331-arm64-v8a.apk",
+        "notes": "Android 全源版（真果鉴）：榜单修复、弹幕黑边排列、模块更新详情弹窗、推荐去除、红果模块 v1.0.6 video_tab 取流。三 ABI：arm64-v8a / armeabi-v7a / x86_64。"
     },
     "sourceConfig": {
         "huangguoAIMirrors": [
