@@ -10,10 +10,10 @@
     },
     "update": {
         "enabled": true,
-        "build": 2332,
-        "version": "0.2.96-2332",
-        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.96+2332-arm64-v8a.apk",
-        "notes": "Android 全源版（真果鉴）：模块 AES-256-GCM 加密下发支持 + 内置解密。三 ABI。"
+        "build": 2340,
+        "version": "0.2.97-2340",
+        "url": "https://guoapp.dpdns.org/zhenguojian-0.2.97+2340-arm64-v8a.apk",
+        "notes": "弹幕修复：模块设备身份落盘复用，不再每次重启重新注册；站源诊断新增设备身份/模块能力/传输指纹/下载链路四项。三 ABI。"
     },
     "sourceConfig": {
         "huangguoAIMirrors": [
